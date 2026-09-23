@@ -1,5 +1,5 @@
 import type { PostPrGateWorkflowInput } from "@shared/contracts";
-import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.js";
+import type { GateStatusRef } from "../adapters/vcs/types.js";
 
 export type { PostPrGateWorkflowInput } from "@shared/contracts";
 
@@ -29,16 +29,15 @@ async function runGate(input: PostPrGateWorkflowInput) {
     ticketKeyFromBranch,
   } = await import("./support/workflow-naming.js");
   const { createAdapters } = await import("./support/adapters.js");
+  const { resolveRepositoryVCS } = await import("./support/vcs-runtime.js");
   const { issueTrackerIfConnected } = await import("./support/connected-issue-tracker.js");
   const { logger } = await import("../infra/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();
-  const adapters = await createAdapters({
-    provider: input.provider,
-    repoPath: input.ownerRepo,
-    baseBranch: input.baseRef,
-  });
+  // For the issue tracker only: the version control adapter is resolved below,
+  // because the gate asks what the provider implements.
+  const adapters = await createAdapters();
   const gateStore = new GateStore();
 
   if (config.postPrGate.runOn.botPrsOnly && !isManagedBranch(input.headRef)) {
@@ -55,10 +54,14 @@ async function runGate(input: PostPrGateWorkflowInput) {
     return { ranSteps: 0, failed: false };
   }
 
-  if (!hasGateStatusCapability(adapters.vcs)) {
+  const vcs = await resolveRepositoryVCS({
+    provider: input.provider,
+    repoPath: input.ownerRepo,
+    baseBranch: input.baseRef,
+  });
+  if (!hasGateStatusCapability(vcs)) {
     throw new Error("VCS adapter does not support gate statuses");
   }
-  const vcs = adapters.vcs;
   // Decided once, before any gate status exists. The gate is about the pull
   // request and needs no tracker; this step has no retries, so a tracker read
   // that threw after the statuses below were created would leave them pending
@@ -95,10 +98,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const gateStatusRefs: GateStatusRef[] = [];
   for (const step of config.postPrGate.steps) {
     const name = gateCheckName(step.name ?? step.uses);
-    const ref = await (vcs as GateStatusCapableVCS).createGateStatus(
-      name,
-      input.headSha,
-    );
+    const ref = await vcs.createGateStatus(name, input.headSha);
     gateStatusRefs.push(ref);
   }
   const appended = await gateStore.appendGateStatusRefsForSha(
@@ -133,7 +133,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
       diff: null,
       files: null,
       adapters: {
-        vcs: adapters.vcs,
+        vcs,
         ...(issueTracker ? { issueTracker } : {}),
       },
     },

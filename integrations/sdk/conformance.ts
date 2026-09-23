@@ -8,6 +8,7 @@ import {
 import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
 import { connectionValueProblem, integrationSettingKey } from "./manifest";
+import { VCS_BOT_LOGIN_FIELD, VCS_LEGACY_BOT_LOGIN_FIELD } from "./vcs";
 
 /**
  * The check every integration package passes in CI (S1 runs it over each one).
@@ -32,6 +33,7 @@ export type ConformanceCode =
   | "connection_default_invalid"
   | "connection_identity_not_secret"
   | "repositories_invalid"
+  | "vcs_bot_login_missing"
   | "capability_unknown"
   | "capability_reserved"
   | "capability_adapter_missing"
@@ -352,6 +354,7 @@ export function checkIntegrationConformance(
   }
   checkCapabilities(declared, implemented, report);
   checkRepositories(declared, report);
+  checkVcsBotLogin(declared, report);
   checkBlocks(declared, implemented, report);
   checkHealth(declared, implemented, report);
   checkPages(declared, implemented, report);
@@ -395,8 +398,8 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
     } else if (
       RESERVED_ENVIRONMENT_VARIABLES.includes(field.env) &&
       !(
-        field.env === "VCS_BOT_LOGIN" &&
-        field.key === "legacyBotLogin" &&
+        field.env === VCS_LEGACY_BOT_LOGIN_FIELD.env &&
+        field.key === VCS_LEGACY_BOT_LOGIN_FIELD.key &&
         manifest.capabilities.includes("vcs")
       )
     ) {
@@ -583,6 +586,33 @@ function checkRepositories(manifest: ParsedManifest, report: Report) {
       "repositories_invalid",
       "repositories.host",
       `Repository host "${shape.host}" must be a bare lowercase host such as "github.com", optionally with a port: no scheme and no path, because core compares it with the host of a pasted link.`,
+    );
+  }
+}
+
+/**
+ * Core learns a version control provider's automation account from one
+ * connection field, `VCS_BOT_LOGIN_FIELD` (see its doc in `vcs.ts`). A `vcs`
+ * integration without it has no way to be told which comments and pushes are
+ * its own, so the workflow answers its own reviews and starts runs off its own
+ * pushes. It is not a credential, so it is not secret: a run pins it like any
+ * other non-secret value.
+ */
+function checkVcsBotLogin(manifest: ParsedManifest, report: Report) {
+  if (!manifest.capabilities.includes("vcs")) return;
+  const index = manifest.connection.fields.findIndex((field) => field.key === VCS_BOT_LOGIN_FIELD);
+  const field = manifest.connection.fields[index];
+  if (field === undefined) {
+    report(
+      "vcs_bot_login_missing",
+      "connection.fields",
+      `A vcs integration declares its automation account's login as a connection field keyed "${VCS_BOT_LOGIN_FIELD}" (non-secret, usually optional, on a variable of its own), which is where core reads it. Without it the workflow cannot tell its own comments and pushes from a person's.`,
+    );
+  } else if (field.secret) {
+    report(
+      "vcs_bot_login_missing",
+      `connection.fields[${index}].secret`,
+      `"${VCS_BOT_LOGIN_FIELD}" is a login, not a credential: declare it secret: false.`,
     );
   }
 }

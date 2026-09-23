@@ -158,8 +158,8 @@ async function createRunOwnedPrCheckWithPersistence(
     };
   }
   await persistence.assertOwner(args.owner);
-  const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
-  const vcs = createRepositoryVCS({
+  const { resolveRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
+  const vcs = await resolveRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,
@@ -242,8 +242,11 @@ async function completeRunOwnedPrCheckWithPersistence(
   if (storedCheck.state === "completed") return;
   let check = storedCheck;
   let target = args.target;
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
-  const vcs = createRepositoryVCS({
+  const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
+  // Resolved at the first call, not here: the closing intent below is recorded
+  // even when the provider cannot be reached, so whoever closes the check later
+  // posts the verdict this run reached.
+  const runtime = createRepositoryVcsRuntime({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,
@@ -251,12 +254,13 @@ async function completeRunOwnedPrCheckWithPersistence(
   });
   if (args.refreshHead) {
     await persistence.assertOwner(args.owner);
-    const latest = await vcs.getPRHead(args.target.prNumber);
+    const latest = await runtime.vcs.getPRHead(args.target.prNumber);
     if (latest.state !== "open") {
       throw new Error("The pull request is no longer open.");
     }
     target = { ...args.target, headSha: latest.headSha };
     if (latest.headSha !== check.headSha) {
+      const vcs = await runtime.adapter();
       if (!hasGateStatusCapability(vcs)) {
         throw new Error(`${args.target.provider} does not support workflow PR checks.`);
       }
@@ -289,6 +293,7 @@ async function completeRunOwnedPrCheckWithPersistence(
   }
   await persistence.assertOwner(args.owner);
   await persistence.markPrCheckClosing({ id: check.id, intent: args.conclusion });
+  const vcs = await runtime.adapter();
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
   }
@@ -371,8 +376,8 @@ async function closeRunPrChecksWithPersistence(
       continue;
     }
     try {
-      const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
-      const vcs = createRepositoryVCS({
+      const { resolveRepositoryVCS } = await import("../support/vcs-runtime.js");
+      const vcs = await resolveRepositoryVCS({
         provider: check.provider,
         repoPath: check.repository,
         baseBranch: "main",
@@ -494,8 +499,8 @@ async function reconcilePendingPrChecksWithPersistence(
     }
     if (row.state === "creating" && !row.providerReference) {
       try {
-        const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
-        const vcs = createRepositoryVCS({
+        const { resolveRepositoryVCS } = await import("../support/vcs-runtime.js");
+        const vcs = await resolveRepositoryVCS({
           provider: row.provider,
           repoPath: row.repository,
           baseBranch: "main",
@@ -1075,8 +1080,8 @@ async function publishRunOwnedPrReviewWithPersistence(
   persistence: PrExternalResourcesPersistence,
 ): ReturnType<typeof publishRunOwnedPrReview> {
   await persistence.assertOwner(args.owner);
-  const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
-  const vcs = createRepositoryVCS({
+  const { resolveRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
+  const vcs = await resolveRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,

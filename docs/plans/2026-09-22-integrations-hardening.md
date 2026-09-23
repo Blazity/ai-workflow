@@ -80,6 +80,16 @@ aborts on its own), the *attempt deadline* (per request attempt, in
 overwritten). Single-shot work with a real deadline (a webhook request, a page
 read, a block, a probe) keeps that deadline as its lifetime.
 
+The attempt deadline covers reading the body (amended in the VCS
+consolidation round). `fetch` settles at the headers while the deadline keeps
+running, so a body still arriving when it passed failed in the caller's hands,
+outside the retry loop, and Octokit reads a failed body as an empty one: a
+late page of pull request files was a 200 with nothing in it. `ctx.http` now
+reads the body inside the attempt and hands back a buffered Response, so a cut
+body is a failed attempt (a read goes again, a write throws). Streaming is an
+opt-in (`streamBody`) for a download too large to hold in memory, and that
+request brings its own `timeoutMs` for the whole download.
+
 **Rejected.** A longer resolution timeout (moves the cliff, does not remove it);
 a signal tied to the invocation deadline (nothing carries one today, and it
 would mean threading it through about 40 callers).
@@ -221,7 +231,7 @@ The table is generated from the review's own records plus each executor's
 report, so an entry cannot be lost between the two.
 
 <!-- ledger:start -->
-Totals: 169 findings; FIXED 109, OPEN 56, DEFERRED 4.
+Totals: 169 findings; FIXED 113, OPEN 53, DEFERRED 3.
 
 | Id | Severity | Review | Where | Problem | Group | Outcome |
 |---|---|---|---|---|---|---|
@@ -240,8 +250,8 @@ Totals: 169 findings; FIXED 109, OPEN 56, DEFERRED 4.
 | F22 | major | CONFIRMED | `apps/worker/src/services/dispatch/dispatch-trigger.ts:463` | The rule that a 'commented' review may start a run only when the bot login is known was removed from selectEligibleEvent and selectedReviewStates (:507-516). | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
 | F23 | major | CONFIRMED | `apps/worker/src/services/dispatch/dispatch-trigger.ts:1106` | For workflow-owned PRs, a deliberately disconnected or disabled issue tracker is treated as a retryable lookup failure, so every such delivery answers 503. | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
 | F32 | major | CONFIRMED | `scripts/gates/generate-integration-registry/types.ts:44` | No build runs the integration generator, so the `--check` promised in plan decision 3 never runs in a build. | E-sdk-gates | FIXED `a9bb49b4`: every static check runs before db:migrate on the worker build; dashboard build checks too |
-| F33 | major | CONFIRMED | `integrations/sdk/vcs.ts:261` | The SDK never states how core learns a VCS integration's automation account. | E-sdk-gates | OPEN: design accepted: VCS bot login field constants in the SDK (consolidation round) |
-| F34 | major | CONFIRMED | `integrations/sdk/vcs.ts:172` | Part of the core/provider VCS contract lives outside the SDK and is copied by hand three times. | E-sdk-gates | OPEN: design accepted: VCS extension contract and marker grammar in the SDK (consolidation round) |
+| F33 | major | CONFIRMED | `integrations/sdk/vcs.ts:261` | The SDK never states how core learns a VCS integration's automation account. | E-sdk-gates | FIXED `a370cb93`: bot login field constants in the SDK, conformance vcs_bot_login_missing, core reads the constants |
+| F34 | major | CONFIRMED | `integrations/sdk/vcs.ts:172` | Part of the core/provider VCS contract lives outside the SDK and is copied by hand three times. | E-sdk-gates | FIXED `a370cb93`: VCS extension contract in sdk/vcs-extensions.ts, all marker families in sdk/review-markers.ts (main literals as fixtures), package copies deleted |
 | F42 | major | CONFIRMED | `apps/dashboard/app/(cockpit)/integrations/[id]/connection/connection-screen.tsx:777` | Switching the source ('Use the stored values' / 'Use the environment', lines 739 and 777, handler switchSource at 505) fires immediately, with no impact preview and no confirmation. | D-dashboard | FIXED `d28e3464`: impact preview: config change counts pin-compared paths only, disable counts every run that reaches X; cancel sticks |
 | F43 | major | CONFIRMED | `apps/dashboard/app/(cockpit)/integrations/[id]/connection/connection-screen.tsx:829` | The kill-switch confirmation shows only static lines (disableConsequence). | D-dashboard | FIXED `d28e3464`: Disable shows the workflows and runs it may stop, from the one engine answer |
 | F44 | major | CONFIRMED | `apps/dashboard/app/(cockpit)/integrations/[id]/connection/connection-screen.tsx:269` | The screen treats `stored.latestVersion > 0` as 'values are stored', but the contract defines latestVersion as the highest version ever minted and the concurrency token. | D-dashboard | FIXED `7fe54192`: group D: presence read from field values, erased versions excluded (merged) |
@@ -324,7 +334,7 @@ Totals: 169 findings; FIXED 109, OPEN 56, DEFERRED 4.
 | F64 | minor | CONFIRMED | `apps/worker/src/routes/webhooks/[id].post.ts:455` | Webhook observations are now written under the default `deployment` scope, and integration-health.ts:141-144 reads them across all scopes. | A-triggers | FIXED `8267544f`: observations scoped by a hash of the deployment public base URL, one write/read pair (merged) |
 | F65 | minor | CONFIRMED | `apps/worker/src/services/integrations/resolve.ts:303` | The format check for `url` and `integer` connection values was lost in the move. | B-connections | FIXED `865233f1`: value_malformed: format rule in the SDK, applied to status, stored values and ctx.http; compatibility with main under review (merged) |
 | F66 | minor | CONFIRMED | `apps/worker/src/routes/webhooks/[id].post.ts:68` | The route serves a webhook only when the whole integration is usable, so the Slack slash command now needs `CHAT_SDK_SLACK_TOKEN` and `CHAT_SDK_CHANNEL_ID`. | A-triggers | OPEN: round G (Slack operator settings, webhook-only use), brief lanes/fix-groups/brief-slack-operator-settings.md |
-| F67 | minor | CONFIRMED | `apps/worker/src/services/integrations/vcs-bot-login.ts:45` | Core finds a VCS provider's automation account by the literal connection field keys `botLogin` and `legacyBotLogin` (here, engine/definition/integration-availability.ts:129, and [id].post.ts:78). | B-connections | DEFERRED: VCS consolidation round (F34/F33), brief lanes/fix-groups/brief-vcs-consolidation.md |
+| F67 | minor | CONFIRMED | `apps/worker/src/services/integrations/vcs-bot-login.ts:45` | Core finds a VCS provider's automation account by the literal connection field keys `botLogin` and `legacyBotLogin` (here, engine/definition/integration-availability.ts:129, and [id].post.ts:78). | B-connections | FIXED `a370cb93`: same as F33: the field key is an SDK constant a vcs integration must declare |
 | F68 | minor | CONFIRMED | `apps/worker/src/services/system/integration-probes.ts:97` | `secretsKeyMaterial` is re-implemented here although `services/integrations/index.ts` already exports the same function from authoring.ts:85-89. | C-engine | FIXED `ecd612a2`: group C (merged) |
 | F69 | minor | CONFIRMED | `apps/worker/src/routes/webhooks/[id].post.ts:8` | The header comment says core's own routes (`/webhooks/jira`, ...) keep their own files and win over this dynamic route. | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
 | F74 | minor | CONFIRMED | `apps/worker/src/routes/webhooks/[id].post.ts:107` | For trigger_events (the GitLab and GitHub path) the route records webhook-delivery 'accepted' before dispatch, and records nothing when dispatch then fails: a retryable 503 at 288-296, or an uncaught throw from dispatchP... | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
@@ -355,7 +365,7 @@ Totals: 169 findings; FIXED 109, OPEN 56, DEFERRED 4.
 | F104 | minor | UNVERIFIED | `changelog/unreleased/github-integration.md:4` | The new changelog entries break the contract in `changelog/README.md`: "one or two Markdown bullets" per file, never the word "fix", and read forward rather than "what used to be wrong". | Z-other | FIXED `a9bb49b4`: group E: docs, rules and changelog paths |
 | F107 | minor | UNVERIFIED | `apps/worker/src/db/repositories/integrations.ts:275` | An activating save keeps the previous last_test_reason and last_test_message, because the UPDATE writes the new value only when it is non-null (`activates && input.test.reason ? new : old`). | C-engine | FIXED `ecd612a2`: group C (merged) |
 | F108 | minor | UNVERIFIED | `apps/worker/src/mcp/tools/memory.ts:76` | memory.list/get/forget put the provider's raw error text into McpPublicError messages. | C-engine | FIXED `ecd612a2`: group C (merged) |
-| F109 | minor | UNVERIFIED | `apps/worker/src/adapters/vcs/types.ts:39` | The optional VCS capability contracts (ManualDispatchPullRequestSnapshot, GateStatusCapableVCS, RichGateStatusCapableVCS, PRFilesCapableVCS, PRReviewCapableVCS, PRReviewPublication, CheckRunAnnotation) stay in core, whil... | C-engine | OPEN: VCS consolidation round (F34/F33), brief lanes/fix-groups/brief-vcs-consolidation.md |
+| F109 | minor | UNVERIFIED | `apps/worker/src/adapters/vcs/types.ts:39` | The optional VCS capability contracts (ManualDispatchPullRequestSnapshot, GateStatusCapableVCS, RichGateStatusCapableVCS, PRFilesCapableVCS, PRReviewCapableVCS, PRReviewPublication, CheckRunAnnotation) stay in core, whil... | C-engine | FIXED `a370cb93`: extension types in the SDK and type-checked through VcsIntegrationAdapter; digest stays in core, its package copies gone |
 | F110 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/types.ts:341` | The research output's provider field is constrained differently in its two schemas. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
 | F111 | minor | UNVERIFIED | `apps/worker/src/mcp/execute-tool.ts:236` | prepare() now resolves integrationSecretValues() before the rate limiter, whose comment still says 'Cheapest guard first'. | C-engine | FIXED `ecd612a2`: secret set read in one statement, every stored version not yet redacted |
 | F112 | minor | UNVERIFIED | `apps/worker/src/mcp/server.ts:60` | system.capabilities calls deps.loadDeploymentIntegrations twice, once for authoringAnnouncements (line 60) and once for integrations (line 67). | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |

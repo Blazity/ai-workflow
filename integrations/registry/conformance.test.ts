@@ -16,7 +16,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { checkIntegrationConformance, type ConformanceIssue } from "@integrations/sdk";
+import {
+  checkIntegrationConformance,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+  type ConformanceIssue,
+} from "@integrations/sdk";
 
 const integrationsRoot = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(integrationsRoot, "..");
@@ -145,8 +149,8 @@ for (const directory of directories) {
  * operator who sets it for one has configured the other without knowing.
  */
 const SHARED_ENVIRONMENT_VARIABLES: Readonly<Record<string, string>> = {
-  VCS_BOT_LOGIN:
-    "the automation account's login for a deployment with exactly one version control provider, read by whichever vcs integration is connected as its legacyBotLogin field",
+  [VCS_LEGACY_BOT_LOGIN_FIELD.env]:
+    `the automation account's login for a deployment with exactly one version control provider, read by whichever vcs integration is connected as its ${VCS_LEGACY_BOT_LOGIN_FIELD.key} field`,
 };
 
 test("no two integrations declare the same environment variable unless it is shared on purpose", async () => {

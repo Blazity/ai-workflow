@@ -15,12 +15,11 @@ const mockOctokit = {
   },
 };
 
-vi.mock("./auth", () => ({ buildOctokit: vi.fn(() => mockOctokit) }));
-
 const { createGitHubProfileSource } = await import("./profile-source.js");
 const { RepositoryMissingAtProviderError } = await import("@integrations/sdk");
 
-const AUTH = { appId: 1, privateKey: "cGVt", installationId: 2 };
+/** The adapter's own client, which the source is handed. */
+const CLIENT = mockOctokit as never;
 
 function content(text: string) {
   return { data: { content: Buffer.from(text, "utf8").toString("base64"), encoding: "base64" } };
@@ -69,7 +68,7 @@ describe("the GitHub repository profile source", () => {
       },
     );
 
-    const bundle = await createGitHubProfileSource(AUTH, "acme/api").loadProfile();
+    const bundle = await createGitHubProfileSource(CLIENT, "acme/api").loadProfile();
 
     expect(bundle).toEqual({
       provider: "github",
@@ -96,7 +95,7 @@ describe("the GitHub repository profile source", () => {
       throw absent();
     });
 
-    const bundle = await createGitHubProfileSource(AUTH, "acme/bare").loadProfile();
+    const bundle = await createGitHubProfileSource(CLIENT, "acme/bare").loadProfile();
 
     expect(bundle).toEqual({
       provider: "github",
@@ -113,7 +112,7 @@ describe("the GitHub repository profile source", () => {
   });
 
   it("refuses a path that is not owner/repo rather than guessing at one", () => {
-    expect(() => createGitHubProfileSource(AUTH, "group/sub/project")).toThrow(
+    expect(() => createGitHubProfileSource(CLIENT, "group/sub/project")).toThrow(
       /expected exactly "owner\/repo"/u,
     );
   });
@@ -125,7 +124,7 @@ describe("the GitHub repository profile source", () => {
     mockOctokit.repos.getContent.mockResolvedValue({ data: [] });
 
     await expect(
-      createGitHubProfileSource(AUTH, "acme/deleted").loadProfile(),
+      createGitHubProfileSource(CLIENT, "acme/deleted").loadProfile(),
     ).rejects.toBeInstanceOf(RepositoryMissingAtProviderError);
   });
 
@@ -155,7 +154,7 @@ describe("the GitHub repository profile source", () => {
       },
     );
 
-    await createGitHubProfileSource(AUTH, "acme/api").loadProfile();
+    await createGitHubProfileSource(CLIENT, "acme/api").loadProfile();
 
     expect(signals.length).toBeGreaterThan(1);
     expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
@@ -175,7 +174,7 @@ describe("the GitHub repository profile source", () => {
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
 
     await expect(
-      createGitHubProfileSource(AUTH, "acme/api").loadProfile(),
+      createGitHubProfileSource(CLIENT, "acme/api").loadProfile(),
     ).rejects.toThrow();
     vi.mocked(AbortSignal.timeout).mockRestore();
   });
@@ -189,7 +188,7 @@ describe("the GitHub repository profile source", () => {
     mockOctokit.repos.getContent.mockResolvedValue({ data: [] });
 
     await expect(
-      createGitHubProfileSource(AUTH, "acme/api").loadProfile(),
+      createGitHubProfileSource(CLIENT, "acme/api").loadProfile(),
     ).rejects.toThrow("Bad credentials");
   });
 });

@@ -1,3 +1,4 @@
+import { VCS_BOT_LOGIN_FIELD, VCS_LEGACY_BOT_LOGIN_FIELD } from "@integrations/sdk";
 import type { VcsProviderKind } from "@shared/contracts";
 import { resolveVcsBotLogin } from "../../adapters/vcs/vcs-bot-identity.js";
 import { resolveUsableIntegrations } from "./usable.js";
@@ -6,8 +7,9 @@ import { resolveUsableIntegrations } from "./usable.js";
  * The automation account whose own comments and pushes must not start a run.
  *
  * Every version control provider is an integration since S11, so the answer is
- * one read of what is connected: the provider's own `botLogin`, or the legacy
- * single-provider `legacyBotLogin` when this deployment has exactly one. The
+ * one read of what is connected: the provider's own login field, or the legacy
+ * single-provider one when this deployment has exactly one (`VCS_BOT_LOGIN_FIELD`
+ * and `VCS_LEGACY_BOT_LOGIN_FIELD` in the SDK). The
  * environment is not read here; a connection sourced from it already reaches
  * this through the resolver, and a second read would disagree with the first
  * the moment an admin stored values in the dashboard instead.
@@ -35,11 +37,11 @@ export async function readVcsBotLogin(
     const provider = integration.manifest.id;
     const state = resolved.states.get(provider);
     providers.push(provider);
-    if (state?.configuredFields?.includes("botLogin")) {
-      byProvider[provider] = integration.ctx.connection.botLogin;
+    if (state?.configuredFields?.includes(VCS_BOT_LOGIN_FIELD)) {
+      byProvider[provider] = integration.ctx.connection[VCS_BOT_LOGIN_FIELD];
     }
-    if (state?.configuredFields?.includes("legacyBotLogin")) {
-      legacyByProvider[provider] = integration.ctx.connection.legacyBotLogin;
+    if (state?.configuredFields?.includes(VCS_LEGACY_BOT_LOGIN_FIELD.key)) {
+      legacyByProvider[provider] = integration.ctx.connection[VCS_LEGACY_BOT_LOGIN_FIELD.key];
     }
   }
   return {

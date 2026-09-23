@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RepositoryMissingAtProviderError } from "@integrations/sdk";
+import { gitLabClient } from "./client.js";
 import { createGitLabProfileSource } from "./profile-source.js";
 
 /**
- * Recorded GitLab answers, in this file's own convention: a stubbed global
- * fetch handing back canned responses per path, exactly as `gitlab.test.ts`
- * records the rest of the GitLab surface.
+ * Recorded GitLab answers, in this file's own convention: the context's fetch
+ * handing back canned responses per path. The global `fetch` refuses, so a
+ * read that went around the context fails here.
  */
 const mockFetch = vi.fn();
 
-const CONFIG = { token: "glpat-test", host: "https://gitlab.example.com" };
+const CONFIG = gitLabClient({
+  http: { fetch: (input, init) => mockFetch(String(input), init) },
+  host: "https://gitlab.example.com",
+  token: "glpat-test",
+});
 const PROJECT = "acme%2Fapi";
 
 function jsonResponse(body: unknown): Response {
@@ -44,7 +49,9 @@ function notFound(): Response {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubGlobal("fetch", mockFetch);
+  vi.stubGlobal("fetch", async () => {
+    throw new Error("A request went around ctx.http.");
+  });
 });
 
 afterEach(() => {

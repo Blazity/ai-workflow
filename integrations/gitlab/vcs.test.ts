@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./vcs.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER, providerAnswer } from "@integrations/sdk";
+import { GitLabRequestError } from "./client.js";
 
 /**
  * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
@@ -93,8 +94,14 @@ vi.mock("@gitbeaker/rest", () => ({
   })),
 }));
 
+/** The context's HTTP, as the integration's runtime hands it to the adapter:
+ *  every request the adapter makes outside Gitbeaker's (mocked) resources is
+ *  answered here, and the global `fetch` refuses. */
+const http = { fetch: (input: unknown, init?: unknown) => mockFetch(input, init) } as never;
+
 function glAdapter(overrides: Partial<ConstructorParameters<typeof GitLabAdapter>[0]> = {}) {
   return new GitLabAdapter({
+    http,
     token: "glpat-xxxxxxxxxxxx",
     projectId: "blazity/demo-app",
     baseBranch: "main",
@@ -107,7 +114,9 @@ describe("GitLabAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("A request went around ctx.http.");
+    });
   });
 
   describe("repository listing", () => {
@@ -217,6 +226,30 @@ describe("GitLabAdapter", () => {
       );
     });
 
+    it("re-creates the branch when an earlier attempt's remove landed and answered badly", async () => {
+      // The remove went through and GitLab answered 502, so the step was
+      // retried; the branch is gone now and the remove answers 404. Stopping
+      // there left the branch deleted and GitLab's auto-closed merge request
+      // closed for good.
+      mockBranches.remove.mockRejectedValueOnce(
+        new GitLabRequestError("404 Branch Not Found", new Response(null, { status: 404 })),
+      );
+      mockBranches.create.mockResolvedValueOnce({});
+
+      await glAdapter().resetOwnedBranch("feat/test", "main");
+
+      expect(mockBranches.create).toHaveBeenCalledWith("blazity/demo-app", "feat/test", "main");
+    });
+
+    it("stops a reset whose remove GitLab refused for any other reason", async () => {
+      mockBranches.remove.mockRejectedValueOnce(
+        new GitLabRequestError("403 Forbidden", new Response(null, { status: 403 })),
+      );
+
+      await expect(glAdapter().resetOwnedBranch("feat/test", "main")).rejects.toBeDefined();
+      expect(mockBranches.create).not.toHaveBeenCalled();
+    });
+
     it("rethrows other 400 errors (invalid ref, invalid name) without deleting branch", async () => {
       const error = new Error("Invalid branch name") as any;
       error.cause = { description: error.message, response: new Response(null, { status: 400 }) };
@@ -229,9 +262,12 @@ describe("GitLabAdapter", () => {
       expect(mockBranches.remove).not.toHaveBeenCalled();
     });
 
-    it("handles alternate gitbeaker error shapes (response.statusCode)", async () => {
-      const error = new Error("404 Branch Not Found") as any;
-      error.response = { statusCode: 404 };
+    it("seeds an empty project when GitLab answers the branch create with 404", async () => {
+      // What this integration's client throws for a non-2xx answer (`client.ts`).
+      const error = new GitLabRequestError(
+        "404 Branch Not Found",
+        new Response(null, { status: 404 }),
+      );
       mockBranches.create.mockRejectedValueOnce(error);
       mockRepositoryFiles.create.mockResolvedValueOnce({ branch: "main" });
       mockBranches.create.mockResolvedValueOnce({});
@@ -395,7 +431,7 @@ describe("GitLabAdapter", () => {
 
     it("returns null only for an authoritatively missing branch", async () => {
       mockBranches.show.mockRejectedValueOnce(
-        Object.assign(new Error("Not Found"), { response: { status: 404 } }),
+        new GitLabRequestError("404 Branch Not Found", new Response(null, { status: 404 })),
       );
 
       await expect(
@@ -508,9 +544,9 @@ describe("GitLabAdapter", () => {
       const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
 
       expect(caught).toBe(error);
-      // With GitLab's status on it: core reads a copy of this error, which
-      // keeps an own `status` and drops Gitbeaker's `cause.response`.
-      expect(caught).toHaveProperty("status", error.cause.response.status);
+      // With GitLab's answer where the client kept it, which is where the SDK
+      // reads it and what core's copy of this error carries.
+      expect(providerAnswer(caught)?.status).toBe(error.cause.response.status);
     });
   });
 
@@ -666,25 +702,6 @@ describe("GitLabAdapter", () => {
     });
   });
 
-  describe("getPRHeadSha", () => {
-    it("returns the provider's current merge request head", async () => {
-      mockMergeRequests.show.mockResolvedValueOnce({ sha: "current-head" });
-
-      await expect(glAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
-      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
-    });
-
-    it("throws FatalError when the merge request is deterministically unavailable", async () => {
-      const error = new Error("Merge request not found") as any;
-      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
-      mockMergeRequests.show.mockRejectedValueOnce(error);
-
-      const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);
-
-      expect(caught).toMatchObject({ name: "FatalError", message: "Merge request not found" });
-    });
-  });
-
   describe("getPRComments", () => {
     it("combines discussion notes and general notes", async () => {
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
@@ -756,6 +773,7 @@ describe("GitLabAdapter", () => {
       mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
 
       const adapter = new GitLabAdapter({
+        http,
         token: "glpat-xxxxxxxxxxxx",
         projectId: "12345",
         baseBranch: "main",
@@ -1680,6 +1698,7 @@ describe("GitLabAdapter", () => {
   describe("nested namespace project id", () => {
     function nestedAdapter() {
       return new GitLabAdapter({
+        http,
         token: "glpat-xxxxxxxxxxxx",
         projectId: "group/subgroup/repo",
         baseBranch: "main",

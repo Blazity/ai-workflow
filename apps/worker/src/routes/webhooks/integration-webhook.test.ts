@@ -640,28 +640,26 @@ describe("POST /webhooks/:id", () => {
     const { gitlabHandleIdentity } = await import(
       "../../../../../integrations/gitlab/pipeline-checks.js"
     );
-    const adapter = new GitLabAdapter(
-      {
-        token: "glpat-test",
-        host: "https://gitlab.example.com",
-        projectId: "gitlab-org/gitlab-test",
-        baseBranch: "master",
-      },
-      {
-        MergeRequests: {
-          show: vi.fn(async () => ({
-            diff_refs: { head_sha: "bcbb5ec396a2c0f828686f14fac9b80b780504f2" },
-            source_branch: "test",
-            target_branch: "master",
-            state: "opened",
-            head_pipeline: { id: 31, status: "failed" },
-          })),
-        },
-        Jobs: {
-          all: vi.fn(async () => [{ id: 378, name: "test-build", status: "failed" }]),
-        },
-      } as never,
-    );
+    const { gitLabRestAnswers } = await import("../../test-support/gitlab-rest.js");
+    const adapter = new GitLabAdapter({
+      http: gitLabRestAnswers((path) =>
+        path === "/api/v4/projects/gitlab-org/gitlab-test/merge_requests/1"
+          ? {
+              diff_refs: { head_sha: "bcbb5ec396a2c0f828686f14fac9b80b780504f2" },
+              source_branch: "test",
+              target_branch: "master",
+              state: "opened",
+              head_pipeline: { id: 31, status: "failed" },
+            }
+          : path === "/api/v4/projects/gitlab-org/gitlab-test/pipelines/31/jobs"
+            ? [{ id: 378, name: "test-build", status: "failed" }]
+            : undefined,
+      ),
+      token: "glpat-test",
+      host: "https://gitlab.example.com",
+      projectId: "gitlab-org/gitlab-test",
+      baseBranch: "master",
+    });
     const current = await adapter.getPRHead(1);
     state.dispatch.mockImplementation(async (candidate) => {
       state.boundPipeline = bindCurrentPullRequest(candidate, current, gitlabHandleIdentity);

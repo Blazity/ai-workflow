@@ -1,19 +1,18 @@
 /**
  * What a GitLab repository says about itself.
  *
- * Raw REST with the deployment's private token, the same way the GitLab
- * repository directory lists projects: the gitbeaker client covers neither the
- * languages endpoint nor a raw file read cleanly, and a second client here
- * would be a second place a token has to be threaded.
+ * Raw REST through the adapter's own client (`client.ts`, its `send`), the
+ * same way the adapter lists projects: Gitbeaker covers neither the languages
+ * endpoint nor a raw file read cleanly.
  *
  * Every read is best effort, for the same reason as the GitHub source: a
  * repository with no README and no manifests is ordinary, and it still gets a
  * bundle carrying the provider's own metadata.
  *
  * **Two bounds worth knowing before you read the code.** The whole read shares
- * ONE `AbortSignal.timeout` (`REPOSITORY_PROFILE_DEADLINE_MS`), not a timeout
- * per request: a dozen sequential requests each under their own 18 second bound
- * would add up to minutes. And the root listing is **one page of 100 entries**;
+ * ONE `AbortSignal.timeout` (`REPOSITORY_PROFILE_DEADLINE_MS`) on top of each
+ * request's own attempt deadline: a dozen sequential requests each under their
+ * own bound would add up to minutes. And the root listing is **one page of 100 entries**;
  * a repository with more files than that in its root can have a manifest this
  * never sees, so a full page is recorded as a truncation and the prompt says so
  * rather than letting the model read "no package.json" as a fact.
@@ -31,6 +30,7 @@ import {
   type RepositoryProfileFile,
   type RepositoryProfileSource,
 } from "@integrations/sdk";
+import type { GitLabClient } from "./client";
 
 /** One page of the root listing. Kept at one page deliberately: paging a
  *  repository root is unbounded work for a diminishing signal, and a root with
@@ -50,15 +50,12 @@ interface GitLabTreeEntry {
 }
 
 class GitLabProfileSource implements RepositoryProfileSource {
-  private readonly baseUrl: string;
   private readonly projectId: string;
 
   constructor(
-    private readonly token: string,
-    host: string,
+    private readonly client: GitLabClient,
     private readonly repoPath: string,
   ) {
-    this.baseUrl = host.replace(/\/$/u, "");
     this.projectId = encodeURIComponent(repoPath);
   }
 
@@ -142,10 +139,7 @@ class GitLabProfileSource implements RepositoryProfileSource {
   }
 
   private async request(path: string, signal: AbortSignal): Promise<Response | null> {
-    const response = await fetch(`${this.baseUrl}/api/v4${path}`, {
-      headers: { "PRIVATE-TOKEN": this.token },
-      signal,
-    });
+    const response = await this.client.send(path, { signal });
     // A path this project does not have is the normal answer for a repository
     // without a README or without a CI file, and it is not a reason to fail
     // the whole bundle. Anything else is, because a 401 that read as "no
@@ -181,8 +175,8 @@ class GitLabProfileSource implements RepositoryProfileSource {
 /** A profile source for one GitLab project, addressed by its full path exactly
  *  as `createVCSForRepository` addresses one. */
 export function createGitLabProfileSource(
-  config: { token: string; host: string },
+  client: GitLabClient,
   repoPath: string,
 ): RepositoryProfileSource {
-  return new GitLabProfileSource(config.token, config.host, repoPath);
+  return new GitLabProfileSource(client, repoPath);
 }
