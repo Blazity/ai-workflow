@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReviewThread } from "@integrations/sdk";
 import { selectReviewLedgerWorkItems } from "@integrations/sdk";
 import { GitHubAdapter } from "./vcs.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "@integrations/sdk";
 
 /**
  * Core's thread identity for a finding (`reviewFindingDigest` in the worker),

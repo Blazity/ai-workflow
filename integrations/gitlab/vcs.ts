@@ -1,20 +1,44 @@
 import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import {
+  AI_WORKFLOW_COMMENT_MARKER,
   FatalError,
+  hasReviewLedgerFailureMarker,
   isPullRequestRefusal,
-  providerAnswerOf,
-  readProviderFailure,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
   isReviewLedgerWorkItem,
+  legacyReviewCommentMarker,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
+  providerAnswerOf,
   PullRequestUnreadableError,
+  readAnyReviewLedgerMarker,
+  readProviderFailure,
+  readReviewFindingDigest,
+  readReviewLedgerMarker,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
+  reviewFallbackBullet,
+  reviewFindingMarker,
+  reviewHeadMarker,
+  reviewLedgerFailureMarker,
+  reviewSummaryMarker,
   type CheckRunResult,
+  type GateStatusCapableVCS,
   type GateStatusRef,
   type GateStatusUpdate,
   type IntegrationLogger,
+  type ManualDispatchPrCapableVCS,
+  type ManualDispatchPullRequestSnapshot,
   type PostRunFailureNoteInput,
   type PRComment,
+  type PRFile,
+  type PRFilesCapableVCS,
+  type PRReviewCapableVCS,
+  type PRReviewInlineComment,
+  type PRReviewPublication,
+  type PRReviewPublicationResult,
   type PullRequest,
   type PullRequestHead,
   type ReviewThread,
@@ -22,7 +46,7 @@ import {
   type ReviewThreadSource,
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
-  type VCSAdapter,
+  type VcsIntegrationAdapter,
   type VcsRepositoryMetadata,
   type VcsOpaqueHandle,
 } from "@integrations/sdk";
@@ -34,91 +58,6 @@ import {
   pipelineCheck,
 } from "./pipeline-checks";
 import { createGitLabProfileSource } from "./profile-source";
-import {
-  AI_WORKFLOW_COMMENT_MARKER,
-  hasReviewLedgerFailureMarker,
-  isReopenedLedgerThread,
-  isReviewLedgerNote,
-  markReviewLedgerReplyResolved,
-  markReviewLedgerReplyStale,
-  readAnyReviewLedgerMarker,
-  readReviewLedgerMarker,
-  reviewLedgerFailureMarker,
-  readReviewFindingDigest,
-  reviewFallbackBullet,
-  type PRReviewInlineComment,
-} from "./review-markers";
-
-export interface PRFile {
-  path: string;
-  additions: number;
-  deletions: number;
-  changeType: "added" | "removed" | "modified" | "renamed";
-  patch?: string;
-}
-
-interface PRReviewPublication {
-  idempotencyKey: string;
-  priorIdempotencyKeys?: string[];
-  commentFindingDigests: string[];
-  deferredFindingDigests?: string[];
-  headSha: string;
-  decision: "approve" | "request_changes";
-  summary: string;
-  comments: PRReviewInlineComment[];
-}
-
-interface PRReviewPublicationResult {
-  id: string;
-  commentIds: Array<string | null>;
-}
-
-interface ManualDispatchPullRequestSnapshot {
-  prNumber: number;
-  prUrl: string;
-  headRef: string;
-  headSha: string;
-  baseRef: string;
-  title: string;
-  author: string;
-  isDraft: boolean;
-  state: "open" | "closed" | "merged";
-  mergeSha?: string;
-  mergedAt?: string;
-  failedChecks: Array<{
-    name: string;
-    conclusion: string;
-    handle?: VcsOpaqueHandle;
-    producer: string;
-    source?: string;
-    trustedByDefault?: boolean;
-  }>;
-  reviews: Array<{
-    state: "changes_requested" | "commented";
-    author: string;
-    body: string;
-  }>;
-}
-
-interface GateStatusCapableVCS {
-  createGateStatus(name: string, headSha: string, ownershipKey?: string): Promise<GateStatusRef>;
-  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
-}
-
-interface PRFilesCapableVCS {
-  listPRFiles(prId: number): Promise<PRFile[]>;
-}
-
-interface PRReviewCapableVCS {
-  publishPRReview(
-    prId: number,
-    publication: PRReviewPublication,
-  ): Promise<PRReviewPublicationResult>;
-}
-
-interface ManualDispatchPrCapableVCS {
-  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
-}
 
 function clampBothEnds(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -292,7 +231,7 @@ function withProviderStatus(err: unknown): unknown {
 }
 
 export class GitLabAdapter implements
-  VCSAdapter,
+  VcsIntegrationAdapter,
   GateStatusCapableVCS,
   PRFilesCapableVCS,
   PRReviewCapableVCS,
@@ -853,28 +792,25 @@ export class GitLabAdapter implements
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
-    const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
-    const marker = reviewMarker(publication.idempotencyKey);
+    const marker = reviewSummaryMarker(publication.idempotencyKey);
     // The merge request's marker, on the one summary note. Only the current key is
     // ever written; prior keys are recognised because a note published before the
     // key identified the merge request carries one of those, and this is what turns
     // such a note into the note every later round edits.
     const priorKeys = publication.priorIdempotencyKeys ?? [];
-    const knownMarkers = [marker, ...priorKeys.map(reviewMarker)];
+    const knownMarkers = [marker, ...priorKeys.map(reviewSummaryMarker)];
     // The round's marker, and on GitLab it rides in the summary note because there
     // is no review object to hang it from. Its one job is to recognise a round this
     // adapter has already published, now that the summary marker no longer says
     // which head it describes.
-    const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
+    const headMarker = reviewHeadMarker(publication.headSha);
     // The marker family from before findings had an identity of their own. Never
     // written again, still recognised: within one round the index it carries does
     // identify the finding, and the prior keys are the same round's earlier
     // attempts, so an attempt that failed after posting its discussions does not
     // post them twice.
     const legacyCommentMarkers = (index: number) =>
-      [publication.idempotencyKey, ...priorKeys].map(
-        (key) => `<!-- ai-workflow-review-comment:${key}:${index} -->`,
-      );
+      [publication.idempotencyKey, ...priorKeys].map((key) => legacyReviewCommentMarker(key, index));
     const existingNotes = (await this.gl.MergeRequestNotes.all(
       this.projectId,
       prId,
@@ -1000,8 +936,7 @@ export class GitLabAdapter implements
     for (const [index, comment] of publication.comments.entries()) {
       // The marker travels with the note because the discussion it opens is what a
       // later round has to recognise.
-      const commentMarker =
-        `<!-- ai-workflow-review-finding:${digests[index]!} -->`;
+      const commentMarker = reviewFindingMarker(digests[index]!);
       const priorDiscussion = matched[index];
       if (priorDiscussion) {
         commentIds.push(

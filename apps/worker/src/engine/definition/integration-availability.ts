@@ -17,7 +17,12 @@
  * the day this lands; reading the test verdict here would empty their palettes.
  */
 import { investigateSources } from "../blocks/investigate/manifest.js";
-import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
+import {
+  VCS_BOT_LOGIN_FIELD,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+  type IntegrationBlockManifest,
+  type IntegrationManifest,
+} from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
   IntegrationFailure,
@@ -131,10 +136,10 @@ export function deploymentIntegrations(
     // with an action they just took.
     if (!presence.usable) continue;
     if (manifest.capabilities.includes("vcs")) {
-      if (state?.configuredFields?.includes("botLogin")) {
+      if (state?.configuredFields?.includes(VCS_BOT_LOGIN_FIELD)) {
         botIdentityProviders.add(manifest.id);
       }
-      if (state?.configuredFields?.includes("legacyBotLogin")) {
+      if (state?.configuredFields?.includes(VCS_LEGACY_BOT_LOGIN_FIELD.key)) {
         legacyBotIdentityProviders.add(manifest.id);
       }
     }

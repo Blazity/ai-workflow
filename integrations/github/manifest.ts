@@ -1,4 +1,8 @@
-import { defineIntegration } from "@integrations/sdk";
+import {
+  defineIntegration,
+  VCS_BOT_LOGIN_FIELD,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+} from "@integrations/sdk";
 
 /**
  * The GitHub App this deployment acts as.
@@ -56,7 +60,7 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "botLogin",
+        key: VCS_BOT_LOGIN_FIELD,
         label: "Bot username",
         description:
           "The account that posts automated comments, used to prevent review loops. Usually <app-slug>[bot].",
@@ -82,10 +86,9 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "legacyBotLogin",
+        ...VCS_LEGACY_BOT_LOGIN_FIELD,
         label: "Legacy bot username",
         description: "Used only when this is the deployment's sole version-control provider.",
-        env: "VCS_BOT_LOGIN",
         secret: false,
         optional: true,
       },

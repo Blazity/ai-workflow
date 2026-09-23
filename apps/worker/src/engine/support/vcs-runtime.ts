@@ -1,4 +1,5 @@
 import { integrationManifest } from "@integrations/registry";
+import { VCS_LEGACY_BOT_LOGIN_FIELD } from "@integrations/sdk";
 import type {
   IntegrationContext,
   IntegrationManifest,
@@ -157,7 +158,8 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
 
   // The legacy single-provider login is core's to resolve (`readVcsBotLogin`),
   // never an adapter's to read.
-  const { legacyBotLogin: _legacyBotLogin, ...connectionWithoutLegacyBot } = usable.ctx.connection;
+  const { [VCS_LEGACY_BOT_LOGIN_FIELD.key]: _legacyBotLogin, ...connectionWithoutLegacyBot } =
+    usable.ctx.connection;
   const ctx = {
     ...usable.ctx,
     connection: connectionWithoutLegacyBot,

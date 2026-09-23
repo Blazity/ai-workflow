@@ -1,14 +1,41 @@
 import type { Octokit } from "@octokit/rest";
 import {
+  AI_WORKFLOW_COMMENT_MARKER,
   FatalError,
+  hasReviewLedgerFailureMarker,
   isPullRequestRefusal,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
   isReviewLedgerWorkItem,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
   PullRequestUnreadableError,
+  readAnyReviewLedgerMarker,
+  readReviewFindingDigest,
+  readReviewLedgerMarker,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
+  reviewFallbackBullet,
+  reviewFindingMarker,
+  reviewHeadMarker,
+  reviewLedgerFailureMarker,
+  reviewSummaryMarker,
+  vcsLoginsMatch,
+  type CheckRunAnnotation,
   type CheckRunResult,
+  type GateStatusCapableVCS,
   type GateStatusRef,
   type GateStatusUpdate,
+  type ManualDispatchPrCapableVCS,
+  type ManualDispatchPullRequestSnapshot,
+  type PRFile,
+  type PRFilesCapableVCS,
+  type PRReviewCapableVCS,
+  type PRReviewInlineComment,
+  type PRReviewPublication,
+  type PRReviewPublicationResult,
+  type RichGateStatusCapableVCS,
+  type RichGateStatusUpdate,
   type IntegrationLogger,
   type PostRunFailureNoteInput,
   type PRComment,
@@ -21,7 +48,7 @@ import {
   type ReviewThreadSource,
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
-  type VCSAdapter,
+  type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
@@ -40,125 +67,6 @@ import {
 } from "./auth";
 import { createGitHubProfileSource } from "./profile-source";
 import { createGitHubSkillSource } from "./skills";
-import {
-  AI_WORKFLOW_COMMENT_MARKER,
-  hasReviewLedgerFailureMarker,
-  isReopenedLedgerThread,
-  isReviewLedgerNote,
-  markReviewLedgerReplyResolved,
-  markReviewLedgerReplyStale,
-  readAnyReviewLedgerMarker,
-  readReviewFindingDigest,
-  readReviewLedgerMarker,
-  reviewFallbackBullet,
-  reviewLedgerFailureMarker,
-  vcsLoginsMatch,
-  type PRReviewInlineComment,
-} from "./review-markers";
-
-// The optional surfaces core layers on top of the VCS port. They are not part
-// of `VCSAdapter`, so the package declares its own copies the way the GitLab
-// integration does: core detects them by method presence, never by this type.
-
-export interface PRFile {
-  path: string;
-  additions: number;
-  deletions: number;
-  changeType: "added" | "removed" | "modified" | "renamed";
-  /** Unified diff hunk. Absent for binary or very large files. */
-  patch?: string;
-}
-
-interface PRReviewPublication {
-  idempotencyKey: string;
-  /** Keys earlier attempts at this round may carry, to RECOGNISE and never to
-   * write: a publication blind to them would post a duplicate beside one. */
-  priorIdempotencyKeys?: string[];
-  /** The digest of each entry in `comments`, same order and same length. The
-   * recipe lives with the caller; an adapter only carries the string. */
-  commentFindingDigests: string[];
-  /** Findings this round still reports but does not place inline. Their threads
-   * stay open and stay untouched, because the summary still names them. */
-  deferredFindingDigests?: string[];
-  headSha: string;
-  decision: "approve" | "request_changes";
-  summary: string;
-  comments: PRReviewInlineComment[];
-}
-
-interface PRReviewPublicationResult {
-  id: string;
-  commentIds: Array<string | null>;
-}
-
-interface ManualDispatchPullRequestSnapshot {
-  prNumber: number;
-  prUrl: string;
-  headRef: string;
-  headSha: string;
-  baseRef: string;
-  title: string;
-  author: string;
-  isDraft: boolean;
-  state: "open" | "closed" | "merged";
-  mergeSha?: string;
-  mergedAt?: string;
-  failedChecks: Array<{
-    name: string;
-    conclusion: string;
-    detailsUrl?: string;
-    handle?: VcsOpaqueHandle;
-    producer: string;
-    source?: string;
-    trustedByDefault?: boolean;
-  }>;
-  reviews: Array<{
-    state: "changes_requested" | "commented";
-    author: string;
-    body: string;
-  }>;
-}
-
-interface CheckRunAnnotation {
-  path: string;
-  startLine: number;
-  endLine: number;
-  startColumn?: number;
-  endColumn?: number;
-  annotationLevel: "notice" | "warning" | "failure";
-  message: string;
-  title?: string;
-  rawDetails?: string;
-}
-
-interface RichGateStatusUpdate extends GateStatusUpdate {
-  details?: string;
-  annotations?: CheckRunAnnotation[];
-}
-
-interface GateStatusCapableVCS {
-  createGateStatus(name: string, headSha: string, ownershipKey?: string): Promise<GateStatusRef>;
-  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
-}
-
-interface RichGateStatusCapableVCS {
-  updateGateStatusDetails(ref: GateStatusRef, update: RichGateStatusUpdate): Promise<void>;
-}
-
-interface PRFilesCapableVCS {
-  listPRFiles(prId: number): Promise<PRFile[]>;
-}
-
-interface PRReviewCapableVCS {
-  publishPRReview(
-    prId: number,
-    publication: PRReviewPublication,
-  ): Promise<PRReviewPublicationResult>;
-}
-
-interface ManualDispatchPrCapableVCS {
-  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
-}
 
 export interface GitHubConfig {
   credential: GitHubAppCredential;
@@ -205,11 +113,6 @@ function isSelfAuthoredReviewError(error: unknown): boolean {
   return /review can not (?:request changes on|approve) your own pull request/i.test(
     details,
   );
-}
-
-/** The marker family is this adapter's; the digest inside it comes from the caller. */
-function reviewFindingMarker(digest: string): string {
-  return `<!-- ai-workflow-review-finding:${digest} -->`;
 }
 
 /**
@@ -516,7 +419,7 @@ interface OwnedReviewThread {
 
 export class GitHubAdapter
   implements
-    VCSAdapter,
+    VcsIntegrationAdapter,
     GateStatusCapableVCS,
     RichGateStatusCapableVCS,
     PRFilesCapableVCS,
@@ -1109,20 +1012,19 @@ export class GitHubAdapter
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
-    const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
-    const marker = reviewMarker(publication.idempotencyKey);
+    const marker = reviewSummaryMarker(publication.idempotencyKey);
     // The pull request's marker, on the one summary comment. Only `marker` is ever
     // written; the prior keys are recognised as well because a summary published
     // before the key identified the pull request carries one of those, and missing
     // it would leave that one behind and add a second summary next to it.
     const knownMarkers = [
       marker,
-      ...(publication.priorIdempotencyKeys ?? []).map(reviewMarker),
+      ...(publication.priorIdempotencyKeys ?? []).map(reviewSummaryMarker),
     ];
     // The round's marker, on the review that carries the verdict. This is what
     // makes a retry at one head submit one verdict and not two, now that the
     // summary marker no longer says which head it describes.
-    const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
+    const headMarker = reviewHeadMarker(publication.headSha);
 
     const threads = await this.ownReviewThreads(prId);
     // The caller's digests. This adapter only carries the value.
@@ -1163,7 +1065,7 @@ export class GitHubAdapter
     // head it named was already reviewed.
     const roundMarkers = [
       headMarker,
-      ...(publication.priorIdempotencyKeys ?? []).map(reviewMarker),
+      ...(publication.priorIdempotencyKeys ?? []).map(reviewSummaryMarker),
     ];
     const prior = existing.find((review) =>
       roundMarkers.some((known) => review.body?.includes(known)),

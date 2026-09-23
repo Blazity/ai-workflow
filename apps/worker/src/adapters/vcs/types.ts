@@ -1,25 +1,45 @@
 import { createHash } from "node:crypto";
 import type {
+  PRReviewInlineComment,
   ReviewThreadFeed,
   ReviewThreadSource,
-  VCSAdapter,
-  VcsOpaqueHandle,
 } from "@integrations/sdk";
 
 // The VCS port (VCSAdapter and every type it names, plus the two review ledger
-// limits an adapter applies) lives in @integrations/sdk (ADR-010), where an
-// integration can implement it. Every name core imported from here is still
+// limits an adapter applies) and what a provider may add to it (gate statuses,
+// pull request files, published reviews, manual dispatch snapshots, and the
+// guards core asks them with) live in @integrations/sdk (ADR-010), where an
+// integration implements them. Every name core imported from here is still
 // exported from here, with the same kind, so no caller changed.
 //
-// What stays is not the port: optional core extensions below, review ledger
-// engine types, and the finding digest, which needs node:crypto and so cannot
-// live in the SDK's browser-safe entry.
+// What stays is not the port: core's refusal for a provider that cannot read
+// a pull request for a manual run, the review ledger engine types, and the
+// finding digest, which needs node:crypto and so cannot live in the SDK's
+// browser-safe entry.
 export {
+  hasGateStatusCapability,
+  hasManualDispatchPrCapability,
+  hasPRFilesCapability,
+  hasPRReviewCapability,
+  hasRichGateStatusCapability,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
+  type CheckRunAnnotation,
+  type CheckRunConclusion,
   type CheckRunResult,
+  type GateStatusCapableVCS,
+  type GateStatusRef,
+  type GateStatusUpdate,
+  type ManualDispatchPrCapableVCS,
+  type ManualDispatchPullRequestSnapshot,
   type PostRunFailureNoteInput,
   type PRComment,
+  type PRFile,
+  type PRFilesCapableVCS,
+  type PRReviewCapableVCS,
+  type PRReviewInlineComment,
+  type PRReviewPublication,
+  type PRReviewPublicationResult,
   type PullRequest,
   type PullRequestHead,
   type PullRequestHeadChecks,
@@ -29,57 +49,15 @@ export {
   type ReviewThreadNote,
   type ReviewThreadSource,
   type ReviewThreadTarget,
+  type RichGateStatusCapableVCS,
+  type RichGateStatusUpdate,
   type SettleReviewThreadAction,
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
 } from "@integrations/sdk";
-
-export interface ManualDispatchPullRequestSnapshot {
-  prNumber: number;
-  prUrl: string;
-  headRef: string;
-  headSha: string;
-  baseRef: string;
-  title: string;
-  author: string;
-  isDraft: boolean;
-  state: "open" | "closed" | "merged";
-  mergeSha?: string;
-  mergedAt?: string;
-  failedChecks: Array<{
-    name: string;
-    conclusion: string;
-    detailsUrl?: string;
-    handle?: VcsOpaqueHandle;
-    producer: string;
-    source?: string;
-    /** Whether the integration trusts this producer when a workflow names
-     *  none, decided by the same rule its webhook applies. */
-    trustedByDefault?: boolean;
-  }>;
-  reviews: Array<{
-    state: "changes_requested" | "commented";
-    author: string;
-    body: string;
-  }>;
-}
-
-export interface ManualDispatchPrCapableVCS {
-  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
-}
-
-/** Ask of a resolved adapter only: a deferred one answers every member with a
- *  function, so this would always be true of it. */
-export function hasManualDispatchPrCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & ManualDispatchPrCapableVCS {
-  return (
-    typeof (adapter as Partial<ManualDispatchPrCapableVCS>)
-      .getManualDispatchPullRequest === "function"
-  );
-}
 
 /** The provider has no way to read a pull request for a manual run. Its own
  *  class, so the person is told that rather than that the provider is down. */
@@ -92,10 +70,9 @@ export class ManualDispatchUnsupportedError extends Error {
 
 // --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---
 
-// The work-item predicate itself lives in adapters/vcs/vcs-bot-identity.ts:115: this module
-// imports node:crypto for the finding digest, so a value export from here would
-// drag Node into the workflow bundle the moment the ledger's pure logic needed
-// the predicate.
+// The work-item predicate itself is the SDK's (`isReviewLedgerWorkItem`), re-exported
+// by adapters/vcs/vcs-bot-identity.ts: this module imports node:crypto for the
+// finding digest, so the ledger's pure logic must not reach it through here.
 
 export type ReviewThreadDispositionKind =
   | "actionable"
@@ -188,113 +165,6 @@ export type ReviewLedgerDurableState = {
   feedLite: ReviewLedgerDurableFeedEntry[];
 };
 
-export interface CheckRunAnnotation {
-  path: string;
-  startLine: number;
-  endLine: number;
-  startColumn?: number;
-  endColumn?: number;
-  annotationLevel: "notice" | "warning" | "failure";
-  message: string;
-  title?: string;
-  rawDetails?: string;
-}
-
-export type CheckRunConclusion =
-  | "success"
-  | "failure"
-  | "neutral"
-  | "cancelled"
-  | "skipped"
-  | "timed_out"
-  | "action_required";
-
-export interface GateStatusUpdate {
-  status: "in_progress" | "completed";
-  conclusion?: CheckRunConclusion;
-  summary?: string;
-}
-
-export interface RichGateStatusUpdate extends GateStatusUpdate {
-  details?: string;
-  annotations?: CheckRunAnnotation[];
-}
-
-/** Opaque provider handle. Core stores it and hands it back without parsing. */
-export type GateStatusRef = VcsOpaqueHandle;
-
-/**
- * Capability interface, *not* extended onto VCSAdapter, because GitLab
- * providers expose this differently. Callers check
- * `hasGateStatusCapability(adapter)` before
- * invoking these methods. Adding methods to VCSAdapter directly would
- * force unsupported providers to throw at runtime; this surface keeps the
- * failure to detect-time, not invoke-time.
- */
-export interface GateStatusCapableVCS {
-  createGateStatus(
-    name: string,
-    headSha: string,
-    ownershipKey?: string,
-  ): Promise<GateStatusRef>;
-  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
-}
-
-export function hasGateStatusCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & GateStatusCapableVCS {
-  return (
-    typeof (adapter as Partial<GateStatusCapableVCS>).createGateStatus ===
-      "function" &&
-    typeof (adapter as Partial<GateStatusCapableVCS>).updateGateStatus ===
-      "function"
-  );
-}
-
-export interface RichGateStatusCapableVCS {
-  updateGateStatusDetails(
-    ref: GateStatusRef,
-    update: RichGateStatusUpdate,
-  ): Promise<void>;
-}
-
-export function hasRichGateStatusCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & RichGateStatusCapableVCS {
-  return (
-    typeof (adapter as Partial<RichGateStatusCapableVCS>)
-      .updateGateStatusDetails === "function"
-  );
-}
-
-export interface PRFile {
-  path: string;
-  additions: number;
-  deletions: number;
-  changeType: "added" | "removed" | "modified" | "renamed";
-  /** Unified diff hunk. Absent for binary or very large files. */
-  patch?: string;
-}
-
-export interface PRFilesCapableVCS {
-  listPRFiles(prId: number): Promise<PRFile[]>;
-}
-
-export function hasPRFilesCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & PRFilesCapableVCS {
-  return typeof (adapter as Partial<PRFilesCapableVCS>).listPRFiles === "function";
-}
-
-export interface PRReviewInlineComment {
-  path: string;
-  body: string;
-  startLine: number;
-  endLine: number;
-  startOldLine?: number | null;
-  endOldLine?: number | null;
-}
-
 /**
  * The identity of one finding's THREAD, and the reason a thread outlives the round
  * that opened it.
@@ -311,9 +181,9 @@ export interface PRReviewInlineComment {
  * matters; a fuzzy match could not tell "the same defect, reworded" from "a
  * different defect on the same symbol".
  *
- * One formula for both providers. The MARKER FAMILIES stay provider-local, because
- * each adapter reads only what it wrote, but a digest that differed between them
- * would be a difference with no reason to exist.
+ * One formula for both providers, and one marker to carry it (`reviewFindingMarker`
+ * in the SDK): a digest or a marker that differed between them would be a
+ * difference with no reason to exist.
  */
 export function reviewFindingDigest(
   comment: Pick<PRReviewInlineComment, "path" | "body">,
@@ -322,77 +192,4 @@ export function reviewFindingDigest(
     .update(`${comment.path} ${comment.body}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-/**
- * Reads the digest a provider wrote into its finding marker, if the comment body
- * carries one. Shared because both providers currently write the same marker
- * family; a provider that diverged would keep its own reader local instead of
- * bending this one to fit two shapes.
- */
-export function readReviewFindingDigest(body: string): string | null {
-  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
-}
-
-export interface PRReviewPublication {
-  idempotencyKey: string;
-  /**
-   * Keys earlier attempts at this same round may have marked a review with, to
-   * RECOGNISE and never to write. The key was derived from the review content
-   * before it became a stable round identity, so a review published back then
-   * carries one of these instead, and a publication that could not see it would
-   * post a duplicate beside it. Writing only the current key keeps the
-   * transition one-directional.
-   */
-  priorIdempotencyKeys?: string[];
-  /**
-   * The digest of each entry in `comments`, same order and same length.
-   *
-   * The RECIPE lives with the caller, not here. An adapter only carries a digest:
-   * it writes one into the marker on a comment it opens and reads it back verbatim
-   * on a later round, so it never needs to know how the string was derived. The
-   * workflow derives it from the finding's severity and prose alone, deliberately
-   * excluding the agreement note, because that note embeds the number of agreeing
-   * reviewers and whether the finding blocks the check: both can change while the
-   * defect does not, and a digest that moved with them would strand the thread.
-   */
-  commentFindingDigests: string[];
-  /**
-   * Digests of findings this round STILL REPORTS but does not place inline: the
-   * ones that lost an inline slot to the cap, and the ones whose line is no longer
-   * in the diff. They are named in the summary instead.
-   *
-   * An adapter settles a thread when the round stops reporting its finding, and
-   * `comments` alone cannot tell that apart from "reported, just not inline". Left
-   * out, a finding demoted by the cap would have its thread marked resolved while
-   * the summary still lists it as standing, and the two artifacts would say
-   * opposite things about the same defect. Threads named here stay open and stay
-   * untouched.
-   */
-  deferredFindingDigests?: string[];
-  headSha: string;
-  decision: "approve" | "request_changes";
-  summary: string;
-  comments: PRReviewInlineComment[];
-}
-
-export interface PRReviewPublicationResult {
-  id: string;
-  commentIds: Array<string | null>;
-}
-
-export interface PRReviewCapableVCS {
-  publishPRReview(
-    prId: number,
-    publication: PRReviewPublication,
-  ): Promise<PRReviewPublicationResult>;
-}
-
-export function hasPRReviewCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & PRReviewCapableVCS {
-  return (
-    typeof (adapter as Partial<PRReviewCapableVCS>).publishPRReview ===
-    "function"
-  );
 }

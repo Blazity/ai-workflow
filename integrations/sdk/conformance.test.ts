@@ -7,7 +7,13 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkIntegrationConformance, z, type ConformanceCode } from "./index";
+import {
+  checkIntegrationConformance,
+  VCS_BOT_LOGIN_FIELD,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+  z,
+  type ConformanceCode,
+} from "./index";
 import { fixtureManifest, otelFixtureManifest } from "./fixture-manifest";
 import { fixtureRuntime, otelFixtureRuntime } from "./fixture-runtime";
 
@@ -254,11 +260,64 @@ test("repositories belongs to a vcs integration and names a bare lowercase host"
     hasIssue(manifest, runtime, "repositories_invalid", "repositories.host");
   }
 
-  const valid = validIntegration();
-  valid.manifest.capabilities = ["messaging", "vcs"];
-  valid.runtime.capabilities.vcs = () => ({});
+  const valid = validVcsIntegration();
   valid.manifest.repositories = { host: "git.acme.test:8443", nestedPaths: true };
   assert.deepEqual(codes(valid.manifest, valid.runtime), []);
+});
+
+/** A vcs integration with everything the capability asks of a manifest. */
+function validVcsIntegration(): { manifest: Loose; runtime: Loose } {
+  const integration = validIntegration();
+  integration.manifest.capabilities = ["messaging", "vcs"];
+  integration.runtime.capabilities.vcs = () => ({});
+  integration.manifest.connection.fields.push({
+    key: VCS_BOT_LOGIN_FIELD,
+    label: "Bot username",
+    env: "ACME_BOT_LOGIN",
+    secret: false,
+    optional: true,
+  });
+  return integration;
+}
+
+test("a vcs integration declares where its automation account's login is set", () => {
+  const without = validVcsIntegration();
+  without.manifest.connection.fields = without.manifest.connection.fields.filter(
+    (field: { key: string }) => field.key !== VCS_BOT_LOGIN_FIELD,
+  );
+  hasIssue(without.manifest, without.runtime, "vcs_bot_login_missing", "connection.fields");
+
+  const secret = validVcsIntegration();
+  secret.manifest.connection.fields.at(-1).secret = true;
+  hasIssue(secret.manifest, secret.runtime, "vcs_bot_login_missing", "connection.fields[3].secret");
+
+  // The legacy single-provider login is the one field allowed on a variable
+  // core reserves, and only with its own key on a vcs integration.
+  const legacy = validVcsIntegration();
+  legacy.manifest.connection.fields.push({
+    ...VCS_LEGACY_BOT_LOGIN_FIELD,
+    label: "Legacy bot username",
+    secret: false,
+    optional: true,
+  });
+  assert.deepEqual(codes(legacy.manifest, legacy.runtime), []);
+
+  const legacyElsewhere = validIntegration();
+  legacyElsewhere.manifest.connection.fields.push({
+    ...VCS_LEGACY_BOT_LOGIN_FIELD,
+    label: "Legacy bot username",
+    secret: false,
+    optional: true,
+  });
+  hasIssue(
+    legacyElsewhere.manifest,
+    legacyElsewhere.runtime,
+    "connection_env_reserved",
+    "connection.fields[3].env",
+  );
+
+  // Nothing is asked of an integration that serves no version control.
+  assert.deepEqual(codes(validIntegration().manifest, validIntegration().runtime), []);
 });
 
 test("identity marks a secret, and only a boolean", () => {
