@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   candidateDiff,
   assertCandidate,
+  CONNECTION_SHAPE_TEST,
   INTEGRATION_SDK_SEAM_TESTS,
   listDirectory,
   namesDiff,
@@ -69,6 +70,9 @@ const REGISTRY = "pnpm run gen:integrations --check";
 const GRAPH_ZOD4 = "pnpm --filter @shared/workflow-graph run test:zod4";
 const SDK_SEAM =
   "pnpm --dir apps/worker exec vitest run " + INTEGRATION_SDK_SEAM_TESTS.join(" ");
+const SDK_SEAM_WITH_SHAPE =
+  "pnpm --dir apps/worker exec vitest run " +
+  [...INTEGRATION_SDK_SEAM_TESTS, ...CONNECTION_SHAPE_TEST].join(" ");
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const BLOCK_CATALOG = "pnpm run gen:blocks --check";
@@ -196,7 +200,7 @@ test("scope table selects only exact narrow commands", () => {
     [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["integrations/sdk/index.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
     [["integrations/sdk/conformance.test.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
-    [["integrations/_fixtures/demo/manifest.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["integrations/_fixtures/demo/manifest.ts"], ["pnpm run typecheck", SDK_SEAM_WITH_SHAPE, REGISTRY, ...PACKAGES, GATES]],
     [["scripts/gates/generate-integration-registry/render.ts"], ["pnpm run test:ci", REGISTRY, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
     [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GRAPH_ZOD4, GATES]],
@@ -235,6 +239,29 @@ test("an integration package change is a known scope that runs the SDK's own sui
     assert.equal(shown.has(command), true, command);
   }
   assert.deepEqual(commands(["integrations/sdk/NOTES.md"]), ["pnpm run gate:docs-status"]);
+});
+
+test("editing an integration's manifest pins the connection shape; editing only its worker or README does not", () => {
+  const manifestPlanned = commands(["integrations/jira/manifest.ts"]);
+  assert.equal(
+    manifestPlanned.some((command) => command.includes("connection-shape.test.ts")),
+    true,
+    manifestPlanned.join(", "),
+  );
+
+  const workerOnlyPlanned = commands(["integrations/jira/worker.ts"]);
+  assert.equal(
+    workerOnlyPlanned.some((command) => command.includes("connection-shape.test.ts")),
+    false,
+    workerOnlyPlanned.join(", "),
+  );
+
+  const readmeOnlyPlanned = commands(["integrations/jira/README.md"]);
+  assert.equal(
+    readmeOnlyPlanned.some((command) => command.includes("connection-shape.test.ts")),
+    false,
+    readmeOnlyPlanned.join(", "),
+  );
 });
 
 test("a workflow graph package change plans the worker guards and the suites that import the package", () => {
