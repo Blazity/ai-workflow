@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -6,13 +6,27 @@ import {
   recordSystemHealthObservation,
   sweepSystemHealthObservations,
 } from "../../db/repositories/system-health.js";
-import { systemHealthObservationScope } from "./observations.js";
+import {
+  latestWebhookDeliveries,
+  recordWebhookDelivery,
+  systemHealthObservationScope,
+} from "./observations.js";
+
+// The connected half (`recordWebhookDelivery`, `latestWebhookDeliveries`) runs
+// against the same test database the explicit-handle calls below use.
+const connected = vi.hoisted(() => ({ db: undefined as unknown as Db }));
+vi.mock("../../db/client.js", () => ({ getDb: () => connected.db }));
 
 let db: Db;
 
 beforeAll(async () => {
   db = await createTestDb();
+  connected.db = db;
 }, 60_000);
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("system health observations", () => {
   it("binds evidence to a one-way fingerprint of the configured secret", () => {
@@ -90,5 +104,51 @@ describe("system health observations", () => {
         "webhook-delivery",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("integration webhook deliveries", () => {
+  const production = "https://ai-workflow.example.com";
+  const demo = "https://ai-workflow-demo.example.com";
+
+  it("are read back by the deployment that received them", async () => {
+    vi.stubEnv("BETTER_AUTH_URL", production);
+    await recordWebhookDelivery({
+      integrationId: "shared-db-own",
+      outcome: "accepted",
+      reason: "request_accepted",
+    });
+
+    expect(await latestWebhookDeliveries("shared-db-own")).toEqual([
+      expect.objectContaining({ outcome: "accepted", reason: "request_accepted" }),
+    ]);
+  });
+
+  it("are not read by another deployment that shares the database", async () => {
+    // Demo shares production's database. A delivery demo accepted is no
+    // evidence that production's webhook reaches production.
+    vi.stubEnv("BETTER_AUTH_URL", demo);
+    await recordWebhookDelivery({
+      integrationId: "shared-db-other",
+      outcome: "accepted",
+      reason: "request_accepted",
+    });
+
+    vi.stubEnv("BETTER_AUTH_URL", production);
+    expect(await latestWebhookDeliveries("shared-db-other")).toEqual([]);
+  });
+
+  it("belong to the same deployment whether or not its address ends in a slash", async () => {
+    vi.stubEnv("BETTER_AUTH_URL", `${production}/`);
+    await recordWebhookDelivery({
+      integrationId: "shared-db-slash",
+      outcome: "rejected",
+      reason: "request_refused_401",
+    });
+
+    vi.stubEnv("BETTER_AUTH_URL", production);
+    expect(await latestWebhookDeliveries("shared-db-slash")).toEqual([
+      expect.objectContaining({ outcome: "rejected", reason: "request_refused_401" }),
+    ]);
   });
 });

@@ -55,6 +55,9 @@ export interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    /** Whether the integration trusts this producer when a workflow names
+     *  none, decided by the same rule its webhook applies. */
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -67,6 +70,8 @@ export interface ManualDispatchPrCapableVCS {
   getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
 }
 
+/** Ask of a resolved adapter only: a deferred one answers every member with a
+ *  function, so this would always be true of it. */
 export function hasManualDispatchPrCapability(
   adapter: VCSAdapter,
 ): adapter is VCSAdapter & ManualDispatchPrCapableVCS {
@@ -74,6 +79,15 @@ export function hasManualDispatchPrCapability(
     typeof (adapter as Partial<ManualDispatchPrCapableVCS>)
       .getManualDispatchPullRequest === "function"
   );
+}
+
+/** The provider has no way to read a pull request for a manual run. Its own
+ *  class, so the person is told that rather than that the provider is down. */
+export class ManualDispatchUnsupportedError extends Error {
+  constructor(readonly provider: string) {
+    super(`Version control provider ${provider} cannot read pull requests for a manual run.`);
+    this.name = "ManualDispatchUnsupportedError";
+  }
 }
 
 // --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---
@@ -279,26 +293,6 @@ export interface PRReviewInlineComment {
   endLine: number;
   startOldLine?: number | null;
   endOldLine?: number | null;
-}
-
-/**
- * Renders one finding as a markdown list item, for the list a provider falls
- * back to when it refuses an inline position.
- *
- * Continuation lines are indented into the item deliberately. A merged review
- * comment carries its agreement note after a blank line, and an unindented
- * blank line closes a markdown list: the note would detach into its own
- * paragraph and every finding after it would start a fresh list. Indenting
- * keeps the note inside its own bullet, which is what a reader expects.
- */
-export function reviewFallbackBullet(comment: PRReviewInlineComment): string {
-  const range =
-    comment.startLine === comment.endLine
-      ? String(comment.startLine)
-      : `${comment.startLine}-${comment.endLine}`;
-  const [first = "", ...rest] = comment.body.split("\n");
-  const continuation = rest.map((line) => (line.trim() === "" ? "" : `  ${line}`));
-  return [`- \`${comment.path}:${range}\` — ${first}`, ...continuation].join("\n");
 }
 
 /**

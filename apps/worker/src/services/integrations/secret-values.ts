@@ -24,7 +24,7 @@ import type { IntegrationManifest } from "@integrations/sdk";
  */
 export async function integrationSecretValues(): Promise<string[]> {
   const { integrationManifests } = await import("@integrations/registry");
-  const { readIntegrationStates, secretsKeyMaterial } = await import("./authoring.js");
+  const { readIntegrationStatesFrom, secretsKeyMaterial } = await import("./authoring.js");
   const { readConnectionValues, secretValuesOf } = await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
   const { readConnectedIntegrationConnections } = await import(
@@ -41,11 +41,12 @@ export async function integrationSecretValues(): Promise<string[]> {
   // A redaction set is a safety net over values we hold. Failing the caller
   // because the net could not be read would turn an unreachable database into
   // a refusal on a path that is about to fail on its own reads anyway.
-  let states: Awaited<ReturnType<typeof readIntegrationStates>>;
+  // One read: the states and the values they gate come from the same rows.
+  let states: ReturnType<typeof readIntegrationStatesFrom>;
   let stored: Awaited<ReturnType<typeof readConnectedIntegrationConnections>>;
   try {
-    states = await readIntegrationStates();
     stored = await readConnectedIntegrationConnections();
+    states = readIntegrationStatesFrom(stored);
   } catch (error) {
     const { logger } = await import("../../infra/logger.js");
     logger.warn(

@@ -11,7 +11,7 @@ async function importEnvModule() {
     import("./src/infra/vcs-config.js"),
     import("./src/services/vcs/vcs-bot-login.js"),
   ]);
-  return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };
+  return { ...config, readVcsBotLogin: botIdentity.readVcsBotLogin };
 }
 
 describe("env", () => {
@@ -263,10 +263,12 @@ describe("env", () => {
     delete process.env.GITHUB_BOT_LOGIN;
     delete process.env.GITLAB_BOT_LOGIN;
 
-    const { getVcsBotLogin } = await importEnvModule();
+    const { readVcsBotLogin } = await importEnvModule();
 
-    await expect(getVcsBotLogin("github")).resolves.toBeUndefined();
-    await expect(getVcsBotLogin("gitlab")).resolves.toBeUndefined();
+    for (const provider of ["github", "gitlab"]) {
+      const reading = await readVcsBotLogin(provider);
+      expect(reading.readable ? reading.login : undefined).toBeUndefined();
+    }
   });
 
   it("rejects a whitespace-only VCS_BOT_LOGIN", async () => {

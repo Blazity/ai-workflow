@@ -29,13 +29,27 @@ const repositoryPolicy = z
     expansion: z.enum(["attach", "ask_once", "never"]),
   })
   .strict();
+/**
+ * The review states this trigger waits for when a workflow names none: the
+ * explicit "request changes" only. A plain comment is opt-in, because it needs
+ * the automation account to be known (or the workflow answers its own review)
+ * and because GitLab reports nothing else. The schema, dispatch, the block
+ * registry the palette seeds a new node from, and the generated block catalog
+ * the dashboard's editor falls back to all read it here. The starter template
+ * does not: it names both states on purpose, because a template waiting for
+ * "request changes" alone never fires on GitLab.
+ */
+export const DEFAULT_REVIEW_TRIGGER_STATES = [
+  "changes_requested",
+] satisfies ("changes_requested" | "commented")[];
+
 const paramsSchema = z
   .object({
     providers: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/)).default([]),
     on: z
       .array(z.enum(["changes_requested", "commented"]))
       .min(1)
-      .default(["commented"]),
+      .default([...DEFAULT_REVIEW_TRIGGER_STATES]),
     scope: z.enum(["workflow_owned", "any"]).default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     rateLimitMax: z.number().int().min(1).optional(),
@@ -63,7 +77,7 @@ export const manifest = {
   },
   defaults: {
     providers: [],
-    on: ["commented"],
+    on: DEFAULT_REVIEW_TRIGGER_STATES,
     scope: "workflow_owned",
     maxRunsPerPr: 10,
   },

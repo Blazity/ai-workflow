@@ -2,20 +2,22 @@ import type { ComponentType } from "react";
 import type { IntegrationManifest } from "@integrations/sdk";
 
 /**
- * What a contributed page is handed: the id it was asked for, and nothing else.
+ * What a contributed page is handed: the id it was asked for, and what its own
+ * reader returned. Nothing else.
  *
  * This is a contract, not a sandbox, and the difference matters. A page is a
  * Server Component compiled into the cockpit and run in its process, so it can
- * reach further than its props: `process.env`, global `fetch`, its own
- * dependencies. An integration is trusted code, reviewed like ours, and the
+ * reach further than its props: the process environment, global `fetch`, its
+ * own dependencies. An integration is trusted code, reviewed like ours, and the
  * rules around this seam exist so a page does not couple itself to our runtime
  * by accident, not because they would stop one that meant to.
  *
  * So the props stay narrow on purpose. A page shows what its own package
- * knows; there is no session, no database handle and no worker client to be
- * had here, and the boundaries gate refuses the imports that would fetch them
- * (`next/*`, `node:*`, `server-only`, the dashboard's `@/` alias) plus
- * `process.env`. Widening this is a contract decision, not a convenience, and
+ * knows; there is no session, no database handle and no worker client in them.
+ * The boundaries gate refuses the imports that would fetch those (`next/*`,
+ * `node:*` and `server-only` in `dashboard.tsx`, the dashboard's `@/` alias
+ * anywhere), and the registry generator refuses a read of the process
+ * environment. Widening this is a contract decision, not a convenience, and
  * ADR-010 records where that decision belongs.
  */
 export interface IntegrationPageProps {

@@ -33,13 +33,11 @@ const environment = vi.hoisted(() => ({
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: environment }));
-const getLatestSystemHealthObservations = vi.hoisted(() =>
-  vi.fn().mockResolvedValue([]),
-);
+const latestWebhookDeliveries = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("./observations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./observations.js")>()),
-  getLatestSystemHealthObservations,
+  latestWebhookDeliveries,
 }));
 vi.mock("../../mcp/contract-artifact.js", () => ({
   MCP_CONTRACT_ARTIFACT: {
@@ -62,7 +60,7 @@ vi.stubGlobal("fetch", fetchMock);
 describe("deployment system-health probes", () => {
   beforeEach(() => {
     fetchMock.mockReset();
-    getLatestSystemHealthObservations.mockReset().mockResolvedValue([]);
+    latestWebhookDeliveries.mockReset().mockResolvedValue([]);
   });
 
   it("maps credentials for every independently checked capability", () => {

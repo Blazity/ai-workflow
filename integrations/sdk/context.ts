@@ -8,9 +8,15 @@ import type {
 import type { IntegrationRunState } from "./run-state";
 
 /**
- * What an integration receives from core. It is the only thing it receives:
- * no database, no process environment, no worker module. Core builds it for
- * every call, so a value here is always current (a rotated secret included).
+ * What core hands an integration, and the only thing it hands it: no database
+ * handle, no reading of the process environment on its behalf, no worker
+ * module. That is a statement about what is handed, not about what integration
+ * code can reach: it runs in the worker's process, where global `fetch`,
+ * `process.env` and its own dependencies need no import from us. It is trusted
+ * code we review, and everything it needs from an operator comes through
+ * `connection`, which is what makes the value follow the source an admin
+ * chose, the run's pin and the redaction. Core builds the context for every
+ * call, so a value here is always current (a rotated secret included).
  *
  * Two shapes:
  * - `IntegrationContext`: what a capability adapter, a connection test and a
@@ -42,20 +48,26 @@ export interface IntegrationContext<M extends IntegrationManifest> {
    */
   readonly webhookUrl?: string;
   /**
-   * Aborts when core gives up on this work: the run was cancelled or ran out
-   * of budget, the invocation is near its time ceiling, or a connection test
-   * or a webhook request took too long. Every request through `http` and every
-   * `llm` call is already bound to it; pass it to anything else that waits.
+   * The context's LIFETIME, set by whatever core is doing when it builds it.
+   * It is not a deadline for any one call, and it is not tied to a run being
+   * cancelled (nothing aborts it on cancellation today).
    *
-   * An adapter gets the signal of whatever core is doing when it builds the
-   * adapter, so a capability called from a webhook route cannot wait past the
-   * route's own deadline.
+   * Work with a deadline of its own gets that deadline as the lifetime: a
+   * block has 240 seconds, a connection test and a page reader 20, a webhook
+   * request 120, `beginRun` 60, a health probe about 4. An adapter core holds
+   * for a stretch of work (a poll pass, a run's attachment downloads, a step's
+   * memory reads and writes) gets a lifetime that does not abort on its own,
+   * except that memory aborts it once a provider has used up the time core
+   * gives memory in that step. Each request through `http` is bounded by its
+   * own attempt timeout (`IntegrationRequestInit.timeoutMs`) and by this
+   * lifetime, and a `signal` you pass in a request's options is honoured
+   * alongside both. `llm` is not bound to it. Pass it to anything else that
+   * waits.
    *
    * Integration code never has to recognise core's run-control errors (a
-   * cancelled run, an exhausted budget). Core records one when it raises it
-   * through this context and raises it again after the executor settles, so
-   * an executor that catches every error cannot turn a cancellation into a
-   * success or an ordinary failure.
+   * cancelled run, an exhausted budget). Nothing in this context raises one
+   * today, and one thrown out of an executor is let through by the generic
+   * step rather than reported as the block's own failure.
    */
   readonly signal: AbortSignal;
 }
@@ -74,7 +86,10 @@ export interface IntegrationRunIdentity {
   readonly runId: string;
   /** The node id in the workflow definition. */
   readonly nodeId: string;
-  /** 1 on the first attempt; higher when core retries the block. */
+  /**
+   * 1 the first time the graph runs this node; higher when it runs it again,
+   * inside a Loop. Core never retries an executor that started.
+   */
   readonly attempt: number;
   /**
    * What the run is about, the same value `beginRun` was given: the ticket
@@ -137,11 +152,24 @@ type LlmAccess<B extends IntegrationBlockManifest> = B extends {
  *
  * Core applies a per-attempt timeout and retries a read (GET, HEAD, OPTIONS)
  * after a network error, a 429 or a 5xx, honouring `Retry-After` up to
- * `maxRetryAfterMs`. Nothing else is retried unless `retries` says so: a PUT
- * or a DELETE is a write at these providers (a merge, a rebase, a file
- * commit), and repeating one after an ambiguous 5xx reports a conflict for
- * work that landed. Every connection secret is redacted from whatever core
- * records about a request. A non-2xx response is returned, not thrown.
+ * `maxRetryAfterMs`. A write (anything else) is sent once by default: a PUT
+ * or a DELETE repeated after an ambiguous 5xx reports a conflict for a merge,
+ * a rebase or a file commit that landed, and even a 429 is no proof a write
+ * did nothing (Atlassian: "Only retry if the API is idempotent and the
+ * response includes a Retry-After header"). `resendAfterRateLimit` and
+ * `retries` are the two ways a caller says otherwise. A `signal` in `init`
+ * ends the request as a whole, retries included, alongside `ctx.signal`. A
+ * non-2xx response is returned, not thrown.
+ *
+ * A value no request can carry is refused before anything is sent: a header
+ * built from a connection value with a line break in it, or a URL built from
+ * one that does not parse, throws `ConnectionValueError` naming the field.
+ *
+ * What a failed request throws has every connection secret taken out of its
+ * message, its stack, its fields and its causes, and is otherwise the error it
+ * was: the same class and `name` (a deadline is still a `TimeoutError` or an
+ * `AbortError`, "never reached the server" is still a `TypeError` with a
+ * cause), and the same `code` and `status`.
  */
 export interface IntegrationHttp {
   fetch(input: string | URL | Request, init?: IntegrationRequestInit): Promise<Response>;
@@ -152,16 +180,29 @@ export interface IntegrationRequestInit extends RequestInit {
   timeoutMs?: number;
   /**
    * Extra attempts. Defaults to `INTEGRATION_HTTP_DEFAULTS.retries` for a read
-   * and 0 for everything else. Set it on a write only where the provider makes
-   * the request idempotent (an idempotency key, a conditional header).
+   * and 0 for a write. Set it on a write only where the provider makes the
+   * request idempotent (an idempotency key, a conditional header); set it to
+   * 0 for a request that must be sent exactly once whatever comes back.
    */
   retries?: number;
+  /**
+   * Send this WRITE again after a 429 that says how long to wait
+   * (`Retry-After`), once that wait has passed; nothing else about it is
+   * retried, and a 429 without `Retry-After` is final. Set it only where the
+   * provider documents that a rate-limited call was not processed and may be
+   * repeated as it was: Slack does ("wait for the indicated number of seconds
+   * before retrying the same request", docs.slack.dev/apis/web-api/rate-limits).
+   * Atlassian says the opposite for its writes. A read needs no flag. A body
+   * that is a stream, or a `Request` object, is sent once regardless, because
+   * it cannot be sent twice.
+   */
+  resendAfterRateLimit?: boolean;
 }
 
 export const INTEGRATION_HTTP_DEFAULTS = {
   timeoutMs: 30_000,
   retries: 2,
-  /** The methods core retries on its own. */
+  /** The methods core retries on its own; see `IntegrationRequestInit` for writes. */
   retriedMethods: ["GET", "HEAD", "OPTIONS"],
   /** A longer `Retry-After` is treated as a refusal rather than a wait. */
   maxRetryAfterMs: 30_000,
@@ -187,9 +228,9 @@ export type IntegrationLogFields = Readonly<Record<string, unknown>>;
 
 /**
  * Structured generation with a model core chooses (the run's default model)
- * and pays for (usage is recorded against the block). Each call is bounded
- * under the function's invocation ceiling and by `signal`, so a block that
- * makes several calls shares one budget and a late call gets less time.
+ * and pays for. Each call is bounded under the function's invocation ceiling
+ * (`apps/worker/src/infra/llm.ts`); it is not bound to `signal`, and its usage
+ * is not yet recorded against the block.
  */
 export interface IntegrationLlm {
   /** Resolves with output the schema accepted; rejects when the model's output does not parse. */

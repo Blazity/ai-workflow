@@ -33,6 +33,11 @@ export interface IntegrationManifest {
   readonly capabilities: readonly ProvidedCapabilityId[];
   /** How this provider's repository paths and links are shaped, for a `vcs` integration. */
   readonly repositories?: IntegrationRepositoryShape;
+  /**
+   * What this integration's webhook reports, as data, so core can check a
+   * workflow against it without running the integration.
+   */
+  readonly webhook?: IntegrationWebhookManifest;
   readonly blocks: readonly IntegrationBlockManifest[];
   /** Screens of its own, shown as tabs next to the core Connection tab. */
   readonly pages: readonly IntegrationPage[];
@@ -103,6 +108,20 @@ export interface IntegrationChangeRequestShape {
   readonly linkSegment: string;
 }
 
+/** How a version-control provider reports a review. */
+export type VcsReviewState = "changes_requested" | "commented";
+
+export interface IntegrationWebhookManifest {
+  /**
+   * For a `vcs` integration: the states its webhook reports a review in. A
+   * review trigger that waits only for states none of its providers report
+   * would never start a run, so core refuses it and quotes this list. GitLab
+   * delivers a merge request note and nothing else, so it reports only
+   * `commented`. Omitted means the webhook reports no review at all.
+   */
+  readonly reviewStates?: readonly VcsReviewState[];
+}
+
 /**
  * One value the integration needs to connect: a site URL, an account, a token.
  *
@@ -154,9 +173,58 @@ export interface ConnectionField {
   /**
    * How the value is checked and entered. `integer` reaches `ctx.connection`
    * as a number and everything else as a string. `multiline` is text such as a
-   * PEM key, entered in a text area.
+   * PEM key, entered in a text area; the others are entered on one line. What
+   * each accepts is `connectionValueProblem`'s to say.
    */
   readonly format?: "text" | "multiline" | "url" | "integer";
+}
+
+/** Why a value cannot be what its field's `format` says it is. */
+export type ConnectionValueProblem = "line_break" | "not_a_url" | "not_an_integer";
+
+/**
+ * What is wrong with a value for its field, or null when nothing is: the one
+ * definition of what a field's `format` (and being secret) allows. Core applies
+ * it to every value it resolves or saves, and conformance to a manifest's
+ * defaults.
+ *
+ * It refuses ONLY WHAT COULD NEVER HAVE WORKED. A value that works today is
+ * running on some deployment, and a rule that refuses it turns that
+ * integration Failing on the deploy that brings the rule, with nobody having
+ * changed anything. So:
+ *
+ * - `url`: an address a request can go to, http or https. The URL parser drops
+ *   tabs and line breaks inside an address, as `fetch` does, so those pass.
+ * - `integer`: whatever `Number()` reads as a whole number that is not
+ *   negative ("123", "+123", "123.0", "1e3", "0x7b"), which is exactly what
+ *   core hands the integration, and what `z.coerce.number()` accepted before
+ *   this rule existed. A GitHub client id where the App id belongs is not.
+ * - a secret that is one line (anything but `multiline`) holds no line break
+ *   inside it: it goes into a header, which cannot carry one, or it is a
+ *   signing key the provider shows on one line.
+ * - anything else, nothing. A setting that is never sent (an allowlist read as
+ *   comma separated, a project key) may hold a line break and still work, and
+ *   the one that does end up in a header is refused by `ctx.http` when sent.
+ */
+export function connectionValueProblem(
+  value: string,
+  field: Pick<ConnectionField, "format" | "secret">,
+): ConnectionValueProblem | null {
+  if (field.format === "url") return isWebAddress(value) ? null : "not_a_url";
+  if (field.format === "integer") return isWholeNumber(value) ? null : "not_an_integer";
+  if (field.secret && field.format !== "multiline" && /[\r\n]/u.test(value)) return "line_break";
+  return null;
+}
+
+function isWebAddress(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const { protocol } = new URL(value);
+  return protocol === "https:" || protocol === "http:";
+}
+
+function isWholeNumber(value: string): boolean {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0;
 }
 
 /** A probe the health page runs against the active connection. */
@@ -165,15 +233,20 @@ export interface IntegrationHealthCheck {
   readonly id: string;
   readonly label: string;
   readonly description: string;
-  /** A failing critical check turns the whole integration Failing. */
+  /**
+   * A failing critical check makes the integration's section on the health
+   * page Down; a failing check that is not critical makes it Degraded. Neither
+   * changes whether the integration is usable: that is the connection's status
+   * alone, so a probe never stops a run.
+   */
   readonly critical: boolean;
 }
 
 /**
- * A screen of the integration's own: one horizontal tab in its sidebar
- * section, at `/integrations/<integration id>/<page id>`. The React side of a
- * page is designed in S7; a manifest declares the tab now so the card and the
- * sidebar can say what connecting unlocks.
+ * A screen of the integration's own: one horizontal tab in its area, at
+ * `/integrations/<integration id>/<page id>`. The component is the one
+ * `dashboard.tsx` declares under the same id (`@integrations/host-ui`), and
+ * what it shows comes from the runtime's `api[<page id>]`.
  */
 export interface IntegrationPage {
   /** Lowercase words joined by hyphens. `connection` is the core tab and is refused. */

@@ -14,7 +14,6 @@ export {
 export {
   dispatchTriggerEvent,
   drainOldestPendingTrigger,
-  isConfiguredTriggerRepository,
   selectEligibleEvent,
   triggerNodeParams,
 } from "./dispatch-trigger.js";
@@ -43,9 +42,6 @@ export {
   listConnectedPendingTriggers,
   listPendingTriggers,
 } from "./trigger-delivery-store.js";
-export {
-  isGateCheckName,
-} from "./trigger-events.js";
 export type {
   TriggerEvent,
 } from "./trigger-events.js";

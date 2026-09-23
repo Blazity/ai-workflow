@@ -68,6 +68,9 @@ export const manifest = defineIntegration({
     nestedPaths: true,
     changeRequest: { noun: "MR", referencePrefix: "!", linkSegment: "/-/merge_requests/" },
   },
+  // A merge request note is the only review GitLab delivers: an approval or a
+  // "request changes" arrives as no event a trigger can wait for.
+  webhook: { reviewStates: ["commented"] },
   blocks: [],
   pages: [],
   health: [

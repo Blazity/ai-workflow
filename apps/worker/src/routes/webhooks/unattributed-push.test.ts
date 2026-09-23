@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   suppressPush: true,
-  gate: vi.fn(),
+  gate: vi.fn(async () => ({ status: "dispatched", runId: "gate-run" })),
   dispatch: vi.fn(async () => ({ result: "started", runId: "run-1" })),
   pusher: undefined as string | undefined,
 }));
@@ -80,6 +80,9 @@ vi.mock("../../services/integrations/runtime.js", () => ({
     usable: [
       {
         manifest: MANIFEST,
+        // The resolved runtime is the registry's, as in production, where it
+        // is the same runtime behind the redaction boundary.
+        runtime: (await import("@integrations/registry/worker")).integrationRuntime(MANIFEST.id),
         ctx: { connection: {}, signal: new AbortController().signal },
       },
     ],
@@ -98,6 +101,7 @@ vi.mock("../../services/dispatch/index.js", () => ({
   dispatchTriggerEvent: state.dispatch,
   dispatchPostPrGateWebhook: state.gate,
   isRepositoryDispatchable: () => true,
+  recordIngestionFailure: () => "AIW-DIAG-ingest-test",
 }));
 vi.mock("../../services/publication/index.js", () => ({
   connectedWorkflowPushNormalizationOptions: async () => ({
@@ -110,7 +114,6 @@ vi.mock("../../services/publication/index.js", () => ({
   },
 }));
 vi.mock("../../services/vcs/index.js", () => ({
-  getVcsBotLogin: async () => "ai-workflow-bot",
   readVcsBotLogin: async () => ({ readable: true, login: "ai-workflow-bot" }),
 }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
@@ -118,7 +121,7 @@ vi.mock("../../services/system/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../../services/system/observations.js", () => ({
-  recordSystemHealthObservation: async () => {},
+  recordWebhookDelivery: async () => {},
 }));
 
 const deferred: Promise<unknown>[] = [];

@@ -429,3 +429,54 @@ test("every issue says in words what is wrong", () => {
   assert.ok(issue);
   assert.match(issue.message, /acme_lookup/);
 });
+
+/**
+ * The fixture is the example an author copies, and its handles make the trip
+ * every handle makes: minted in a provider answer, stored as JSON in an
+ * envelope, compared later with one parsed from a fresh answer.
+ */
+function fixtureRepository(answer: () => Response): Loose {
+  const ctx = {
+    connection: { baseUrl: "https://fixture.example", apiToken: "token", appId: 1 },
+    http: { fetch: async () => answer() },
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+    signal: new AbortController().signal,
+  };
+  return (fixtureRuntime as Loose).capabilities.vcs(ctx, { repoPath: "acme/app", baseBranch: "main" });
+}
+
+test("the fixture's handles compare equal after a JSON round trip", async () => {
+  const head = {
+    headSha: "abc",
+    baseRef: "main",
+    state: "open",
+    checks: { state: "red", failed: [{ name: "build", conclusion: "failure", handle: { run: 7, job: 3 } }] },
+  };
+  const repository = fixtureRepository(() => Response.json(head));
+  const { sameHandle } = (fixtureRuntime as Loose).vcsHandles;
+
+  const handle = (await repository.getPRHead(1)).checks.failed[0].handle;
+  const stored = JSON.parse(JSON.stringify(handle));
+
+  assert.equal(sameHandle(handle, structuredClone(handle)), true);
+  assert.equal(sameHandle(stored, (await repository.getPRHead(1)).checks.failed[0].handle), true);
+  assert.equal(sameHandle(handle, { run: 7, job: 4 }), false);
+  assert.equal(sameHandle(handle, undefined), false);
+});
+
+test("the fixture closes only a pull request it cannot read, never a refused credential", async () => {
+  const refusedWith = async (status: number, headers: Record<string, string> = {}) =>
+    fixtureRepository(() => new Response("{}", { status, headers }))
+      .getPRHead(1)
+      .catch((error: Error) => error);
+
+  assert.equal((await refusedWith(404)).name, "PullRequestUnreadableError");
+  assert.equal((await refusedWith(403)).name, "PullRequestUnreadableError");
+  // A token without the scope refuses every pull request alike: the
+  // connection is at fault, and the delivery waits for it to be repaired.
+  const scope = { "www-authenticate": 'Bearer realm="fixture", error="insufficient_scope"' };
+  assert.notEqual((await refusedWith(403, scope)).name, "PullRequestUnreadableError");
+  assert.notEqual((await refusedWith(403, { "retry-after": "30" })).name, "PullRequestUnreadableError");
+  assert.notEqual((await refusedWith(401)).name, "PullRequestUnreadableError");
+  assert.notEqual((await refusedWith(502)).name, "PullRequestUnreadableError");
+});

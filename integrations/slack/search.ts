@@ -97,7 +97,7 @@ export async function searchSlackChannels(
   // maxResults bounds them.
   const matches: MessageSearchMatch[] = [];
   for (const hit of hits.slice(0, query.maxResults)) {
-    const link = await api.call<{ permalink?: unknown }>("chat.getPermalink", {
+    const link = await api.get<{ permalink?: unknown }>("chat.getPermalink", {
       channel: hit.channel,
       message_ts: hit.ts,
     });
@@ -129,7 +129,7 @@ async function fetchChannelHistory(
   const messages: SlackHistoryMessage[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
-    const data = await api.call<{
+    const data = await api.get<{
       messages?: unknown;
       has_more?: unknown;
       response_metadata?: { next_cursor?: unknown };
@@ -154,8 +154,6 @@ async function fetchChannelHistory(
 /** Slack's own word for the refusal, read as something a person can act on. */
 function classify(call: SlackCall<unknown>): MessageRetrievalFailure {
   if (call.ok) return "unavailable";
-  if (call.error === null) {
-    return call.cause === "Slack did not answer in time" ? "timeout" : "unavailable";
-  }
+  if (call.error === null) return call.kind === "timeout" ? "timeout" : "unavailable";
   return PERMISSION_ERRORS.has(call.error) ? "permission" : "unavailable";
 }

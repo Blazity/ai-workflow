@@ -1,16 +1,12 @@
 /**
- * The comment markers and the review finding digest this integration writes and
- * reads back on live pull requests.
+ * The comment markers this integration writes and reads back on live pull
+ * requests. The review finding digest they carry is computed by core
+ * (`reviewFindingDigest` in the worker) and only read back here.
  *
  * Copied into the package rather than imported from core (ADR-010): every
  * string here identifies a comment that is already posted on somebody's pull
- * request, so the values are frozen, not refactored. The digest formula is
- * shared with GitLab by value, never by module: each adapter reads only what it
- * wrote, and a digest that drifted between the two would strand every open
- * thread the other provider opened.
+ * request, so the values are frozen, not refactored.
  */
-import { createHash } from "node:crypto";
-import type { ReviewThread } from "@integrations/sdk";
 
 export interface PRReviewInlineComment {
   path: string;
@@ -74,18 +70,6 @@ export function isReviewLedgerNote(body: string): boolean {
 }
 
 /**
- * Is this thread the agent's to answer? A thread already answered by us waits on
- * a person, a third party's thread is never replied to, and our own general note
- * is bookkeeping. Our own inline thread is a real finding and stays work.
- */
-export function isReviewLedgerWorkItem(
-  thread: Pick<ReviewThread, "awaitingHuman" | "source" | "filePath">,
-): boolean {
-  if (thread.awaitingHuman || thread.source === "third_party") return false;
-  return !(thread.source === "bot" && thread.filePath === undefined);
-}
-
-/**
  * Did a person write in this thread after our reply parked it? `isOurs` is the
  * caller's own answer to authorship (GitHub asks the provider via
  * `viewerDidAuthor`), because a marker alone proves nothing: anyone can quote
@@ -126,20 +110,6 @@ function swapMarker(body: string, threadId: string, replacement: string): string
 
 export function readReviewFindingDigest(body: string): string | null {
   return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
-}
-
-/**
- * The identity of one finding's THREAD: path and prose only, no line numbers and
- * no head commit, so a finding that survives a push keeps its thread instead of
- * opening an identical one beside it.
- */
-export function reviewFindingDigest(
-  comment: Pick<PRReviewInlineComment, "path" | "body">,
-): string {
-  return createHash("sha256")
-    .update(`${comment.path} ${comment.body}`)
-    .digest("hex")
-    .slice(0, 32);
 }
 
 /**

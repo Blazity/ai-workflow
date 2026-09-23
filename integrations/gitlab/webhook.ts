@@ -6,10 +6,14 @@ import type {
   IntegrationWebhookReception,
   PrTriggerPayload,
   TriggerEvent,
-  VcsOpaqueHandle,
 } from "@integrations/sdk";
-import { isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import {
+  failedPipelineChecks,
+  GITLAB_CI_PRODUCER,
+  isTrustedByDefaultPipeline,
+} from "./pipeline-checks";
 
 type GitLabContext = IntegrationContext<typeof manifest>;
 
@@ -42,6 +46,32 @@ export async function receiveGitLabWebhook(
   if (!deliveryId) {
     return { kind: "answered", response: { status: 202, body: { status: "ignored", reason: "missing_delivery_id" } } };
   }
+  const legacyProjectId = ctx.connection.legacyProjectId?.trim();
+  if (legacyProjectId && !isProject(body?.project, legacyProjectId)) {
+    // A deployment that still names one project (`GITLAB_PROJECT_ID`) keeps
+    // meaning only that project, for the workflow triggers and the legacy gate
+    // alike, as it did before GitLab was an integration. A group webhook
+    // otherwise starts runs on every project in the group while the catalog
+    // is not yet switched on. ADR-010 keeps this until R1.
+    ctx.log.info(
+      { project: body?.project?.path_with_namespace ?? null, expected: legacyProjectId },
+      "gitlab_webhook_skipped_other_project",
+    );
+    // The setting by both its names, in the provider's delivery log: a project
+    // enabled in the repository catalog is still refused here, and that log is
+    // where an operator looks for why its merge requests start nothing.
+    return {
+      kind: "answered",
+      response: {
+        status: 202,
+        body: {
+          status: "ignored",
+          reason: "other_project",
+          detail: `The Legacy default project setting (GITLAB_PROJECT_ID) limits this deployment's GitLab webhooks to ${legacyProjectId}.`,
+        },
+      },
+    };
+  }
   const events = normalizeGitLabEvents(eventName, body, {
     deliveryId,
     botLogin: ctx.connection.botLogin,
@@ -65,6 +95,12 @@ export async function receiveGitLabWebhook(
     response: { status: 202, body: { status: events.length > 0 ? "accepted" : "ignored" } },
     ...(legacyGate ? { legacyGate } : {}),
   };
+}
+
+/** The configured value names a project by its numeric id or its full path. */
+function isProject(project: any, configured: string): boolean {
+  if (!project) return false;
+  return String(project.id ?? "") === configured || project.path_with_namespace === configured;
 }
 
 function sameSecret(received: string | undefined, expected: string): boolean {
@@ -118,9 +154,6 @@ export function normalizeGitLabEvents(
 export interface NormalizeGitLabOptions {
   deliveryId?: string;
   botLogin?: string;
-  botUsername?: string;
-  reviewStates?: readonly string[];
-  gateCheckNames?: readonly string[];
 }
 
 export function normalizeGitLabEvent(
@@ -174,13 +207,13 @@ export function normalizeGitLabEvent(
 
   if (eventName === "Note Hook") {
     const attrs = body?.object_attributes;
-    const reviewStates = options.reviewStates ?? ["commented"];
+    // Always "commented": a note is the only review GitLab delivers. Whether a
+    // workflow wants one is core's question, asked of the deployed trigger.
     if (
       body?.object_kind !== "note" || !attrs || !body?.merge_request || !body?.project ||
       attrs.action !== "create" || attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true || attrs.internal === true || attrs.confidential === true ||
-      !reviewStates.includes("commented") ||
-      sameLogin(producer, options.botLogin ?? options.botUsername) ||
+      sameLogin(producer, options.botLogin) ||
       // Ours only when the author wrote the marker, not when they quoted one of
       // ours back at us: the same rule the GitHub comment paths use, and the
       // reason a reviewer's "this still does not work" reply is not silently
@@ -207,44 +240,31 @@ export function normalizeGitLabEvent(
     const failed = Array.isArray(body?.builds)
       ? body.builds.filter((build: any) => build?.status === "failed")
       : [];
-    const configuredGateNames = new Set(options.gateCheckNames ?? []);
-    const external = failed.filter((build: any) => {
-      const name = String(build?.name ?? "");
-      return !configuredGateNames.has(name) &&
-        !name.startsWith("AI Workflow / ") &&
-        !name.startsWith("blazebot / ");
-    });
+    const external = failed.filter((build: any) => !isManagedGateCheckName(build?.name));
     if (failed.length > 0 && external.length === 0) return null;
-    const checks = external.length > 0
-      ? external.map((build: any) => ({
-          handle: gitLabHandle({ kind: "job", container: attrs.id ?? null, id: build.id ?? null }),
-          name: String(build.name ?? "job"),
-          conclusion: String(build.status),
-        }))
-      : [{
-          handle: gitLabHandle({ kind: "aggregate", id: attrs.id ?? null }),
-          name: "pipeline",
-          conclusion: "failed",
-        }];
+    const checks = failedPipelineChecks(attrs.id ?? null, external);
     return {
       delivery: {
-        ...delivery(options.deliveryId, "gitlab-ci"),
-        trustedByDefault: attrs.source === "merge_request_event",
+        ...delivery(options.deliveryId, GITLAB_CI_PRODUCER),
+        trustedByDefault: isTrustedByDefaultPipeline(attrs.source),
         ...(typeof attrs.source === "string" ? { source: attrs.source } : {}),
       },
       triggerType: "trigger_pr_checks_failed",
       pr: {
         ...mapMergeRequest(mr, project, body?.user),
-        headSha: attrs.sha ?? mr.last_commit?.id ?? mr.diff_head_sha ?? "",
+        // Unknown, and said so. A Pipeline Hook's `merge_request` carries no
+        // commit at all, and `object_attributes.sha` is the commit the
+        // pipeline ran on: on a merged-results or merge-train pipeline that is
+        // GitLab's temporary merge commit, never the merge request's head, so
+        // binding would call every such failure stale. The check handles below
+        // carry the pipeline id, and core adopts the provider's head once one
+        // of them is still failed on it.
+        headSha: "",
         failedChecks: checks,
       },
     };
   }
   return null;
-}
-
-function gitLabHandle(value: Readonly<Record<string, string | number | null>>): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
 }
 
 function event(

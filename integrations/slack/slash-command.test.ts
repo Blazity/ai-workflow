@@ -68,13 +68,21 @@ function recordedRequest(): IntegrationWebhookRequest {
   };
 }
 
-const config = { signingSecret: SIGNING_SECRET, allowedUserIds: undefined };
+const silent = { info: () => {} };
+const config = { signingSecret: SIGNING_SECRET, allowedUserIds: undefined, log: silent };
+
+/** A log that keeps what it was told, for the audit trail's assertions. */
+function recordingLog() {
+  const lines: { event: string; fields: Record<string, unknown> }[] = [];
+  return { lines, log: { info: (fields: Record<string, unknown>, event: string) => lines.push({ event, fields }) } };
+}
 
 test("Slack's recorded signature verifies without being regenerated in the test", async () => {
   const reception = await atTimestamp(RECORDED.timestamp, 0, () =>
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
       allowedUserIds: undefined,
+      log: silent,
     }),
   );
   assert.equal(reception.kind, "answered");
@@ -117,6 +125,7 @@ test("the externally signed request is accepted at exactly 300 seconds", async (
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
       allowedUserIds: undefined,
+      log: silent,
     }),
   );
   assert.equal(reception.kind, "answered");
@@ -127,6 +136,7 @@ test("the externally signed request is refused at 301 seconds", async () => {
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
       allowedUserIds: undefined,
+      log: silent,
     }),
   );
   assert.equal(reception.kind, "refused");
@@ -140,6 +150,7 @@ test("a deployment with no signing secret answers 503, not 401 and not 500", asy
   const reception = await receiveSlashCommand(request(), {
     signingSecret: undefined,
     allowedUserIds: undefined,
+    log: silent,
   });
   assert.equal(reception.kind, "refused");
   if (reception.kind !== "refused") return;
@@ -151,17 +162,19 @@ test("an empty allowlist means everyone, and separators alone are still empty", 
   // "nobody" would lock a whole workspace out of its own runs.
   for (const allowedUserIds of [undefined, "", " , , "]) {
     const reception = await atSigningTime(() =>
-      receiveSlashCommand(request(), { signingSecret: SIGNING_SECRET, allowedUserIds }),
+      receiveSlashCommand(request(), { signingSecret: SIGNING_SECRET, allowedUserIds, log: silent }),
     );
     assert.equal(reception.kind, "run_control", `allowlist ${JSON.stringify(allowedUserIds)}`);
   }
 });
 
 test("an allowlist that does not name the caller refuses, and says so only to them", async () => {
+  const audit = recordingLog();
   const reception = await atSigningTime(() =>
     receiveSlashCommand(request(), {
       signingSecret: SIGNING_SECRET,
       allowedUserIds: "U000000001, U000000002",
+      log: audit.log,
     }),
   );
   assert.equal(reception.kind, "answered");
@@ -170,6 +183,29 @@ test("an allowlist that does not name the caller refuses, and says so only to th
     response_type: "ephemeral",
     text: "Not authorized.",
   });
+  // The route records this delivery as accepted, like any other it answered,
+  // so the refusal and who was refused are only ever in this line.
+  assert.deepEqual(audit.lines, [
+    {
+      event: "slack_command_user_not_allowed",
+      fields: { userId: "U2147483697", command: "/ai-workflow" },
+    },
+  ]);
+});
+
+test("every command handed to core is logged with who typed it", async () => {
+  // `reset` carries no actor, so nothing else records who cleared a ticket's
+  // registry state.
+  const audit = recordingLog();
+  const body = BODY.replace("text=cancel+AWT-42", `text=${encodeURIComponent("redis reset AWT-42")}`);
+  const signed = await signed_request(body);
+  const reception = await atSigningTime(() =>
+    receiveSlashCommand(signed, { ...config, log: audit.log }),
+  );
+  assert.equal(reception.kind, "run_control");
+  assert.deepEqual(audit.lines, [
+    { event: "slack_command_dispatching", fields: { userId: "U2147483697", kind: "reset" } },
+  ]);
 });
 
 test("the allowlist ignores the spaces somebody typed around the ids", async () => {
@@ -177,6 +213,7 @@ test("the allowlist ignores the spaces somebody typed around the ids", async () 
     receiveSlashCommand(request(), {
       signingSecret: SIGNING_SECRET,
       allowedUserIds: " U000000001 , U2147483697 ",
+      log: silent,
     }),
   );
   assert.equal(reception.kind, "run_control");

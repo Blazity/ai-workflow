@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { WORKFLOW_SUBJECT_FIELDS } from "@shared/contracts";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
+import { connectionValueProblem } from "./manifest";
 
 /**
  * The check every integration package passes in CI (S1 runs it over each one).
@@ -387,7 +388,7 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
         `${path}.default`,
         `Secret field "${field.key}" has a default; a secret in source code is a leaked secret.`,
       );
-    } else if (!satisfiesFormat(field.default, field.format)) {
+    } else if (connectionValueProblem(field.default, field) !== null) {
       report(
         "connection_default_invalid",
         `${path}.default`,
@@ -660,11 +661,6 @@ function namesCredential(key: string, env: string): boolean {
   });
 }
 
-function satisfiesFormat(value: string, format: ParsedManifest["connection"]["fields"][number]["format"]) {
-  if (format === "integer") return /^\d+$/.test(value);
-  if (format === "url") return URL.canParse(value);
-  return true;
-}
 
 // zod schemas are walked through their definitions, which differ between the
 // two major versions: zod 3 keeps `_def` with `typeName` and a `shape()`

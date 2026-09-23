@@ -12,13 +12,17 @@
  * - `worker`: `defineIntegrationRuntime(manifest, {...})`. The code: a
  *   connection test, one adapter per declared capability, one executor per
  *   declared block, one probe per declared health check. Server only.
- * - `dashboard`: the React side of its pages, designed in S7.
+ * - `dashboard`: one React component per declared page, built from
+ *   `@integrations/host-ui`, whose `defineIntegrationDashboard` types it.
  *
- * What it receives is an `IntegrationContext` (see `context.ts`): its resolved
- * connection, an HTTP client, a logger, and while a block runs, the run's
- * identity, the capabilities the block declared and a core-owned `llm`.
- * Nothing else: no database, no process environment, no worker import, and no
- * step directive anywhere in integration code.
+ * What core hands it is an `IntegrationContext` (see `context.ts`): its
+ * resolved connection, an HTTP client, a logger, a deadline, and while a block
+ * runs, the run's identity, the capabilities the block declared and a
+ * core-owned `llm`. Nothing else is handed: no database, no process
+ * environment, no worker import. What integration code can reach is wider,
+ * because it runs in our processes and nothing is sandboxed; the rules around
+ * it are against coupling, and docs/architecture/integrations.md says what
+ * each one protects. No step directive belongs anywhere in integration code.
  *
  * What it implements for a capability is a port: `IssueTrackerAdapter`,
  * `VCSAdapter`, `MessagingAdapter`, `MemoryAdapter`, `AgentTracingAdapter`.
@@ -47,6 +51,8 @@ export type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 
 export {
   INTEGRATION_CAPABILITIES,
+  NESTED_ADAPTER_MEMBERS,
+  type NestedAdapterRole,
   type IntegrationCapabilityAccess,
   type IntegrationCapabilityId,
   type IntegrationCapabilityPorts,
@@ -57,8 +63,17 @@ export {
 } from "./capabilities";
 
 export {
+  isPullRequestRefusal,
+  isPullRequestUnreadableError,
+  providerAnswerOf,
+  PullRequestUnreadableError,
+} from "./pull-request-unreadable";
+
+export {
+  connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
+  type ConnectionValueProblem,
   type ConnectionField,
   type IntegrationBlockManifest,
   type IntegrationBlockOutput,
@@ -69,6 +84,8 @@ export {
   type IntegrationChangeRequestShape,
   type IntegrationPage,
   type IntegrationRepositoryShape,
+  type IntegrationWebhookManifest,
+  type VcsReviewState,
 } from "./manifest";
 
 export {
@@ -100,7 +117,13 @@ export {
   type IntegrationRuntimeDefinition,
 } from "./runtime";
 
-export { FatalError } from "./errors";
+export { ConnectionValueError, FatalError } from "./errors";
+
+export {
+  readProviderFailure,
+  refusedOrThrow,
+  type ProviderFailure,
+} from "./provider-failure";
 
 export {
   boundRepositoryProfileBundle,
@@ -165,6 +188,9 @@ export {
 
 export {
   AI_WORKFLOW_MARKER_PATTERN,
+  GATE_CHECK_NAME_PREFIX,
+  LEGACY_GATE_CHECK_NAME_PREFIX,
+  isManagedGateCheckName,
   isOurOwnVcsComment,
   isReviewLedgerWorkItem,
   selectReviewLedgerWorkItems,
@@ -191,6 +217,7 @@ export {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsHandleIdentity,
   type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,

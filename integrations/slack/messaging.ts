@@ -17,6 +17,14 @@
  * Nothing here throws. A failure is reported as `{ delivered: false, reason }`
  * so a notification cannot change a run's outcome and a block that needs to
  * know whether the message arrived is told.
+ *
+ * `delivered` is about the event's own message and nothing else, as the port
+ * defines it ("whether the message went out"). The status line is a courtesy
+ * on top: when it cannot be posted or edited, for whatever reason, that is
+ * logged as `slack_status_line_failed` and the delivery is still what the
+ * detail message did. One rule for both halves, so a rate limit on the edit
+ * and a refusal of the post cannot give two different answers for the same
+ * half-updated thread.
  */
 import type {
   MessageSearchOutcome,
@@ -51,7 +59,7 @@ export function slackMessaging(config: SlackMessagingConfig): MessagingAdapter {
   const { api, channelId, log } = config;
 
   async function post(text: string, threadTs?: string): Promise<SlackCall<{ ts?: unknown }>> {
-    return api.call("chat.postMessage", {
+    return api.post("chat.postMessage", {
       channel: channelId,
       text,
       unfurl_links: "false",
@@ -61,42 +69,49 @@ export function slackMessaging(config: SlackMessagingConfig): MessagingAdapter {
   }
 
   async function edit(ts: string, text: string): Promise<SlackCall<Record<string, unknown>>> {
-    return api.call("chat.update", { channel: channelId, ts, text });
+    return api.post("chat.update", { channel: channelId, ts, text });
   }
 
   /**
    * Make sure the ticket has a status message and that it shows this event.
    * Returns the handle to reply under, or null when Slack would not take one,
    * in which case the detail is posted top-level so the event still leaves a
-   * record.
+   * record. A status line that could not be updated is logged here, once.
    */
   async function anchor(
     ticket: MessagingTicket,
     conversation: MessagingConversation,
     status: string,
     kind: TicketEvent["kind"],
-  ): Promise<{ readonly handle: string | null; readonly failure: string | null }> {
+  ): Promise<string | null> {
+    const statusLineFailed = (reason: string) =>
+      log.warn({ ticketKey: ticket.key, kind, channelId, reason }, "slack_status_line_failed");
+
     const stored = conversation.handle;
     if (stored) {
       const updated = await edit(stored, status);
-      if (updated.ok) return { handle: stored, failure: null };
+      if (updated.ok) return stored;
       if (!isMissingParent(updated)) {
         // Rate limited, or a transient refusal. The message is presumably still
         // there, so keep replying under it rather than starting a second thread.
-        log.warn({ ticketKey: ticket.key, kind, slackError: reasonOf(updated) }, "slack_parent_edit_failed");
-        return { handle: stored, failure: null };
+        statusLineFailed(reasonOf(updated));
+        return stored;
       }
       await conversation.forget();
     }
 
     const posted = await post(status);
     if (!posted.ok) {
-      return { handle: null, failure: reasonOf(posted) };
+      statusLineFailed(reasonOf(posted));
+      return null;
     }
     const ts = typeof posted.body.ts === "string" ? posted.body.ts : null;
-    if (!ts) return { handle: null, failure: "Slack accepted the message without naming it" };
+    if (!ts) {
+      statusLineFailed("Slack accepted the message without naming it");
+      return null;
+    }
     await conversation.remember(ts);
-    return { handle: ts, failure: null };
+    return ts;
   }
 
   async function postDetail(
@@ -127,22 +142,18 @@ export function slackMessaging(config: SlackMessagingConfig): MessagingAdapter {
       // A note is somebody's own message mid-run. It goes under the thread and
       // deliberately does not touch the status line: overwriting "PR ready"
       // with a note is how a channel comes to show the wrong state.
-      const anchored =
+      const handle =
         event.kind === "note"
-          ? { handle: conversation.handle, failure: null }
+          ? conversation.handle
           : await anchor(ticket, conversation, formatTicketStatus(event, ticket), event.kind);
 
-      const delivered = await postDetail(ticket, conversation, anchored.handle, detail);
+      const delivered = await postDetail(ticket, conversation, handle, detail);
       if (delivered.delivered) {
         log.info(
           { ticketKey: ticket.key, eventKind: event.kind, channelId },
           "slack_notification_sent",
         );
-        return anchored.failure
-          ? // The reply landed and the status header did not. Saying so keeps a
-            // block from reporting a clean delivery for a half-updated thread.
-            { delivered: false, reason: `the message was posted but the status line could not be updated: ${anchored.failure}` }
-          : { delivered: true };
+        return delivered;
       }
       log.warn(
         { ticketKey: ticket.key, eventKind: event.kind, channelId, reason: delivered.reason },

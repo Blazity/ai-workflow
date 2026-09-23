@@ -38,7 +38,6 @@ function noTrackerConnected(reason = "No issue tracker is connected on this depl
 
 import {
   issueTrackerBaseUrl,
-  providerWebhookSecret,
   ticketBoardSettings,
 } from "./integration-settings.js";
 
@@ -114,15 +113,5 @@ describe("integration settings", () => {
     await expect(ticketBoardSettings(testSettingsSnapshot({}))).rejects.toThrow(
       "No issue tracker is connected on this deployment.",
     );
-  });
-
-  it("answers with the secret belonging to the provider asked about", () => {
-    state.env.RESEND_WEBHOOK_SECRET = "mail";
-
-    expect(providerWebhookSecret("email")).toBe("mail");
-    // Unset is undefined and never the empty string: a health observation scoped
-    // to "" would match every deployment that configured nothing.
-    state.env.RESEND_WEBHOOK_SECRET = undefined;
-    expect(providerWebhookSecret("email")).toBeUndefined();
   });
 });

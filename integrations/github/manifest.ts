@@ -101,6 +101,9 @@ export const manifest = defineIntegration({
     nestedPaths: false,
     changeRequest: { noun: "PR", referencePrefix: "#", linkSegment: "/pull/" },
   },
+  // A submitted review carries its state; a review comment or a pull request
+  // comment is a "commented" review of its own.
+  webhook: { reviewStates: ["changes_requested", "commented"] },
   blocks: [],
   pages: [],
   health: [
