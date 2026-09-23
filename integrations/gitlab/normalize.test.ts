@@ -3,7 +3,7 @@ import {
   normalizeGitLabEvent,
   normalizeGitLabEvents,
 } from "./webhook.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "@integrations/sdk";
 
 /** A reply exactly as the ledger settler posts it into a review thread. */
 function settlerReply(threadId: string): string {

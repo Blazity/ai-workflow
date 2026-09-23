@@ -17,6 +17,7 @@
     "test:zod4": "NODE_OPTIONS='--import=../../packages/zod4-alias.mjs' vitest run"
   },
   "dependencies": {
+    "@gitbeaker/requester-utils": "^43.8.0",
     "@gitbeaker/rest": "^43.8.0",
     "@integrations/sdk": "workspace:*"
   },

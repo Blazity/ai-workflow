@@ -65,8 +65,8 @@ vi.mock("../../post-pr-gate/gate-store.js", () => ({
   })),
 }));
 
-vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: vi.fn(),
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
+  resolveRepositoryVCS: vi.fn(),
 }));
 
 vi.mock("../../engine/index.js", () => ({

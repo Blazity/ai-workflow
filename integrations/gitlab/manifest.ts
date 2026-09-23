@@ -1,4 +1,8 @@
-import { defineIntegration } from "@integrations/sdk";
+import {
+  defineIntegration,
+  VCS_BOT_LOGIN_FIELD,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+} from "@integrations/sdk";
 
 export const manifest = defineIntegration({
   id: "gitlab",
@@ -26,7 +30,7 @@ export const manifest = defineIntegration({
         format: "url",
       },
       {
-        key: "botLogin",
+        key: VCS_BOT_LOGIN_FIELD,
         label: "Bot username",
         description: "The username that posts automated comments, used to prevent review loops.",
         env: "GITLAB_BOT_LOGIN",
@@ -50,10 +54,9 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "legacyBotLogin",
+        ...VCS_LEGACY_BOT_LOGIN_FIELD,
         label: "Legacy bot username",
         description: "Used only when this is the deployment's sole version-control provider.",
-        env: "VCS_BOT_LOGIN",
         secret: false,
         optional: true,
       },

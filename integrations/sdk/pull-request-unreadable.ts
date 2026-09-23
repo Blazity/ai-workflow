@@ -1,4 +1,4 @@
-import { readProviderFailure } from "./provider-failure";
+import { providerAnswer, readProviderFailure } from "./provider-failure";
 
 /**
  * The one failure of a head read that core answers for good: this connection
@@ -36,10 +36,10 @@ export function isPullRequestUnreadableError(error: unknown): error is Error {
  * rate limit and a 403 that names a missing scope or permission are not.
  *
  * `failure` is the error as the provider's client threw it, or a `Response`.
- * Its answer is read by `readProviderFailure` (see `providerAnswerOf`), which
- * decides which answers are refusals and which 403 is a rate limit. The one
- * thing this adds is which refusals can be about one pull request: a 404, and
- * a 403 without the signs of a credential refused as a whole:
+ * `readProviderFailure` decides which answers are refusals and which 403 is a
+ * rate limit, reading the answer wherever the client kept it. The one thing
+ * this adds is which refusals can be about one pull request: a 404, and a 403
+ * without the signs of a credential refused as a whole:
  *
  * - `WWW-Authenticate` naming `error="insufficient_scope"` (RFC 6750, 3.1);
  * - GitLab's `insufficient_scope`, the `error` of its 403 body, which its
@@ -54,28 +54,14 @@ export function isPullRequestUnreadableError(error: unknown): error is Error {
  * that refusal as the pull request read's error, and it is a credential fault.
  */
 export function isPullRequestRefusal(failure: unknown): boolean {
-  const answer = providerAnswerOf(failure);
-  const read = readProviderFailure(answer);
+  const read = readProviderFailure(failure);
   if (read.kind !== "refused" || read.malformed) return false;
   if (read.status === 404) return true;
-  return read.status === 403 && !refusesTheCredential(failure, answer);
+  return read.status === 403 && !refusesTheCredential(failure);
 }
 
-/**
- * The provider's answer inside a failure, for `readProviderFailure`: the
- * failure itself when it is a `Response` or carries a `status`, and otherwise
- * the `Response` its client kept on `cause.response` (Gitbeaker does, and puts
- * no status on the error it throws).
- */
-export function providerAnswerOf(failure: unknown): unknown {
-  if (failure instanceof Response) return failure;
-  if (typeof (failure as { status?: unknown } | null)?.status === "number") return failure;
-  const response = (failure as { cause?: { response?: unknown } } | null)?.cause?.response;
-  return response instanceof Response ? response : failure;
-}
-
-function refusesTheCredential(failure: unknown, answer: unknown): boolean {
-  const challenge = headerOf(answer, "www-authenticate") ?? "";
+function refusesTheCredential(failure: unknown): boolean {
+  const challenge = providerAnswer(failure)?.headers["www-authenticate"] ?? "";
   if (/\berror="?insufficient_scope\b/iu.test(challenge)) return true;
   return textsOf(failure).some(
     (text) => text.trim() === "insufficient_scope" || /^Resource not accessible by\b/u.test(text),
@@ -88,17 +74,4 @@ function textsOf(failure: unknown): string[] {
   const message = failure instanceof Error ? failure.message : undefined;
   const description = (failure as { cause?: { description?: unknown } } | null)?.cause?.description;
   return [message, description].filter((text): text is string => typeof text === "string");
-}
-
-function headerOf(answer: unknown, name: string): string | null {
-  const headers =
-    answer instanceof Response
-      ? answer.headers
-      : (answer as { response?: { headers?: unknown } } | null)?.response?.headers;
-  if (headers instanceof Headers) return headers.get(name);
-  if (headers && typeof headers === "object") {
-    const value = (headers as Record<string, unknown>)[name];
-    return value === undefined || value === null ? null : String(value);
-  }
-  return null;
 }

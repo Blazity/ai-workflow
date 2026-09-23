@@ -4,9 +4,12 @@
  * may be connected at once; core picks one per repository by its provider.
  *
  * Moved from `apps/worker/src/adapters/vcs/types.ts`, which re-exports every
- * name, so no core caller changed. That file keeps what is not the port: the
- * optional core extensions (pull request files, reviews, and manual dispatch
- * snapshots) and the review finding digest, which needs `node:crypto`.
+ * name, so no core caller changed. What a provider MAY add to the port (gate
+ * statuses, pull request files, published reviews, manual dispatch snapshots)
+ * is in `vcs-extensions.ts`, together with `VcsIntegrationAdapter`, the port
+ * plus those additions, which a factory returns. The comment markers every
+ * provider writes are in `review-markers.ts`. Only the review finding digest
+ * stays in core, because it needs `node:crypto`.
  */
 
 export interface PullRequest {
@@ -216,23 +219,6 @@ export interface VcsSandboxCredentials {
   commitEmail: string;
 }
 
-export type GateStatusRef = VcsOpaqueHandle;
-
-export type CheckRunConclusion =
-  | "success"
-  | "failure"
-  | "neutral"
-  | "cancelled"
-  | "skipped"
-  | "timed_out"
-  | "action_required";
-
-export interface GateStatusUpdate {
-  status: "in_progress" | "completed";
-  conclusion?: CheckRunConclusion;
-  summary?: string;
-}
-
 /**
  * Every member returns a Promise: core may reach an adapter before its
  * connection resolves and forwards each call once it has. Anything answerable
@@ -259,8 +245,6 @@ export interface VCSAdapter {
   postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
   getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
-  /** Re-read the provider's authoritative current PR/MR head commit. */
-  getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
   /** Return null only when the provider authoritatively reports no such branch. */
@@ -275,9 +259,9 @@ export interface VCSAdapter {
    * answer. A refused credential (401, an installation token that cannot be
    * minted, a token without the scope or the permission to read pull
    * requests) is the connection's fault and is thrown as it came, with the
-   * provider's HTTP status on it as `status` (core reads a copy of the error
-   * that keeps an own `status` and nothing the client hid elsewhere), so the
-   * delivery stays retryable. So is everything else.
+   * provider's answer where the client keeps it (`providerAnswer` reads it
+   * there, and core's copy of the error carries it), so the delivery stays
+   * retryable. So is everything else.
    */
   getPRHead(prId: number): Promise<PullRequestHead>;
   listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
@@ -325,35 +309,52 @@ export interface RepositorySkillSource {
   }): Promise<Map<string, Uint8Array>>;
 }
 
-/** Optional operational surfaces an integration may add to its VCS adapter. */
-export interface VcsIntegrationAdapter extends VCSAdapter {
-  listRepositories?(): Promise<VcsRepositoryMetadata[]>;
-  loadRepositoryProfile?(repoPath: string): Promise<import("./repository-profile").RepositoryProfileBundle>;
-  sandboxCredentials?(): Promise<VcsSandboxCredentials>;
-  parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
-  /** Present when this provider can serve a skill import; see the port above. */
-  skillSource?(): RepositorySkillSource;
-}
+/**
+ * How core learns a version control provider's automation account: the login
+ * its own comments, reviews and pushes arrive under, so none of them starts a
+ * run. Two connection fields, read by core and by nothing else.
+ *
+ * - `VCS_BOT_LOGIN_FIELD`: every `vcs` integration declares a non-secret,
+ *   optional field under this key (conformance refuses a manifest that does
+ *   not), under an environment variable of its own. Core reads it from the
+ *   resolved connection.
+ * - `VCS_LEGACY_BOT_LOGIN_FIELD`: the single login deployments set before
+ *   providers were integrations. A `vcs` integration may declare this exact
+ *   key and variable (the only field allowed on a variable core reserves),
+ *   and core applies it only when that provider is the deployment's sole
+ *   version control provider. Core removes it from the connection it hands
+ *   the adapter and the webhook, so no provider reads it.
+ *
+ * The values are stored under these keys on every deployment, so they never
+ * change.
+ */
+export const VCS_BOT_LOGIN_FIELD = "botLogin";
+export const VCS_LEGACY_BOT_LOGIN_FIELD = { key: "legacyBotLogin", env: "VCS_BOT_LOGIN" } as const;
+
+const BOT_LOGIN_SUFFIX = "[bot]";
 
 /**
- * EVERY marker family this workflow writes into a pull request or a merge
- * request, in one pattern, so a marker added tomorrow is ours without anybody
- * remembering to come back here.
- *
- * The bot marker is not enough on its own: review findings and review
- * submissions carry their own families and no bot marker at all, and a rule
- * that knew only the bot marker read our own findings as a person's words.
+ * A login as the automation account rule compares it: trimmed, lowercased, and
+ * without the `[bot]` suffix GitHub appends to an App's user, so an admin who
+ * typed the App's slug and a delivery that names `<slug>[bot]` agree.
+ * `undefined` for a login that is empty once that is done.
  */
-export const AI_WORKFLOW_MARKER_PATTERN = /<!--\s*ai-workflow[:-][^>]*-->/;
+export function normalizeVcsLogin(login: string | null | undefined): string | undefined {
+  const lowercased = login?.trim().toLowerCase();
+  if (!lowercased) return undefined;
+  const stripped = lowercased.endsWith(BOT_LOGIN_SUFFIX)
+    ? lowercased.slice(0, -BOT_LOGIN_SUFFIX.length)
+    : lowercased;
+  return stripped ? stripped : undefined;
+}
 
-/** What the author of a comment actually wrote: every line they quoted, gone.
- *  Markdown allows up to three spaces before the `>`, and a nested quote opens
- *  with one too. */
-function unquoted(body: string): string {
-  return body
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith(">"))
-    .join("\n");
+/** Same login, by {@link normalizeVcsLogin}. Never true when either is empty. */
+export function vcsLoginsMatch(
+  producer: string | null | undefined,
+  configuredBot: string | null | undefined,
+): boolean {
+  const normalizedProducer = normalizeVcsLogin(producer);
+  return normalizedProducer !== undefined && normalizedProducer === normalizeVcsLogin(configuredBot);
 }
 
 /**
@@ -377,28 +378,6 @@ export function isManagedGateCheckName(name: unknown): name is string {
       (prefix) => name.startsWith(prefix) && name.length > prefix.length,
     )
   );
-}
-
-/**
- * Did this workflow write this comment, judged from its body alone?
- *
- * WHOSE LINE, not just which marker. "Quote reply" copies the body it answers
- * verbatim, marker included, with every line blockquoted, so a reviewer quoting
- * our "automated fix pushed" note to say the button is still dead posts a
- * comment carrying our marker. Reading that as ours starts no run at all, and
- * their request goes nowhere with nothing for anybody to look at.
- *
- * Safe by construction in the direction that matters: everything this workflow
- * posts carries one of these markers on a line of its own, so one of ours
- * cannot be read as a person's and fire a trigger against our own comment. The
- * reverse mistake, reading a person as us, is the one that silences a reviewer.
- *
- * Core answers the same question about a fetched comment in
- * `adapters/vcs/vcs-bot-identity.ts`, which uses this pattern rather than a
- * second copy of it.
- */
-export function isOurOwnVcsComment(body: unknown): boolean {
-  return typeof body === "string" && AI_WORKFLOW_MARKER_PATTERN.test(unquoted(body));
 }
 
 /**

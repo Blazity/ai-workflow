@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReviewThread } from "@integrations/sdk";
 import { selectReviewLedgerWorkItems } from "@integrations/sdk";
 import { GitHubAdapter } from "./vcs.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "@integrations/sdk";
 
 /**
  * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
@@ -56,13 +56,17 @@ const mockOctokit = {
   apps: {
     listReposAccessibleToInstallation: vi.fn(),
   },
+  actions: {
+    listWorkflowRunsForRepo: vi.fn(),
+    listJobsForWorkflowRun: vi.fn(),
+    downloadJobLogsForWorkflowRun: vi.fn(),
+  },
 };
 
 // The whole module is replaced, so every export the adapter and the skill source
 // reach for has to be here: a name missing from the factory throws on import,
 // not at the call.
 vi.mock("./auth", () => ({
-  buildOctokit: vi.fn(() => mockOctokit),
   mintInstallationToken: vi.fn(async () => "ghs-installation-token"),
   getBotIdentity: vi.fn(async () => ({
     name: "ai-workflow[bot]",
@@ -74,7 +78,10 @@ function ghAdapter(
   overrides: Partial<ConstructorParameters<typeof GitHubAdapter>[0]> = {},
 ) {
   return new GitHubAdapter({
-    credential: { appId: 1, privateKey: "a2V5", installationId: 2 },
+    octokit: mockOctokit as never,
+    // Only a skill source's snapshot download reaches the context directly.
+    http: { fetch: () => Promise.reject(new Error("no direct request expected")) },
+    appId: 1,
     owner: "test-org",
     repo: "test-repo",
     baseBranch: "main",
@@ -640,18 +647,44 @@ describe("GitHubAdapter", () => {
     });
   });
 
-  describe("getPRHeadSha", () => {
-    it("returns the provider's current pull request head", async () => {
-      mockOctokit.pulls.get.mockResolvedValueOnce({
-        data: { head: { sha: "current-head" } },
+  describe("getCheckRunResults", () => {
+    function failedCheckWithLogs(logs: unknown) {
+      // Answers queued by earlier cases and never consumed would come first.
+      mockOctokit.pulls.get.mockReset();
+      mockOctokit.checks.listForRef.mockReset();
+      mockOctokit.pulls.get.mockResolvedValueOnce({ data: { head: { sha: "head-sha" } } });
+      mockOctokit.checks.listForRef.mockResolvedValueOnce({
+        data: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] },
       });
+      mockOctokit.actions.listWorkflowRunsForRepo.mockResolvedValueOnce({
+        data: { workflow_runs: [{ id: 3 }] },
+      });
+      mockOctokit.actions.listJobsForWorkflowRun.mockResolvedValueOnce({
+        data: { jobs: [{ id: 5, name: "test" }] },
+      });
+      mockOctokit.actions.downloadJobLogsForWorkflowRun.mockResolvedValueOnce({ data: logs });
+    }
 
-      await expect(ghAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
-      expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        pull_number: 42,
-      });
+    it("hands the agent a failed job's logs", async () => {
+      failedCheckWithLogs("Error: test failed on line 42");
+
+      await expect(ghAdapter().getCheckRunResults(42)).resolves.toEqual([
+        { name: "test", status: "completed", conclusion: "failure", logs: "Error: test failed on line 42" },
+      ]);
+    });
+
+    it("leaves out logs it could not read rather than handing over the word undefined", async () => {
+      // Octokit reads a log body it could not read as undefined; the agent was
+      // handed the literal text "undefined" as the job's logs.
+      failedCheckWithLogs(undefined);
+
+      await expect(ghAdapter().getCheckRunResults(42)).resolves.toEqual([
+        { name: "test", status: "completed", conclusion: "failure" },
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ check: "test" }),
+        "check_logs_unreadable",
+      );
     });
   });
 
