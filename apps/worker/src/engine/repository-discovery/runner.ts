@@ -28,6 +28,7 @@ import {
 // The definition pin reads the same to a person wherever it refused them.
 import { outsidePinNote } from "../work-scope/context.js";
 import {
+  INTEGRATION_ID,
   workScopeWritePlanSchema,
   type RepositoryKey,
   type WorkScopeActor,
@@ -51,7 +52,9 @@ export const REPOSITORY_DISCOVERY_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", pattern: "^[a-z][a-z0-9_-]{2,31}$" },
+              // The rule `discoveryResultSchema` validates the answer with, so
+              // the model is held to exactly what will be accepted.
+              provider: { type: "string", pattern: INTEGRATION_ID.source },
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },

@@ -16,6 +16,7 @@ import {
   workScopeUnnamedWhy,
 } from "../work-scope/refusal-sentence.js";
 import {
+  repositoryCatalogProviderSchema,
   repositoryKeySchema,
   type RepositoryKey,
   type WorkScopeActor,
@@ -33,7 +34,7 @@ const discoveryResultSchema = z
       .array(
         z
           .object({
-            provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+            provider: repositoryCatalogProviderSchema,
             repoPath: z.string().min(1),
             rationale: z.string().trim().min(1).max(500),
           })

@@ -22,7 +22,52 @@ import {
   REPOSITORY_SUGGESTION_OUTCOMES,
   repositorySuggestionAnswerSchema,
   repositorySuggestionProposalSchema,
+  repositoryCatalogProviderSchema,
+  repositoryKeySchema,
+  INTEGRATION_ID,
 } from "@shared/contracts";
+
+/**
+ * A repository's provider is an integration id, and nothing wider.
+ *
+ * The rule narrowed from `[a-z][a-z0-9_-]{2,31}` to the id an integration can
+ * actually carry. A narrowing that also applies to stored values may refuse
+ * only what never worked, so the accepted half is taken from main's parser,
+ * the only one that ever wrote a stored provider: `z.enum(["github",
+ * "gitlab"])` at `packages/contracts/repository-catalog.ts:37` and the same
+ * enum in `packages/workflow-graph/schema.ts:39` on origin/main 01371a41.
+ */
+describe("repositoryCatalogProviderSchema", () => {
+  it("accepts every provider main ever stored", () => {
+    for (const provider of ["github", "gitlab"]) {
+      expect(repositoryCatalogProviderSchema.parse(provider)).toBe(provider);
+      expect(repositoryKeySchema.parse(`${provider}:acme/api`)).toBe(`${provider}:acme/api`);
+    }
+  });
+
+  it("accepts any id an integration may carry, at both ends of its length", () => {
+    for (const provider of ["abc", `a${"b".repeat(31)}`, "acme2"]) {
+      expect(INTEGRATION_ID.test(provider)).toBe(true);
+      expect(repositoryCatalogProviderSchema.safeParse(provider).success).toBe(true);
+    }
+  });
+
+  it("refuses an id no integration can carry, separators included", () => {
+    for (const provider of ["git-hub", "git_hub", "ab", `a${"b".repeat(32)}`, "1github", "GitHub", ""]) {
+      expect(INTEGRATION_ID.test(provider)).toBe(false);
+      expect(repositoryCatalogProviderSchema.safeParse(provider).success).toBe(false);
+    }
+    expect(repositoryKeySchema.safeParse("git-hub:acme/api").success).toBe(false);
+  });
+
+  it("refuses a key with space inside its provider half, as main's key rule did", () => {
+    // Trimmed as a whole, " github :acme/api" is "github :acme/api": a key no
+    // catalog entry ever equals, so accepting it records a repository nothing
+    // can match.
+    expect(repositoryKeySchema.safeParse("github :acme/api").success).toBe(false);
+    expect(repositoryKeySchema.parse(" GitHub:Acme/Api ")).toBe("github:acme/api");
+  });
+});
 
 describe("repository relationship vocabulary", () => {
   it("freezes all ten kind sentences", () => {

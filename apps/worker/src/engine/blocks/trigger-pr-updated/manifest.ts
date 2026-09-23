@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type { BlockManifest } from "@shared/contracts";
 
-const vcsProviderSelection = z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/));
+// `INTEGRATION_ID` from @shared/contracts, copied because a manifest may import
+// it only as a type; `trigger-provider-rule-sync.test.ts` holds the copies equal.
+const vcsProviderSelection = z.array(z.string().trim().regex(/^[a-z][a-z0-9]{2,31}$/u));
 // The trigger's optional repository policy. Kept in step by hand with
 // `triggerRepositoryPolicySchema` in @shared/contracts, which a manifest may
 // import only as a type. Deliberately no default.
@@ -10,7 +12,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^[a-z][a-z0-9_-]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [

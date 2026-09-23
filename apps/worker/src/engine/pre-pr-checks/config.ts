@@ -1,5 +1,6 @@
 import {
   findExtendsCycle,
+  repositoryCatalogProviderSchema,
   repositoryScriptGroupNameSchema,
   sortedGroupNames,
 } from "@shared/contracts";
@@ -31,7 +32,7 @@ export const prePrCheckConfigSchema = z
     repositories: z.array(
       z
         .object({
-          provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+          provider: repositoryCatalogProviderSchema,
           repoPath: z.string().trim().min(1),
           // No .min(1): a repository without provisioning is the normal case,
           // and every config stored before this field omits the key entirely.
@@ -129,7 +130,7 @@ const repoScriptsGroupsSchema = z
     message: "groups must contain at least one entry",
   });
 
-const repoScriptsProviderSchema = z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/);
+const repoScriptsProviderSchema = repositoryCatalogProviderSchema;
 const repoScriptsRepoPathSchema = z.string().trim().min(1);
 const repoScriptsSetupSchema = z.array(repoScriptsCommandSchema).default([]);
 const repoScriptsTimeoutMinutesSchema = z.number().int().min(1);
