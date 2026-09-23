@@ -230,15 +230,6 @@
     "integration": "slack",
     "fields": [
       {
-        "key": "allowedUserIds",
-        "env": "SLACK_ALLOWED_USER_IDS",
-        "secret": false,
-        "identity": false,
-        "optional": true,
-        "default": null,
-        "format": "text"
-      },
-      {
         "key": "botToken",
         "env": "CHAT_SDK_SLACK_TOKEN",
         "secret": true,

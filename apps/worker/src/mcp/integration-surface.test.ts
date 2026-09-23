@@ -78,7 +78,15 @@ vi.mock("@integrations/registry", async () => {
   const manifest = Object.assign({}, DEMO_MANIFEST, { blocks: blocksWithSchemas });
   const manifests = [manifest];
   const blocks = manifest.blocks.map((block) => ({ integrationId: manifest.id, block }));
+  // The settings this registry's manifests declare, joined to core's the way
+  // the real registry joins them, so the settings snapshot a request loads
+  // resolves against this build of one integration.
+  const { integrationSettingDefinitionsOf, settingDefinitionsOf } = await import("@integrations/sdk");
+  const settingDefinitions = settingDefinitionsOf(manifests as never);
   return {
+    integrationSettingDefinitions: integrationSettingDefinitionsOf(manifests as never),
+    settingDefinitions,
+    settingDefinition: (key: string) => settingDefinitions.find((definition) => definition.key === key),
     integrationManifests: manifests,
     integrationManifest: (id: string) => (id === manifest.id ? manifest : undefined),
     hasIntegration: (id: string) => id === manifest.id,

@@ -1,6 +1,6 @@
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SettingsEntryView } from "@shared/contracts";
+import { SETTING_LIST_ENTRY_RULE, type SettingsEntryView } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import { member, organization, settings, settingsVersions, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
@@ -103,7 +103,15 @@ describe("GET /api/v1/settings", () => {
     const res = await get();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.settings).toHaveLength(27);
+    // Core's 27 and Slack's allowlist, which an integration declares.
+    expect(body.settings).toHaveLength(28);
+    expect(entry(body.settings, "SLACK_ALLOWED_USER_IDS")).toMatchObject({
+      value: [],
+      default: [],
+      source: "default",
+      group: "integrations",
+      appliesToRunsInFlight: "immediate",
+    });
     expect(entry(body.settings, "MAX_CONCURRENT_AGENTS")).toMatchObject({
       value: 3,
       default: 3,
@@ -166,6 +174,38 @@ describe("PATCH /api/v1/settings", () => {
     expect(body.versions.map((version: { key: string }) => version.key)).toEqual([
       "COLUMN_AI",
       "MAX_CONCURRENT_AGENTS",
+    ]);
+  });
+
+  it("stores an integration's setting like any other, with its history, and refuses a wrong type", async () => {
+    // Slack's allowlist: an operator adds a colleague from the Settings page.
+    const res = await patch({
+      settings: { SLACK_ALLOWED_USER_IDS: ["U01", "U02"] },
+      reason: "Ada joins the on-call rota",
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(entry(body.settings, "SLACK_ALLOWED_USER_IDS")).toMatchObject({
+      value: ["U01", "U02"],
+      source: "stored",
+    });
+    expect(entry(body.settings, "SLACK_ALLOWED_USER_IDS").lastVersion).toMatchObject({
+      newValue: ["U01", "U02"],
+      reason: "Ada joins the on-call rota",
+    });
+
+    const wrong = await patch({ settings: { SLACK_ALLOWED_USER_IDS: "U01,U02" }, reason: "typed" });
+    expect(wrong.status).toBe(400);
+    expect(wrong.statusText).toContain("SLACK_ALLOWED_USER_IDS (wrong_type)");
+
+    // Two ids typed into one entry would be one id nobody has, which locks
+    // everyone out; the refusal says what to send instead.
+    const joined = await patch({ settings: { SLACK_ALLOWED_USER_IDS: ["U01,U02"] }, reason: "typed" });
+    expect(joined.status).toBe(400);
+    expect(joined.statusText).toContain("SLACK_ALLOWED_USER_IDS (list_entry_invalid)");
+    expect(joined.statusText).toContain(SETTING_LIST_ENTRY_RULE);
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "SLACK_ALLOWED_USER_IDS", value: ["U01", "U02"] }),
     ]);
   });
 

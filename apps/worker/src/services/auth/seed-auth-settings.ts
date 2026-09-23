@@ -1,4 +1,4 @@
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import { readAllSettings } from "../../db/repositories/settings.js";
 import type { Db } from "../../db/types.js";
 
@@ -11,7 +11,7 @@ export async function loadSeedAuthOrganizationName(db: Db): Promise<string> {
   );
   const value = stored
     ? stored.value
-    : findSettingDefinition(ORGANIZATION_NAME_KEY)?.default;
+    : settingDefinition(ORGANIZATION_NAME_KEY)?.default;
   if (typeof value !== "string") {
     throw new TypeError(
       `[seed-auth-user] ${ORGANIZATION_NAME_KEY} must resolve to a string`,

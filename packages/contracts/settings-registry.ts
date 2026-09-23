@@ -10,6 +10,12 @@
  * Stored rows decide ordinary settings, with the registry default as the
  * fallback. The three keys marked `requiresRedeploy` are the exception: their
  * running consumers still read the named deployment variable directly.
+ *
+ * This list is core's. An integration declares the operator settings it reads
+ * in its own manifest (`settings`), and `@integrations/registry` adds them to
+ * this list as `settingDefinitions`: that joined list is what every settings
+ * surface serves, so an integration's setting is stored, validated, versioned
+ * and shown exactly like one of these.
  */
 
 /** The panels the dashboard groups these into. */
@@ -20,7 +26,9 @@ export type SettingsGroup =
   | "features"
   | "mcp"
   | "checks"
-  | "issue-tracker";
+  | "issue-tracker"
+  /** Every setting an integration declares in its manifest. */
+  | "integrations";
 
 /** The shapes a stored value may take. */
 export type SettingType = "boolean" | "integer" | "string" | "string-list";
@@ -49,7 +57,19 @@ export interface SettingDefinition {
   readonly appliesToRunsInFlight: SettingsInFlightRule;
   /** Whether the trigger-owned configuration work may later override this. */
   readonly overridablePerTrigger: boolean;
-  /** The deployment variable read by a key marked `requiresRedeploy`. */
+  /**
+   * The deployment variable this key reads. For a key marked
+   * `requiresRedeploy` it is the only answer. For any other key it answers
+   * while no row is stored, and a stored row shadows it: that is how a value an
+   * operator set in the environment before the setting existed keeps working
+   * with nothing to import. Core's own ordinary keys name none (their variables
+   * are retired, see `RETIRED_ENVIRONMENT_VARIABLES`); an integration's setting
+   * may, through its manifest.
+   *
+   * A `string-list` variable is read as main always read one: split on commas,
+   * each id trimmed, empties dropped, so `"U1, U2,,"` is two ids and `" , "`
+   * is none.
+   */
   readonly environmentVariable?: string;
   /**
    * Whether this deployment still reads the variable itself, so a stored row
@@ -434,15 +454,6 @@ export type SettingsSnapshot = {
   readonly [E in RegistryEntry as E["key"]]: ValueOfEntry<E>;
 };
 
-const definitionsByKey = new Map<string, SettingDefinition>(
-  SETTINGS_REGISTRY.map((definition) => [definition.key, definition]),
-);
-
-/** The definition of one key, or undefined when the key is not a setting. */
-export function findSettingDefinition(key: string): SettingDefinition | undefined {
-  return definitionsByKey.get(key);
-}
-
 /** Why one entry of a patch was refused. Never carries the value itself. */
 export interface SettingValidationIssue {
   readonly key: string;
@@ -452,10 +463,32 @@ export interface SettingValidationIssue {
     | "not_allowed_value"
     | "below_minimum"
     | "null_not_allowed"
+    /** An entry of a list that is blank or holds a comma: see
+     *  `SETTING_LIST_ENTRY_RULE`. */
+    | "list_entry_invalid"
     /** A pair the environment schema refuses to boot with. Decided against the
      *  values that would be in force after the write, not against the patch
      *  alone, so it lives with the store rather than in this file. */
     | "above_request_limit";
+}
+
+/**
+ * What a list setting's entries may be, as the sentence every surface that
+ * refuses one says.
+ *
+ * A list is stored as a list, one value per entry, and it is also what a
+ * comma-separated variable splits into (`SLACK_ALLOWED_USER_IDS`). An entry
+ * holding a comma, `["U1,U2"]`, is one id nobody has, so an allowlist of it
+ * locks everyone out; a blank one, `[" "]`, is read as no entry at all, so an
+ * allowlist of only blanks lets everyone in. Neither is what anybody meant, so
+ * a write is refused rather than stored and read one way or the other. A
+ * variable is still split and trimmed as it always was.
+ */
+export const SETTING_LIST_ENTRY_RULE =
+  "Send one value per list entry: an entry may not be blank or contain a comma.";
+
+function isListEntry(entry: string): boolean {
+  return entry.trim() !== "" && !entry.includes(",");
 }
 
 function matchesType(definition: SettingDefinition, value: unknown): boolean {
@@ -477,13 +510,21 @@ function matchesType(definition: SettingDefinition, value: unknown): boolean {
  * Returns every refusal rather than the first, so a form that submits a whole
  * group is told about all of its bad fields at once. An empty result means the
  * patch may be written as it is.
+ *
+ * `find` is how a key is looked up, and it is this build's one lookup,
+ * `settingDefinition` in `@integrations/registry`: core's keys and every
+ * setting an integration declares. It is an argument rather than a default
+ * because this package cannot see the integrations, and a default of core's
+ * registry alone would refuse an integration's setting as `unknown_key` on
+ * whichever surface forgot to pass it.
  */
 export function validateSettingsPatch(
   patch: Readonly<Record<string, unknown>>,
+  find: (key: string) => SettingDefinition | undefined,
 ): SettingValidationIssue[] {
   const issues: SettingValidationIssue[] = [];
   for (const [key, value] of Object.entries(patch)) {
-    const definition = findSettingDefinition(key);
+    const definition = find(key);
     if (!definition) {
       issues.push({ key, reason: "unknown_key" });
       continue;
@@ -502,6 +543,10 @@ export function validateSettingsPatch(
     }
     if (definition.minimum !== undefined && (value as number) < definition.minimum) {
       issues.push({ key, reason: "below_minimum" });
+      continue;
+    }
+    if (definition.type === "string-list" && !(value as string[]).every(isListEntry)) {
+      issues.push({ key, reason: "list_entry_invalid" });
     }
   }
   return issues;

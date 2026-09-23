@@ -8,7 +8,6 @@
  */
 import { z } from "zod";
 import type {
-  SettingKey,
   SettingValue,
   SettingsGroup,
   SettingsInFlightRule,
@@ -31,7 +30,12 @@ export interface SettingsVersionView {
 
 /** One setting, resolved, with everything the form needs to render it. */
 export interface SettingsEntryView {
-  readonly key: SettingKey;
+  /**
+   * A key of core's registry (a `SettingKey`), or of a setting an integration
+   * declares (`settingDefinitions` in `@integrations/registry`), which no type
+   * in this package can name.
+   */
+  readonly key: string;
   readonly value: SettingValue;
   readonly default: SettingValue;
   readonly source: SettingsSource;

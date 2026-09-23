@@ -11,7 +11,9 @@
  * a run and the Settings page would disagree about the value the operator is
  * looking at, silently. Ordinary keys resolve from a stored row and then their
  * default; the three `requiresRedeploy` keys remain environment owned because
- * their consumers cannot read the store yet.
+ * their consumers cannot read the store yet. An ordinary key that names a
+ * variable (only an integration's setting does) reads it between the two: a
+ * stored row, then the variable, then the default.
  *
  * Accessing `process.env` is NOT here. That half is per-deployment wiring
  * (`process.env` plus the worker's parsed schema), and this package is shared
@@ -59,43 +61,37 @@ export interface SettingsResolution {
 }
 
 /**
- * The registry by key, built once.
- *
- * The snapshot below resolves every key on every request and now asks per key,
- * so a scan of the array inside that loop would make a linear read quadratic.
- * Module level rather than rebuilt per call: the registry is a frozen literal
- * and cannot change while the process is up.
- */
-const DEFINITIONS_BY_KEY: ReadonlyMap<string, SettingDefinition> =
-  new Map(SETTINGS_REGISTRY.map((definition) => [definition.key, definition]));
-
-/**
- * What ONE key resolves to with no stored row: the registry default, except
- * for a `requiresRedeploy` key, which reads the environment first.
+ * What ONE key resolves to with no stored row: the variable it names, when it
+ * names one and the deployment sets it, and otherwise its default.
  *
  * The second and third steps of the rule, on their own, for the caller that has
  * exactly one key in hand and no reason to read every row in the table: the
  * reset operation, which has to record what takes over once the row it removes
- * is gone. Exported and used by the loop below rather than restated there.
+ * is gone. The loop below applies the same rule per definition.
  *
- * Null for a key the registry does not know, which is a question for the
- * caller's own validation and not something to answer with a default.
+ * Null for a key `find` does not know, which is a question for the caller's
+ * own validation and not something to answer with a default. `find` is this
+ * build's one lookup (`settingDefinition` in `@integrations/registry`), for the
+ * reason `validateSettingsPatch` gives.
  */
 export function resolveSettingWithoutStoredRow(
   key: string,
   environment: SettingsEnvironmentReader,
+  find: (key: string) => SettingDefinition | undefined,
 ): { value: SettingValue; source: "environment" | "default" } | null {
-  const definition = DEFINITIONS_BY_KEY.get(key);
-  if (!definition) return null;
+  const definition = find(key);
+  return definition ? withoutStoredRow(definition, environment) : null;
+}
+
+function withoutStoredRow(
+  definition: SettingDefinition,
+  environment: SettingsEnvironmentReader,
+): { value: SettingValue; source: "environment" | "default" } {
   const variable = definition.environmentVariable;
-  const fromEnvironment = definition.requiresRedeploy && variable
-    ? environment.value(variable)
-    : undefined;
+  const fromEnvironment =
+    variable === undefined ? undefined : environmentValue(definition, environment.value(variable));
   const isSet =
-    definition.requiresRedeploy === true &&
-    variable !== undefined &&
-    environment.isSet(variable) &&
-    fromEnvironment !== undefined;
+    variable !== undefined && environment.isSet(variable) && fromEnvironment !== undefined;
   return {
     value: fromEnvironment ?? definition.default,
     source: isSet ? "environment" : "default",
@@ -103,9 +99,31 @@ export function resolveSettingWithoutStoredRow(
 }
 
 /**
- * Resolve every registry key: an ordinary stored row wins, then the registry
- * default. A `requiresRedeploy` key ignores a leftover row and resolves from
- * its environment variable, then its default.
+ * A variable's value in the shape its setting holds.
+ *
+ * The reader hands back what the deployment's parsed environment says, or the
+ * raw text of a variable that schema does not declare. A list setting read
+ * from raw text is split the way this product has always split one
+ * (`SLACK_ALLOWED_USER_IDS` and `PRE_PR_CHECKS_ALLOWED_ENV` on main): on
+ * commas, each entry trimmed, empties dropped. So `"U1, U2,,"` is two entries
+ * and `" , , "` is none, which for an allowlist means nobody is singled out.
+ */
+function environmentValue(
+  definition: SettingDefinition,
+  value: SettingValue | undefined,
+): SettingValue | undefined {
+  if (definition.type !== "string-list" || typeof value !== "string") return value;
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
+/**
+ * Resolve every registry key: an ordinary stored row wins, then the variable
+ * the key names (if any), then the registry default. A `requiresRedeploy` key
+ * ignores a leftover row and resolves from its environment variable, then its
+ * default.
  *
  * With one exception, and it is the whole reason `requiresRedeploy` exists. For
  * a key so marked the running code reads the variable itself, at module load or
@@ -115,26 +133,34 @@ export function resolveSettingWithoutStoredRow(
  * value nothing was acting on. So the environment is the single truth for those
  * keys, a row for one is ignored rather than obeyed, and the surfaces that could
  * create such a row refuse to.
+ *
+ * `contributed` are the settings integrations declare (`integrationSettingDefinitions`
+ * in `@integrations/registry`), resolved by the same rule. The snapshot carries
+ * their values under their keys at run time; `SettingsSnapshot` types core's
+ * keys only, because an integration's value reaches its own code through
+ * `ctx.settings`, never through a typed read of this object. A run resolves
+ * its own snapshot without them: nothing inside a run reads one today.
  */
 export function resolveSettingsSnapshot(
   stored: ReadonlyMap<string, SettingValue>,
   environment: SettingsEnvironmentReader,
+  contributed: readonly SettingDefinition[] = [],
 ): SettingsResolution {
   const values: Record<string, SettingValue> = {};
   const sources = new Map<string, SettingsSource>();
-  for (const definition of REGISTRY) {
+  for (const definition of [...REGISTRY, ...contributed]) {
     if (stored.has(definition.key) && !definition.requiresRedeploy) {
       values[definition.key] = stored.get(definition.key) ?? null;
       sources.set(definition.key, "stored");
       continue;
     }
-    // Never null here: the key came from the registry this resolves.
-    const resolved = resolveSettingWithoutStoredRow(definition.key, environment);
-    values[definition.key] = resolved?.value ?? definition.default;
-    sources.set(definition.key, resolved?.source ?? "default");
+    const resolved = withoutStoredRow(definition, environment);
+    values[definition.key] = resolved.value;
+    sources.set(definition.key, resolved.source);
   }
   // The registry derives SettingsSnapshot key by key, so this object holds
-  // exactly its keys; the cast is the one place that fact is asserted.
+  // exactly its keys, plus any contributed ones; the cast is the one place
+  // that fact is asserted.
   return {
     snapshot: Object.freeze(values) as unknown as SettingsSnapshot,
     sources,

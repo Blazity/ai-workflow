@@ -73,6 +73,7 @@ export {
   connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
+  integrationSettingKey,
   type ConnectionValueProblem,
   type ConnectionField,
   type IntegrationBlockManifest,
@@ -84,9 +85,17 @@ export {
   type IntegrationChangeRequestShape,
   type IntegrationPage,
   type IntegrationRepositoryShape,
+  type IntegrationSetting,
   type IntegrationWebhookManifest,
   type VcsReviewState,
 } from "./manifest";
+
+export {
+  integrationSettingDefinition,
+  integrationSettingDefinitionsOf,
+  integrationSettingValues,
+  settingDefinitionsOf,
+} from "./settings";
 
 export {
   INTEGRATION_HTTP_DEFAULTS,
@@ -100,6 +109,7 @@ export {
   type IntegrationLogger,
   type IntegrationRequestInit,
   type IntegrationRunIdentity,
+  type IntegrationSettingValues,
 } from "./context";
 
 export {
@@ -153,6 +163,7 @@ export {
  * render both.
  */
 export {
+  pullRequestNoun,
   pullRequestRef,
   pullRequestRepoLabels,
   type RunControlAnswer,
@@ -308,6 +319,7 @@ export type {
 
 export type {
   IntegrationWebhook,
+  IntegrationWebhookContext,
   IntegrationWebhookReception,
   IntegrationWebhookRequest,
   IntegrationWebhookResponse,

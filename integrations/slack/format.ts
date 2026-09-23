@@ -7,6 +7,7 @@
  * separates its phase and its reason with a comma.
  */
 import {
+  pullRequestNoun,
   pullRequestRef,
   pullRequestRepoLabels,
   type MessagingTicket,
@@ -39,6 +40,7 @@ const EVENT_EMOJI: Record<TicketEvent["kind"], string> = {
  * Examples:
  *   :hourglass_flowing_sand: <link|AWT-42> STATUS: in progress
  *   :white_check_mark: <link|AWT-42> STATUS: PR ready (<prUrl|#123>)
+ *   :white_check_mark: <link|AWT-42> STATUS: MR ready (<mrUrl|!12>)
  *   :warning: <link|AWT-42> STATUS: failed (research)
  */
 export function formatTicketStatus(event: TicketEvent, ticket: MessagingTicket): string {
@@ -61,8 +63,10 @@ export function formatTicketStatus(event: TicketEvent, ticket: MessagingTicket):
         .join(", ");
       // An empty list would render a dangling "PR ready ()". Senders guarantee
       // at least one, but this formatter is exported and the type allows [],
-      // so degrade to the bare status instead of emitting broken copy.
-      return links ? `${head} PR ready (${links})` : `${head} PR ready`;
+      // so degrade to the bare status instead of emitting broken copy. The
+      // noun is the provider's own, stamped by core beside the reference.
+      const noun = pullRequestNoun(event.prs);
+      return links ? `${head} ${noun} ready (${links})` : `${head} ${noun} ready`;
     }
     case "failed":
       return event.phase ? `${head} failed (${event.phase})` : `${head} failed`;
@@ -126,13 +130,14 @@ export function formatTicketEvent(event: TicketEvent, ticket: MessagingTicket): 
       // link rather than announcing "(0):" with nothing under it; see the
       // matching guard in formatTicketStatus.
       const [first] = event.prs;
+      const noun = pullRequestNoun(event.prs);
       const body =
         first === undefined
-          ? `${head} PR ready for review`
+          ? `${head} ${noun} ready for review`
           : event.prs.length === 1
-            ? `${head} PR ready for review: ${prSlackLink(first)}`
+            ? `${head} ${noun} ready for review: ${prSlackLink(first)}`
             : [
-                `${head} PR/MR ready for review (${event.prs.length}):`,
+                `${head} ${noun} ready for review (${event.prs.length}):`,
                 ...event.prs.map(
                   (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr)}`,
                 ),

@@ -7,9 +7,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
-import {
-  findSettingDefinition,
-} from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import { buildSetupOverview } from "./overview";
 
 function entry(
@@ -17,7 +15,7 @@ function entry(
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],

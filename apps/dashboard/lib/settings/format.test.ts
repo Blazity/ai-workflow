@@ -12,6 +12,7 @@ import {
   sourceHint,
   sourceLabel,
 } from "./format";
+import { SETTING_LIST_ENTRY_RULE } from "@shared/contracts";
 import { formatDateTime } from "../date-time";
 
 test("settingLabel converts MAX_CONCURRENT_AGENTS to Max concurrent agents", () => {
@@ -196,6 +197,12 @@ test("settingIssuesFromMessage returns empty object for message with no keys", (
   const message = "Invalid reason";
   const issues = settingIssuesFromMessage(message);
   assert.deepEqual(issues, {});
+});
+
+test("settingIssuesFromMessage says to send one value per entry, as the worker's refusal does", () => {
+  const message = `Invalid settings: SLACK_ALLOWED_USER_IDS (list_entry_invalid). ${SETTING_LIST_ENTRY_RULE}`;
+  const issues = settingIssuesFromMessage(message);
+  assert.deepEqual(issues, { SLACK_ALLOWED_USER_IDS: SETTING_LIST_ENTRY_RULE });
 });
 
 test("settingIssuesFromMessage handles null_not_allowed reason", () => {

@@ -2,18 +2,16 @@
 //
 // The registry decides which settings exist and what order they come in; this
 // module only decides how the dashboard panels them. Keeping the order derived
-// from SETTINGS_REGISTRY rather than repeated here means a key added to the
-// contracts package appears on the Settings page without a second edit.
-import {
-  SETTINGS_REGISTRY,
-  type SettingsEntryView,
-  type SettingsGroup,
-} from "@shared/contracts";
+// from this build's settings (`settingDefinitions`: core's registry, then what
+// each integration declares) rather than repeated here means a key added to
+// either appears on the Settings page without a second edit.
+import { settingDefinitions } from "@integrations/registry";
+import type { SettingsEntryView, SettingsGroup } from "@shared/contracts";
 
 /** Every group the registry declares, in the order its keys first appear. */
 export const SETTINGS_GROUP_ORDER: readonly SettingsGroup[] = (() => {
   const order: SettingsGroup[] = [];
-  for (const definition of SETTINGS_REGISTRY) {
+  for (const definition of settingDefinitions) {
     if (!order.includes(definition.group)) order.push(definition.group);
   }
   return order;
@@ -27,6 +25,7 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   mcp: "MCP",
   checks: "Checks",
   "issue-tracker": "Issue tracker",
+  integrations: "Integrations",
 };
 
 const GROUP_DESCRIPTIONS: Record<SettingsGroup, string> = {
@@ -40,6 +39,8 @@ const GROUP_DESCRIPTIONS: Record<SettingsGroup, string> = {
     "What repository checks fall back to when a repository names none of its own.",
   "issue-tracker":
     "The board columns the tracker integration watches and moves tickets between.",
+  integrations:
+    "What a connected integration lets people do, beyond reaching its provider: who may run a chat command.",
 };
 
 /** One panel of the Settings page: a registry group and its resolved keys. */
