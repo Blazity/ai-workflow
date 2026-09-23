@@ -82,6 +82,7 @@ export {
   type IntegrationBlockRequirements,
   type IntegrationConnection,
   type IntegrationHealthCheck,
+  type IntegrationIcon,
   type IntegrationManifest,
   type IntegrationChangeRequestShape,
   type IntegrationPage,

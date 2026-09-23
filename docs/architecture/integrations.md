@@ -1582,6 +1582,16 @@ change once a provider has been told where to send.
 
 ## Dashboard pages
 
+Your mark comes first. `manifest.icon` is drawn beside the name on the
+Integrations list, the connection screen and the sidebar: either a `glyph`
+(one SVG path on a 24 by 24 grid, drawn white on your `color`) or a
+`monogram` of one or two characters on it, with `color` as `#RRGGBB`. A brand
+mark is somebody's trademark, so take a glyph only from a source that licenses
+it (Simple Icons publishes its glyphs as CC0 and records where each came from)
+and follow the brand's guidelines; with no license-safe mark, use a monogram.
+Without an icon the dashboard draws your name's initials on a neutral tile.
+Conformance refuses anything but path data and a hex colour.
+
 An integration with something to show declares pages in `manifest.pages`,
 ships one component per page in `dashboard.tsx`, and gives each page that
 shows provider data a reader under `api` in `worker.ts`. The template has a

@@ -6,8 +6,9 @@ import { readIntegrationsList } from "@/lib/integrations/list";
 import { CockpitShell } from "./cockpit-shell";
 
 /**
- * The sidebar carries one entry per connected, enabled integration, so the
- * chrome needs that list on every screen and this is the only place it is read.
+ * The sidebar carries an entry per integration in use or waiting on an admin
+ * (switched off, failing), so the chrome needs that list on every screen and
+ * this is the only place it is read.
  *
  * It fails soft on purpose. A worker that does not answer leaves the core
  * groups standing and the Integrations page reachable, which is where an admin
@@ -20,10 +21,11 @@ async function cockpitIntegrations(): Promise<readonly CockpitIntegration[]> {
     id: integration.id,
     name: integration.name,
     pages: integration.pages,
-    // `usable` is the resolver's own word for connected and enabled, which is
-    // the question the sidebar asks. Reading `status` here would be a second
-    // derivation of it.
+    // The resolver's own answers, passed as they are: the sidebar decides
+    // from them which integrations get an entry, and derives none of them.
     usable: integration.state.usable,
+    status: integration.state.status,
+    connection: integration.state.connection,
   }));
 }
 
