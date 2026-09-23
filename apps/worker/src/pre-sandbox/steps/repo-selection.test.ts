@@ -1562,6 +1562,37 @@ describe("repoSelectionStep with a provider that never answered", () => {
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
   });
 
+  it("stops saying the settings could not be read, not that the catalog was incomplete", async () => {
+    // The listing used to come back empty with a failure under a provider
+    // called "integrations", which this step reported as an incomplete catalog
+    // naming that provider, and the database's own words.
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../services/integrations/usable.js"
+    );
+    mocks.listVcsRepositories.mockRejectedValueOnce(
+      new IntegrationSettingsUnreadableError("so no repository could be listed", "connection terminated unexpectedly"),
+    );
+
+    const result = await repoSelectionStep({
+      context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+        settings: testSettingsSnapshot(),
+        ticket: { identifier: "AIW-45", title: "Fix the billing callback in acme/api" },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      message: expect.stringContaining("could not read the deployment's integration settings"),
+    });
+    expect(JSON.stringify(result)).not.toContain("connection terminated");
+    expect(JSON.stringify(result)).not.toContain("incomplete");
+  });
+
   it("continues on a deterministic ticket mention and records the degradation", async () => {
     mocks.listVcsRepositories.mockResolvedValueOnce({
       repositories: repos,

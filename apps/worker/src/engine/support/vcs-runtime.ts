@@ -424,22 +424,23 @@ export async function listVcsRepositories(options: {
   providers: string[];
   failures: Array<{ provider: string; message: string; error: unknown }>;
 }> {
-  const { resolveUsableIntegrations, checkIntegrationPin } = await import(
-    "../../services/integrations/runtime.js"
-  );
+  const { IntegrationSettingsUnreadableError, resolveUsableIntegrations, checkIntegrationPin } =
+    await import("../../services/integrations/runtime.js");
   const needed = options.neededProviders ? new Set(options.neededProviders) : null;
   const resolved = await resolveUsableIntegrations({
     filter: (manifest) =>
       manifest.capabilities.includes("vcs") && (!needed || needed.has(manifest.id)),
   });
+  // Thrown, never an empty listing. An empty listing with a failure under a
+  // made-up provider read, to every caller, as "no provider is connected" or
+  // "your repository is gone": the picker showed each provider not connected
+  // and cached it, an approved plan was sent back for replanning, and a review
+  // run lost its sibling repositories without a word.
   if (!resolved.readable) {
-    return {
-      repositories: [],
-      providers: [],
-      failures: [
-        { provider: "integrations", message: resolved.reason, error: new Error(resolved.reason) },
-      ],
-    };
+    throw new IntegrationSettingsUnreadableError(
+      "so no repository could be listed",
+      resolved.reason,
+    );
   }
   const usable = resolved.usable;
   const repositories: import("@integrations/sdk").VcsRepositoryMetadata[] = [];

@@ -13,6 +13,7 @@
  * derivation of either is exactly what ADR-010 says not to build, which is also
  * why this lives here rather than in the engine that calls it.
  */
+import { INTEGRATION_SETTINGS_UNREADABLE_ERROR_NAME } from "../../engine/helpers/integration-settings-unreadable.js";
 import {
   type ErasedIntegrationRuntime,
   type IntegrationContext,
@@ -299,7 +300,8 @@ export class IntegrationSettingsUnreadableError extends Error {
       `This deployment's integration settings could not be read, ${consequence}. Nothing is known about any provider from this; try again shortly.`,
       { cause },
     );
-    this.name = "IntegrationSettingsUnreadableError";
+    // The name is what engine code recognises after a step boundary.
+    this.name = INTEGRATION_SETTINGS_UNREADABLE_ERROR_NAME;
   }
 }
 

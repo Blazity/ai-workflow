@@ -73,6 +73,10 @@ import {
   NO_ENABLED_REPOSITORIES_MESSAGE,
   repositoryNotEnabledMessage,
 } from "../../support/repository-access.js";
+
+/** Repository selection stopped because the integration settings could not be read. */
+const REPOSITORY_SETTINGS_UNREADABLE_MESSAGE =
+  "Repository selection could not start: this run could not read the deployment's integration settings, so nothing is known about any repository. Retry the run.";
 // Static for the same reason: the example path is read off the manifests, which
 // are plain data, so this import drags in no adapter and no client.
 import { exampleRepositoryPath } from "../../../repository-map/repository-path-example.js";
@@ -505,10 +509,29 @@ const selectRepositoriesForRun = async (
       }))
     : [];
   const repositoryScope = context.repositoryScope;
-  const listing = await listVcsRepositories({
-    neededProviders: neededVcsProviders(repositoryScope, workflowOwnedBranches),
-    integrationPins: context.integrationPins,
-  });
+  let listing: Awaited<ReturnType<typeof listVcsRepositories>>;
+  try {
+    listing = await listVcsRepositories({
+      neededProviders: neededVcsProviders(repositoryScope, workflowOwnedBranches),
+      integrationPins: context.integrationPins,
+    });
+  } catch (error) {
+    const { isIntegrationSettingsUnreadableError } = await import(
+      "../../helpers/integration-settings-unreadable.js"
+    );
+    if (!isIntegrationSettingsUnreadableError(error)) throw error;
+    // Not "the catalog was incomplete" and not "nothing matched": nothing is
+    // known about any provider. The database's words are in the log.
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn({ err: error.message, cause: String(error.cause) }, "repo_selection_settings_unreadable");
+    return {
+      status: "halt",
+      outcome: "failed",
+      message: REPOSITORY_SETTINGS_UNREADABLE_MESSAGE,
+      cause: REPOSITORY_SETTINGS_UNREADABLE_MESSAGE,
+      messageStandsAlone: true,
+    };
+  }
   const repositories = filterRunRepositories(
     context.repositoryAccess,
     listing.repositories,

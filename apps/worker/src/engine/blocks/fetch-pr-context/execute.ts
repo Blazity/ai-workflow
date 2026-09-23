@@ -96,6 +96,13 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
       integrationPins: options?.integrationPins,
     })).repositories;
   } catch (error) {
+    // Unread settings are not a provider hiccup the review can shrug off:
+    // nothing is known about any provider, so the siblings would be dropped
+    // without a word. The run stops, saying so (prepare-workspace maps it).
+    const { isIntegrationSettingsUnreadableError } = await import(
+      "../../helpers/integration-settings-unreadable.js"
+    );
+    if (isIntegrationSettingsUnreadableError(error)) throw error;
     logger.warn(
       { runId, error: error instanceof Error ? error.message : String(error) },
       "review_sibling_repository_listing_failed",

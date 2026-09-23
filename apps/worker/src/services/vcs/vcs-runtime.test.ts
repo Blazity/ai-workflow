@@ -187,6 +187,17 @@ describe("settings that could not be read", () => {
     await expect(refusal).rejects.toThrow(/could not be read, so the pull request URL could not be matched/);
   });
 
+  it("refuses to list repositories rather than answer an empty listing", async () => {
+    // An empty listing read, to every caller, as "nothing connected" or "your
+    // repository is gone".
+    settingsUnreadable();
+
+    const listing = listVcsRepositories();
+
+    await expect(listing).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(listing).rejects.toThrow(/so no repository could be listed/);
+  });
+
   it("says the same when building the provider's adapter reads them again and that read fails", async () => {
     // Manual dispatch matches the URL on one read and reads the pull request
     // through an adapter built on a second. A plain error from the second read

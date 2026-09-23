@@ -20,6 +20,7 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { isIntegrationSettingsUnreadableError } from "../../helpers/integration-settings-unreadable.js";
 // Pure, contracts-only: a static import pulls in nothing a dynamic one would
 // have kept out, and the classifier is needed in catch blocks that are not
 // inside a step and cannot await an import without swallowing the error.
@@ -1536,6 +1537,10 @@ export async function ensureWorkspace(
   } catch (err) {
     if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
     propagateInvocationInterruption(err);
+    // The approved scope's recheck and a review's sibling lookup list the
+    // repositories inside their steps; unread settings there are ours, not the
+    // sandbox's, and not a moved repository that needs a replan.
+    if (isIntegrationSettingsUnreadableError(err)) return workspaceSettingsUnreadable();
     const detail = err instanceof Error ? err.message : String(err);
     // Same rule as the pre-sandbox halt above: the approved-scope refusal and
     // the PR-context refusal both reach this catch, neither is a sandbox fault,
@@ -1546,14 +1551,15 @@ export async function ensureWorkspace(
 
 /**
  * Workspace preparation stopped because this deployment's integration
- * settings could not be read. `engine`, like an integration block's unread
+ * settings could not be read, whether reading the providers' credentials or
+ * listing the repositories. `engine`, like an integration block's unread
  * settings: no sandbox was created and no provider was asked, so neither the
  * sandbox nor a provider is the one to blame, and a retry of the run asks
  * again. The database's words are in the step's log line, not here.
  */
 function workspaceSettingsUnreadable(): BlockExecutionResult {
   const message =
-    "The workspace could not be prepared: this run could not read the deployment's integration settings, so no sandbox was created. Retry the run.";
+    "The workspace could not be prepared: this run could not read the deployment's integration settings. Nothing was concluded about any repository; retry the run.";
   return executionError(message, { category: "engine", message });
 }
 

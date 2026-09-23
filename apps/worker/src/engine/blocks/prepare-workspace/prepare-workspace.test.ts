@@ -2462,6 +2462,43 @@ describe("prepare_workspace execute", () => {
     expect(mocks.getBranchShaIfExists).not.toHaveBeenCalled();
   });
 
+  it("does not send an approved plan back for replanning when the settings could not be read", async () => {
+    // An empty listing made the approved repository look gone, and the run
+    // asked for a replan of a plan that was still good.
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/usable.js"
+    );
+    mocks.listRepositories.mockRejectedValue(
+      new IntegrationSettingsUnreadableError("so no repository could be listed", "connection terminated"),
+    );
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry({
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              researchBranch: "main",
+              researchBaseSha: BASE_SHA,
+              access: "write",
+              rationale: "implementation",
+            },
+          ],
+        }),
+      }),
+    );
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("could not read the deployment's integration settings");
+    expect(JSON.stringify(result.error)).not.toContain("replan");
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
   const approvedScopeEntry = (repositoryScope: unknown) =>
     ({
       kind: "plan_approved",
