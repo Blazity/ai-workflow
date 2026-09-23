@@ -137,6 +137,10 @@ const integrationStore = {
     };
   },
   checkIntegrationPin: () => ({ ok: true }),
+  // Every read here is readable, so nothing constructs it; the adapter build
+  // names it, and this fake stands in for `usable.js` itself, so it cannot
+  // lend the real class.
+  IntegrationSettingsUnreadableError: class IntegrationSettingsUnreadableError extends Error {},
 };
 
 vi.mock("../../services/integrations/runtime.js", () => integrationStore);
