@@ -31,7 +31,9 @@ export interface SettingsVersionView {
 
 /** One setting, resolved, with everything the form needs to render it. */
 export interface SettingsEntryView {
-  readonly key: SettingKey;
+  /** A key of core's registry, or of a setting an integration declares
+   *  (`settingDefinitions` in `@integrations/registry`). */
+  readonly key: SettingKey | (string & {});
   readonly value: SettingValue;
   readonly default: SettingValue;
   readonly source: SettingsSource;

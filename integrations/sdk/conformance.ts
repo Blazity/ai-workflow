@@ -1,8 +1,13 @@
 import { z } from "zod";
-import { INTEGRATION_BLOCK_TYPE, INTEGRATION_ID, WORKFLOW_SUBJECT_FIELDS } from "@shared/contracts";
+import {
+  INTEGRATION_BLOCK_TYPE,
+  INTEGRATION_ID,
+  WORKFLOW_SUBJECT_FIELDS,
+  findSettingDefinition,
+} from "@shared/contracts";
 import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
-import { connectionValueProblem } from "./manifest";
+import { connectionValueProblem, integrationSettingKey } from "./manifest";
 
 /**
  * The check every integration package passes in CI (S1 runs it over each one).
@@ -51,6 +56,8 @@ export type ConformanceCode =
   | "issue_tracker_query_rule_undeclared"
   | "implementation_undeclared"
   | "webhook_receive_missing"
+  | "webhook_requires_invalid"
+  | "setting_invalid"
   | "reserved_slot_used";
 
 export interface ConformanceIssue {
@@ -216,6 +223,9 @@ const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const RESERVED_PAGE_IDS = new Set(["connection"]);
 const REPOSITORY_HOST = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d+)?$/;
 const LEGACY_PATH = /^\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+/** A setting key becomes part of a stored key (`integrationSettingKey`), so it
+ *  is camelCase letters and digits and nothing that key could not spell back. */
+const SETTING_KEY = /^[a-z][a-zA-Z0-9]*$/;
 /**
  * Slots the contract names and no stage has designed yet. Empty today: S9
  * released `webhook`, the last one. Kept because the next reserved slot is one
@@ -266,8 +276,20 @@ const manifestSchema = z.object({
       }),
     ),
   }),
+  settings: z
+    .array(
+      z.object({
+        key: z.string(),
+        description: text,
+        type: z.literal("string-list"),
+        default: z.array(z.string()),
+        env: z.string().optional(),
+      }),
+    )
+    .optional(),
   capabilities: z.array(z.string()),
   repositories: z.object({ host: z.string().optional(), nestedPaths: z.boolean().optional() }).optional(),
+  webhook: z.object({ requires: z.array(z.string()).optional() }).optional(),
   blocks: z.array(
     z.object({
       type: z.string(),
@@ -319,6 +341,8 @@ export function checkIntegrationConformance(
 
   checkIdentity(declared, report);
   checkConnection(declared, report);
+  checkSettings(declared, report);
+  checkWebhookRequirements(declared, implemented, report);
   if (typeof implemented.testConnection !== "function") {
     report(
       "connection_test_missing",
@@ -411,6 +435,94 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
         "connection_default_invalid",
         `${path}.default`,
         `The default of "${field.key}" is not a valid ${field.format} value.`,
+      );
+    }
+  });
+}
+
+/**
+ * An operator setting is stored under a key derived from the integration id
+ * and its own key, next to core's settings, so that key must be one nobody
+ * else holds; and a variable it falls back to must be neither core's own nor
+ * one of this connection's, or one variable would mean two things.
+ */
+function checkSettings(manifest: ParsedManifest, report: Report) {
+  const keys = new Set<string>();
+  const connectionEnvs = new Set(manifest.connection.fields.map((field) => field.env));
+  (manifest.settings ?? []).forEach((setting, index) => {
+    const path = `settings[${index}]`;
+    if (!SETTING_KEY.test(setting.key)) {
+      report(
+        "setting_invalid",
+        `${path}.key`,
+        `Setting key "${setting.key}" must be camelCase letters and digits, starting with a lowercase letter: it becomes part of the key the setting is stored under.`,
+      );
+      return;
+    }
+    if (keys.has(setting.key)) {
+      report("duplicate", `${path}.key`, `Setting key "${setting.key}" is declared twice.`);
+    }
+    keys.add(setting.key);
+    const stored = integrationSettingKey(manifest.id, setting.key);
+    if (findSettingDefinition(stored) !== undefined) {
+      report(
+        "setting_invalid",
+        `${path}.key`,
+        `Setting "${setting.key}" would be stored as ${stored}, which is one of core's own settings. Choose another key.`,
+      );
+    }
+    if (setting.env === undefined) return;
+    if (!ENV.test(setting.env)) {
+      report(
+        "setting_invalid",
+        `${path}.env`,
+        `Setting "${setting.key}" needs an environment variable name in UPPER_SNAKE_CASE, not "${setting.env}".`,
+      );
+    } else if (RESERVED_ENVIRONMENT_VARIABLES.includes(setting.env)) {
+      report(
+        "setting_invalid",
+        `${path}.env`,
+        `${setting.env} is core's own variable; a setting read from it would take core's configuration for this integration's. Choose a name of the provider's own.`,
+      );
+    } else if (connectionEnvs.has(setting.env)) {
+      report(
+        "setting_invalid",
+        `${path}.env`,
+        `${setting.env} is also a connection field's variable, so one variable would be both a connection value and a setting. Give the setting a variable of its own, or none.`,
+      );
+    }
+  });
+}
+
+/**
+ * `webhook.requires` narrows what core needs before it serves the webhook, so
+ * each name has to be a field this connection has, and a narrowing with
+ * nothing to serve is a mistake rather than a choice.
+ */
+function checkWebhookRequirements(manifest: ParsedManifest, runtime: Runtime, report: Report) {
+  const requires = manifest.webhook?.requires;
+  if (requires === undefined) return;
+  if (runtime.webhook === undefined) {
+    report(
+      "webhook_requires_invalid",
+      "webhook.requires",
+      "The manifest says what its webhook requires, and the runtime has no webhook. Delete webhook.requires, or implement runtime.webhook.",
+    );
+  }
+  if (requires.length === 0) {
+    report(
+      "webhook_requires_invalid",
+      "webhook.requires",
+      "webhook.requires is empty, which would serve the webhook with no connection at all. Name the fields it reads, or delete the list to require the whole connection.",
+    );
+  }
+  const fields = new Set(manifest.connection.fields.map((field) => field.key));
+  requires.forEach((key, index) => {
+    if (!fields.has(key)) {
+      report(
+        "webhook_requires_invalid",
+        `webhook.requires[${index}]`,
+        `webhook.requires names "${key}", which is not a connection field of this integration.`,
       );
     }
   });

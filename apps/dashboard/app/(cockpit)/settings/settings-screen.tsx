@@ -7,7 +7,7 @@ import type {
   SettingsEntryView,
   SystemHealthResponse,
 } from "@shared/contracts";
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
 
 import { displaySettingValue, settingLabel } from "@/lib/settings/format";
 import { groupSettings } from "@/lib/settings/groups";

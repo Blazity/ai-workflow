@@ -17,7 +17,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 
-import { SETTINGS_REGISTRY } from "@shared/contracts";
+import { settingDefinitions } from "@integrations/registry";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization, settings, settingsVersions } from "../../db/schema.js";
@@ -113,9 +113,19 @@ describe("settings.list", () => {
     // bumped by whoever added a setting, in a file they had no reason to open,
     // so the check failed for the one person who could not act on it and said
     // nothing about which key was missing. This says exactly that.
+    // This build's whole list: an integration's setting is changed where
+    // every other setting is.
     expect(rows.map((row) => row.key).sort()).toEqual(
-      SETTINGS_REGISTRY.map((entry) => entry.key).sort(),
+      settingDefinitions.map((entry) => entry.key).sort(),
     );
+    expect(rows.find((row) => row.key === "SLACK_ALLOWED_USER_IDS")).toMatchObject({
+      group: "integrations",
+      value: [],
+      source: "default",
+      editable: true,
+      role: "owner_or_admin",
+      appliesToRunsInFlight: "immediate",
+    });
     expect(rows.some((row) => row.group === "harness")).toBe(false);
     const concurrency = rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS");
     expect(concurrency).toMatchObject({
@@ -292,6 +302,33 @@ describe("settings.set", () => {
         key: "JOB_TIMEOUT_MS",
         reason: "agents were finishing well inside ten minutes",
       }),
+    ]);
+  });
+
+  it("stores an integration's setting, which is changed here like any of core's", async () => {
+    // Every dashboard function has an MCP tool: who may run the Slack command
+    // is set here too, and read by the next command without a redeploy.
+    const client = await connectedClient({ scopes: WRITE_ONLY });
+
+    const result = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "SLACK_ALLOWED_USER_IDS",
+        value: ["U01"],
+        reason: "only the on-call engineer may cancel",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result).setting).toMatchObject({
+      key: "SLACK_ALLOWED_USER_IDS",
+      value: ["U01"],
+      source: "stored",
+      appliesToRunsInFlight: "immediate",
+    });
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "SLACK_ALLOWED_USER_IDS", value: ["U01"] }),
     ]);
   });
 

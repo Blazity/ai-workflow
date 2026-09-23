@@ -23,7 +23,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
-  findSettingDefinition,
   type SettingsEntryView,
   type SettingsInFlightRule,
   type SettingsVersionView,
@@ -88,7 +87,9 @@ type SettingView = Omit<SettingsEntryView, "appliesToRunsInFlight"> & {
 
 function viewOf(entry: SettingsEntryView): SettingView {
   const editable = isSettingEditableThroughMcp(entry.key);
-  const requiresRedeploy = findSettingDefinition(entry.key)?.requiresRedeploy === true;
+  // The entry already says it: every settings surface reads the one joined
+  // list (`settingDefinitions`), core's keys and the integrations' alike.
+  const requiresRedeploy = entry.requiresRedeploy === true;
   return {
     ...entry,
     editable,

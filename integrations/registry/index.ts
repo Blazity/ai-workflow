@@ -14,6 +14,8 @@
  */
 import {
   INTEGRATION_CAPABILITIES,
+  integrationSettingDefinitionsOf,
+  settingDefinitionsOf,
   type IntegrationBlockManifest,
   type IntegrationManifest,
 } from "@integrations/sdk";
@@ -42,6 +44,30 @@ export function integrationManifest(id: string): IntegrationManifest | undefined
 /** Whether this build ships an integration under that id. */
 export function hasIntegration(id: string): boolean {
   return byId.has(id);
+}
+
+/**
+ * Every operator setting the integrations of this build declare, as the
+ * settings registry describes a setting (`integrationSettingDefinition` in the
+ * SDK). What the worker's settings snapshot resolves beside core's keys.
+ */
+export const integrationSettingDefinitions = integrationSettingDefinitionsOf(
+  generatedIntegrationManifests,
+);
+
+/**
+ * Every setting this build has: core's registry, then the integrations'. The
+ * one list every settings surface serves (the worker's settings API and MCP
+ * tools, the dashboard's Settings page), so a setting an integration declares
+ * is stored, validated, versioned and shown like any of core's.
+ */
+export const settingDefinitions = settingDefinitionsOf(generatedIntegrationManifests);
+
+const settingsByKey = new Map(settingDefinitions.map((definition) => [definition.key, definition]));
+
+/** One setting of this build, core's or an integration's, or nothing. */
+export function settingDefinition(key: string): (typeof settingDefinitions)[number] | undefined {
+  return settingsByKey.get(key);
 }
 
 /**

@@ -3,12 +3,8 @@
 // Every string the Settings surface puts on screen that is derived rather than
 // authored: the field label, the source badge, the applies-to note, the value
 // as text, and the keys named by a refusal the worker sent back.
-import {
-  findSettingDefinition,
-  type SettingValue,
-  type SettingsInFlightRule,
-  type SettingsSource,
-} from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import type { SettingValue, SettingsInFlightRule, SettingsSource } from "@shared/contracts";
 import { formatDateTime } from "../date-time";
 
 /**

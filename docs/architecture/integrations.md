@@ -497,9 +497,53 @@ What each field property does, and what it costs to get wrong:
 
 Operator behaviour that is not about reaching the provider (which board
 columns a tracker watches, who may run a command) is not a connection field.
-It is a stored setting of the capability, like Jira's columns. Slack's
-channel is the documented exception, kept as a field because moving it would
-have been a data migration.
+A behaviour every provider of a capability reads is a stored setting of that
+capability in core, like Jira's columns; one only your integration reads is an
+operator setting in your manifest (next section). Slack's channel is the
+documented exception, kept as a field because moving it would have been a
+data migration.
+
+### Operator settings
+
+A connection field and an operator setting differ in what happens when they
+change. A field belongs to one source and a run pins it, so editing it stops
+runs in flight with `reconfigured`, and switching the source replaces it. A
+setting is stored once for the deployment, whichever source the connection
+uses, and read when it is used, never pinned. Who may run Slack's slash command
+is the case that taught this: as a field, adding a colleague stopped every run
+that was posting to Slack, and switching Slack to stored values dropped the
+allowlist and let the whole workspace in.
+
+Declare what you read in the manifest, as Slack does
+(`integrations/slack/manifest.ts`):
+
+```
+settings: [
+  {
+    key: "allowedUserIds",
+    description: "Slack user ids that may run the command. Empty lets everyone run it.",
+    type: "string-list",
+    default: [],
+    env: "SLACK_ALLOWED_USER_IDS",
+  },
+],
+```
+
+- Core stores it with every other setting, under your id and key in
+  UPPER_SNAKE_CASE (`SLACK_ALLOWED_USER_IDS`, `integrationSettingKey`). An
+  admin reads and changes it on the Settings page, in the Integrations panel,
+  and through the MCP `settings.*` tools, and every change is in the settings
+  history with who made it and why.
+- `env` is for a setting that was an environment variable before it was a
+  setting: it is read while nothing is stored, as a comma-separated list, and a
+  stored value shadows it. A new setting needs none.
+- Your webhook reads it as `ctx.settings.<key>`, loaded when the request
+  arrives. When the settings cannot be read core answers 503 and never calls
+  you, so an empty list always means the admin left it empty.
+- One kind today, a list of strings. Nothing inside a run receives settings
+  yet: a run freezes its settings at its start, and carrying an integration's
+  in that snapshot is a change to a step that needs a drain. The first
+  integration whose block needs a setting adds it there.
 
 ### Where the values come from
 
@@ -621,6 +665,8 @@ widens to `string`.
 - **`ctx.webhookUrl`**: where this deployment receives your deliveries, for a
   health check that compares it with what the provider holds. Absent when
   the deployment does not know its public URL.
+- **`ctx.settings`**, on your webhook's context only: your operator settings,
+  read when the request arrived (see "Operator settings").
 
 Most of GitHub's and GitLab's calls go through their own provider SDKs
 (Octokit, gitbeaker) rather than `ctx.http`, so none of the above applies to
@@ -784,6 +830,16 @@ declares no webhook, 503 when your integration is not connected here, and 202
 with nothing dispatched when it is disabled, so the provider neither retries
 nor switches the webhook off.
 
+A webhook that reads less than the whole connection says so in the manifest:
+`webhook: { requires: ["signingSecret"] }`. Core then serves it while the
+integration is enabled and those fields have values, even when the rest of the
+connection is incomplete or its test failed, and `ctx.connection` holds exactly
+those fields, each present. Slack's slash command is the case: it verifies with
+the signing secret and answers through Slack's `response_url`, so a deployment
+that registered only the command needs no bot token. Leave `requires` out when
+your webhook goes on to call the provider: half a connection must not serve a
+tracker that reads the ticket.
+
 ```ts file=webhook.ts
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IntegrationWebhook } from "@integrations/sdk";
@@ -925,7 +981,7 @@ network and no credential:
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { IntegrationContext } from "@integrations/sdk";
+import type { IntegrationWebhookContext } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 import { webhook } from "./webhook";
 
@@ -938,7 +994,7 @@ const recorded = JSON.parse(
   readFileSync(new URL("./test-fixtures/signed-delivery.json", import.meta.url), "utf8"),
 ) as { secret: string; timestamp: string; signature: string; rawBody: string };
 
-function context(webhookSecret: string | undefined): IntegrationContext<typeof manifest> {
+function context(webhookSecret: string | undefined): IntegrationWebhookContext<typeof manifest> {
   return {
     connection: {
       baseUrl: "https://api.hippo.example",
@@ -946,6 +1002,8 @@ function context(webhookSecret: string | undefined): IntegrationContext<typeof m
       apiKey: "not-used-here",
       webhookSecret,
     },
+    // Hippo declares no operator settings; one that did would list them here.
+    settings: {},
     http: { fetch: () => Promise.reject(new Error("this test makes no request")) },
     log: { debug() {}, info() {}, warn() {}, error() {} },
     signal: AbortSignal.timeout(1_000),

@@ -1,6 +1,6 @@
 "use client";
 
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 
 import { Input, Select, Textarea } from "@/components/ui";

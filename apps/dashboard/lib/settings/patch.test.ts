@@ -304,3 +304,10 @@ test("a field missing from the draft is not reported as an issue", () => {
   const entries = [entry("MAX_CONCURRENT_AGENTS", 3)];
   assert.deepEqual(localSettingIssues(entries, {}), {});
 });
+
+test("an integration's list setting is read from the form like any list", () => {
+  // Slack's allowlist is not in core's registry; the Settings page reads its
+  // shape from the joined list, so pasted ids arrive as a list, not a string
+  // the worker would refuse as the wrong type.
+  assert.deepEqual(toSettingValue("SLACK_ALLOWED_USER_IDS", "U01, U02\nU03,,"), ["U01", "U02", "U03"]);
+});

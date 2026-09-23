@@ -1,26 +1,23 @@
 /**
- * What this deployment's environment still answers for a redeploy setting.
+ * What this deployment's environment answers for a setting that names a
+ * variable: a redeploy setting, whose only answer it is, and an integration's
+ * setting, which reads it while nothing is stored.
  *
  * The other half of the resolution in `@shared/contracts/settings-resolution`:
- * that file owns the rule and this one owns the remaining environment read,
- * because reading a variable is
- * per-deployment wiring and the contracts package is shared with the
- * dashboard, which has no environment of this shape at all.
+ * that file owns the rule and this one owns the environment read, because
+ * reading a variable is per-deployment wiring and the contracts package is
+ * shared with the dashboard, which has no environment of this shape at all.
  *
  * Keyed by VARIABLE NAME rather than by a registry definition on purpose: the
  * infra tier has no outgoing edges under ADR-001, so it may not import the
- * registry to take one. A name is all the read needs.
+ * registry to take one. A name is all the read needs, and turning a variable's
+ * text into the shape its setting holds (a comma-separated list) is the
+ * rule's, which has the definition.
  *
- * Both callers of the rule read the three redeploy-owned variables through
- * this one module: an HTTP request and a run at its start.
+ * Both callers of the rule read the variables through this one module: an
+ * HTTP request and a run at its start.
  */
 import { env } from "./vcs-config.js";
-
-/**
- * The checks allowlist is read straight off `process.env` by the checks runner.
- * The other two redeploy-owned values come from the parsed environment.
- */
-const CHECKS_ALLOWED_ENV_VARIABLE = "PRE_PR_CHECKS_ALLOWED_ENV";
 
 /**
  * Whether the deployment sets this variable at all.
@@ -36,30 +33,23 @@ function rawVariable(name: string): string | undefined {
   return raw === undefined || raw === "" ? undefined : raw;
 }
 
-/** Today's read of the forwarded-variable allowlist. */
-function checksAllowedEnvNames(): readonly string[] | undefined {
-  const raw = rawVariable(CHECKS_ALLOWED_ENV_VARIABLE);
-  if (raw === undefined) return undefined;
-  return raw
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-}
-
-/** What the environment resolves this variable to, or undefined for "nothing". */
+/**
+ * What the environment resolves this variable to, or undefined for "nothing".
+ *
+ * A variable the environment schema declares is passed through exactly as the
+ * schema resolved it, bounds included. The registry's own bounds decide what
+ * an operator may write through the API; applying them here as well would
+ * quietly change the value a deployment already runs on. A variable the
+ * schema does not declare (the checks allowlist, which the checks runner reads
+ * off `process.env` itself, and every integration setting's variable) is
+ * handed over as its raw text. Only "nothing set" falls through to the default.
+ */
 function settingsEnvironmentValue(
   variable: string,
 ): boolean | number | string | readonly string[] | null | undefined {
-  if (variable === CHECKS_ALLOWED_ENV_VARIABLE) return checksAllowedEnvNames();
-
-  // Passed through exactly as the environment schema resolved it, bounds
-  // included. The registry's own bounds decide what an operator may write
-  // through the API; applying them here as well would quietly change the value
-  // a deployment already runs on. Only "nothing set" falls through to the
-  // default.
   const value = (env as unknown as Record<string, unknown>)[variable];
   return value === undefined || value === null
-    ? undefined
+    ? rawVariable(variable)
     : (value as boolean | number | string | readonly string[]);
 }
 

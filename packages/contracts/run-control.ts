@@ -112,7 +112,19 @@ export type RunControlAnswer =
  * `failed` exists because the work happens after the acknowledgement a chat
  * app is timing: without it, a handler that throws leaves the person reading
  * "Working on ..." for ever.
+ *
+ * A failure carries a `reference` and NOT the error. What went wrong inside
+ * core (a failed query quotes its SQL and its parameters) is written to the
+ * worker's log under that reference, and the integration writes the sentence
+ * a person reads, which names the reference so an admin can find the line.
+ * Core's error text is not for a chat channel, which may be shared with
+ * another company. What the person typed is the integration's to remember
+ * (in its own `deliverTo`), so the sentence can say what did not happen.
  */
 export type RunControlOutcome =
   | { readonly kind: "answered"; readonly answer: RunControlAnswer }
-  | { readonly kind: "failed"; readonly message: string };
+  | {
+      readonly kind: "failed";
+      /** The id the worker's log line for this failure carries. */
+      readonly reference: string;
+    };

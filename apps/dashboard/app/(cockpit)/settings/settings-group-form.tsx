@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 
 import { Button, CkChip, Input, type ChipTone } from "@/components/ui";

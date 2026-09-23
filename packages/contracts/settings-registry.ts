@@ -10,6 +10,12 @@
  * Stored rows decide ordinary settings, with the registry default as the
  * fallback. The three keys marked `requiresRedeploy` are the exception: their
  * running consumers still read the named deployment variable directly.
+ *
+ * This list is core's. An integration declares the operator settings it reads
+ * in its own manifest (`settings`), and `@integrations/registry` adds them to
+ * this list as `settingDefinitions`: that joined list is what every settings
+ * surface serves, so an integration's setting is stored, validated, versioned
+ * and shown exactly like one of these.
  */
 
 /** The panels the dashboard groups these into. */
@@ -20,7 +26,9 @@ export type SettingsGroup =
   | "features"
   | "mcp"
   | "checks"
-  | "issue-tracker";
+  | "issue-tracker"
+  /** Every setting an integration declares in its manifest. */
+  | "integrations";
 
 /** The shapes a stored value may take. */
 export type SettingType = "boolean" | "integer" | "string" | "string-list";
@@ -49,7 +57,19 @@ export interface SettingDefinition {
   readonly appliesToRunsInFlight: SettingsInFlightRule;
   /** Whether the trigger-owned configuration work may later override this. */
   readonly overridablePerTrigger: boolean;
-  /** The deployment variable read by a key marked `requiresRedeploy`. */
+  /**
+   * The deployment variable this key reads. For a key marked
+   * `requiresRedeploy` it is the only answer. For any other key it answers
+   * while no row is stored, and a stored row shadows it: that is how a value an
+   * operator set in the environment before the setting existed keeps working
+   * with nothing to import. Core's own ordinary keys name none (their variables
+   * are retired, see `RETIRED_ENVIRONMENT_VARIABLES`); an integration's setting
+   * may, through its manifest.
+   *
+   * A `string-list` variable is read as main always read one: split on commas,
+   * each id trimmed, empties dropped, so `"U1, U2,,"` is two ids and `" , "`
+   * is none.
+   */
   readonly environmentVariable?: string;
   /**
    * Whether this deployment still reads the variable itself, so a stored row
@@ -477,13 +497,18 @@ function matchesType(definition: SettingDefinition, value: unknown): boolean {
  * Returns every refusal rather than the first, so a form that submits a whole
  * group is told about all of its bad fields at once. An empty result means the
  * patch may be written as it is.
+ *
+ * `find` is how a key is looked up: core's registry alone by default, and the
+ * joined list (`settingDefinition` in `@integrations/registry`) for a surface
+ * that also serves the settings integrations declare.
  */
 export function validateSettingsPatch(
   patch: Readonly<Record<string, unknown>>,
+  find: (key: string) => SettingDefinition | undefined = findSettingDefinition,
 ): SettingValidationIssue[] {
   const issues: SettingValidationIssue[] = [];
   for (const [key, value] of Object.entries(patch)) {
-    const definition = findSettingDefinition(key);
+    const definition = find(key);
     if (!definition) {
       issues.push({ key, reason: "unknown_key" });
       continue;

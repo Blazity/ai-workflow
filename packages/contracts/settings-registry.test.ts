@@ -190,3 +190,67 @@ test("the environment branch exists only for redeploy keys", () => {
   assert.equal(snapshot.COLUMN_AI, "AI");
   assert.equal(sources.get("COLUMN_AI"), "default");
 });
+
+/**
+ * A setting an integration declares, shaped as `integrationSettingDefinition`
+ * in the SDK builds Slack's: an ordinary key that names the variable it was
+ * before it was a setting.
+ */
+const ALLOWLIST: SettingDefinition = {
+  key: "SLACK_ALLOWED_USER_IDS",
+  group: "integrations",
+  type: "string-list",
+  default: [],
+  description: "Slack: who may run the slash command.",
+  appliesToRunsInFlight: "immediate",
+  overridablePerTrigger: false,
+  environmentVariable: "SLACK_ALLOWED_USER_IDS",
+};
+
+test("a contributed key reads its variable as main split it while nothing is stored", () => {
+  // origin/main apps/worker/src/services/settings/integration-settings.ts:96-99:
+  // split(",").map(trim).filter(Boolean), and an empty list lets everyone in.
+  const cases: [string | undefined, readonly string[], "environment" | "default"][] = [
+    ["U1, U2,,", ["U1", "U2"], "environment"],
+    [" , , ", [], "environment"],
+    [undefined, [], "default"],
+  ];
+  for (const [variable, expected, source] of cases) {
+    const environment = environmentOf(variable === undefined ? {} : { SLACK_ALLOWED_USER_IDS: variable });
+    const { snapshot, sources } = resolveSettingsSnapshot(new Map(), environment, [ALLOWLIST]);
+    const values = snapshot as unknown as Record<string, unknown>;
+    assert.deepEqual(values.SLACK_ALLOWED_USER_IDS, expected, JSON.stringify(variable));
+    assert.equal(sources.get("SLACK_ALLOWED_USER_IDS"), source, JSON.stringify(variable));
+  }
+});
+
+test("a stored value shadows a contributed key's variable, and is validated like core's", () => {
+  const { snapshot, sources } = resolveSettingsSnapshot(
+    new Map([["SLACK_ALLOWED_USER_IDS", ["U3"]]]),
+    environmentOf({ SLACK_ALLOWED_USER_IDS: "U1,U2" }),
+    [ALLOWLIST],
+  );
+  assert.deepEqual((snapshot as unknown as Record<string, unknown>).SLACK_ALLOWED_USER_IDS, ["U3"]);
+  assert.equal(sources.get("SLACK_ALLOWED_USER_IDS"), "stored");
+
+  const find = (key: string) => (key === ALLOWLIST.key ? ALLOWLIST : undefined);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U3"] }, find), []);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: "U3" }, find), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "wrong_type" },
+  ]);
+  // Core's registry alone does not know it: a surface that serves the
+  // integrations' settings has to pass the joined lookup.
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U3"] }), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "unknown_key" },
+  ]);
+});
+
+test("the checks allowlist read from its raw variable is split the same way", () => {
+  // The worker hands over the raw text of a variable its schema does not
+  // declare, and PRE_PR_CHECKS_ALLOWED_ENV is one: the list rule is here now.
+  const { snapshot } = resolveSettingsSnapshot(
+    new Map(),
+    environmentOf({ PRE_PR_CHECKS_ALLOWED_ENV: " NPM_TOKEN , ,SENTRY_DSN" }),
+  );
+  assert.deepEqual(snapshot.PRE_PR_CHECKS_ALLOWED_ENV, ["NPM_TOKEN", "SENTRY_DSN"]);
+});

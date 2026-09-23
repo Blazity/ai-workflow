@@ -16,7 +16,7 @@
  * refusal names the dashboard Settings page, which is a person on a session
  * this transport cannot reach.
  */
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
 
 /** The group no tool on the MCP surface may write: this transport's own
  *  configuration. Editable through the dashboard, and through the HTTP patch

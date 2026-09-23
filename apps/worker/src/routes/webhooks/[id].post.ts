@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { createError, defineEventHandler, getQuery, getRequestHeaders, readRawBody } from "h3";
 import { waitUntil } from "@vercel/functions";
+import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 
 /**
  * Every integration's webhook, at the URL its provider already calls.
@@ -41,11 +43,15 @@ export default defineEventHandler(async (event) => {
   }
 
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
+  const { getRequestSettingsSnapshot } = await import("../../services/settings/index.js");
   // A request has one deadline for everything it does with the contexts, so
-  // it is their lifetime.
+  // it is their lifetime. Resolved for the webhook: served on the fields the
+  // integration says its webhook reads, with the operator settings it declares
+  // read now, from this request's one settings snapshot.
   const resolved = await resolveUsableIntegrations({
     lifetime: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     filter: (candidate) => candidate.id === id,
+    forWebhook: { settings: () => getRequestSettingsSnapshot(event) },
   });
   if (!resolved.readable) {
     // Not a refusal of the request: this deployment could not read its own
@@ -69,9 +75,23 @@ export default defineEventHandler(async (event) => {
   const usable = resolved.usable.find((candidate) => candidate.manifest.id === id);
   if (!usable) {
     observeWebhook(id, "rejected", "integration_disconnected");
+    // Connected for everything else and still not served is a webhook that
+    // declared fields this deployment has no value for (Slack's signing
+    // secret): name them, since "not connected" would send an admin looking
+    // at a connection that works.
+    const requires = manifest.webhook?.requires;
+    const needs =
+      state?.connection === "connected" && requires
+        ? manifest.connection.fields
+            .filter((field) => requires.includes(field.key))
+            .map((field) => field.label)
+        : [];
     throw createError({
       statusCode: 503,
-      statusMessage: `${manifest.name} is not connected on this deployment.`,
+      statusMessage:
+        needs.length > 0
+          ? `${manifest.name}'s webhook needs its ${needs.join(" and ")} on this deployment, and it is not set or cannot be read.`
+          : `${manifest.name} is not connected on this deployment.`,
     });
   }
   // The resolved runtime's webhook, not the registry's: it throws with this
@@ -127,7 +147,6 @@ export default defineEventHandler(async (event) => {
         },
       });
     }
-    const { getRequestSettingsSnapshot } = await import("../../services/settings/index.js");
     const { actOnTicketEvent } = await import("../../services/triggers/ticket-events.js");
     const { TriggerHttpError } = await import(
       "../../services/triggers/trigger-http-error.js"
@@ -450,7 +469,11 @@ async function actOnTriggerEvents(
  *
  * A failure is delivered rather than logged and dropped: the person is
  * watching an acknowledgement that promised an answer, and silence is the one
- * outcome they cannot act on.
+ * outcome they cannot act on. What is delivered is a reference, never the
+ * error: core's errors are written for this log (a failed query quotes its SQL
+ * and its parameters), and the answer lands in a chat channel that may be
+ * shared with another company. The log line carries the same reference, so an
+ * admin handed it finds the error.
  */
 async function runAndDeliver(
   id: string,
@@ -462,7 +485,7 @@ async function runAndDeliver(
     "../../services/run-control/index.js"
   );
   const { logger } = await import("../../services/system/logger.js");
-  let outcome: { kind: "answered"; answer: unknown } | { kind: "failed"; message: string };
+  let outcome: { kind: "answered"; answer: unknown } | { kind: "failed"; reference: string };
   try {
     const answer = await executeRunControlCommand(
       reception.command as never,
@@ -470,9 +493,17 @@ async function runAndDeliver(
     );
     outcome = { kind: "answered", answer };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error({ integration: id, error: message }, "run_control_command_failed");
-    outcome = { kind: "failed", message };
+    const reference = `${EXECUTION_DIAGNOSTIC_PREFIX}run-control-${randomUUID()}`;
+    logger.error(
+      {
+        integration: id,
+        command: (reception.command as { kind?: unknown } | null)?.kind,
+        diagnosticId: reference,
+        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      },
+      "run_control_command_failed",
+    );
+    outcome = { kind: "failed", reference };
   }
   if (!deliver) return;
   await deliver({ to: reception.deliverTo, outcome } as never, usable.ctx as never);

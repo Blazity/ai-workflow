@@ -6,10 +6,14 @@
  * else: which keys exist, what a value may be, and what a change records are
  * all decided here and in the registry, so the MCP tools a later plan adds
  * cannot end up with a second, looser answer to the same questions.
+ *
+ * "Which keys exist" is this build's whole list, `settingDefinitions` in
+ * `@integrations/registry`: core's registry and every setting an integration
+ * declares, so an integration's setting is read, written, validated and
+ * versioned here like any of core's.
  */
+import { settingDefinition, settingDefinitions } from "@integrations/registry";
 import {
-  SETTINGS_REGISTRY,
-  findSettingDefinition,
   validateSettingsPatch,
   type SettingValidationIssue,
   type SettingValue,
@@ -69,18 +73,16 @@ function entryViews(
   latest: SettingsVersionRow[],
 ): SettingsEntryView[] {
   const lastByKey = new Map(latest.map((row) => [row.key, versionView(row)]));
-  return SETTINGS_REGISTRY.map((definition) => ({
+  const values = resolution.snapshot as unknown as Readonly<Record<string, SettingValue>>;
+  return settingDefinitions.map((definition) => ({
     key: definition.key,
-    value: resolution.snapshot[definition.key],
+    value: values[definition.key] ?? null,
     default: definition.default,
     source: resolution.sources.get(definition.key) ?? "default",
     group: definition.group,
     description: definition.description,
     appliesToRunsInFlight: definition.appliesToRunsInFlight,
-    // Through the lookup rather than off `definition`: the registry is `as
-    // const`, so a key without this optional flag does not carry the property
-    // in its literal type at all.
-    requiresRedeploy: findSettingDefinition(definition.key)?.requiresRedeploy,
+    requiresRedeploy: definition.requiresRedeploy,
     lastVersion: lastByKey.get(definition.key) ?? null,
   }));
 }
@@ -100,7 +102,7 @@ export async function readSettings(): Promise<SettingsReadResponse> {
 export async function readSettingsHistory(
   key: string,
 ): Promise<SettingsVersionsResponse> {
-  if (!findSettingDefinition(key)) {
+  if (!settingDefinition(key)) {
     throw new SettingsValidationError([{ key, reason: "unknown_key" }]);
   }
   const rows = await listConnectedSettingsVersions(key, HISTORY_LIMIT);
@@ -161,7 +163,7 @@ export async function updateSettings(input: {
   actor: string;
   reason: string;
 }): Promise<SettingsPatchResponse> {
-  const issues = validateSettingsPatch(input.patch);
+  const issues = validateSettingsPatch(input.patch, settingDefinition);
   if (issues.length > 0) throw new SettingsValidationError(issues);
 
   const inForce = await loadSettingsResolution();

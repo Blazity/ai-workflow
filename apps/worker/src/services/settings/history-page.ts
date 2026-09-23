@@ -6,7 +6,7 @@
  * has no scrollbar to tell it there is more, so this adds the one fact a
  * protocol has to carry instead of show.
  */
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
 import type { SettingsVersionView } from "@shared/contracts";
 import { listConnectedSettingsVersionPageRows } from "../../db/repositories/settings-history.js";
 import { SettingsValidationError, versionView } from "./store.js";

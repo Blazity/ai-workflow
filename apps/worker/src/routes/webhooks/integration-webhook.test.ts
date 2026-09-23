@@ -35,11 +35,12 @@ const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
   botLoginReadable: true,
+  resolveInput: undefined as undefined | { forWebhook?: { settings: () => Promise<unknown> } },
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
-  resolveUsableIntegrations: async () =>
-    state.readable
+  resolveUsableIntegrations: async (input: typeof state.resolveInput) =>
+    (state.resolveInput = input) && state.readable
       ? { readable: true, usable: state.usable, states: state.states }
       : { readable: false, reason: "the settings read timed out" },
 }));
@@ -119,23 +120,23 @@ vi.mock("../../services/system/observations.js", () => ({
 }));
 
 const handler = (await import("./[id].post.js")).default;
+const { logger } = await import("../../services/system/logger.js");
 const { integrationRuntime } = await import("@integrations/registry/worker");
 // The real Slack runtime out of the registry, which is exactly what the route
 // reaches for: a hand-written double here would prove the double works.
 const runtime = integrationRuntime("slack")!;
 
-/** The Slack context the resolver would have built for a connected deployment. */
+/**
+ * The Slack context the resolver would have built for its webhook: exactly
+ * the field the webhook requires, and the operator settings it declares.
+ */
 function connectedSlack(): unknown {
   return {
     manifest: { id: "slack", name: "Slack" },
     runtime,
     ctx: {
-      connection: {
-        botToken: "xoxb-test",
-        channelId: "C1",
-        signingSecret: SIGNING_SECRET,
-        allowedUserIds: undefined,
-      },
+      connection: { signingSecret: SIGNING_SECRET },
+      settings: { allowedUserIds: [] },
       signal: new AbortController().signal,
       log: { debug() {}, info() {}, warn() {}, error() {} },
       http: { fetch: globalThis.fetch },
@@ -476,10 +477,45 @@ describe("POST /webhooks/:id", () => {
     await Promise.all(deferred);
 
     expect(response.status).toBe(200);
-    expect(posted[0]!.body).toEqual({
-      response_type: "in_channel",
-      text: ":warning: That command failed: the database refused",
-    });
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.body).toMatchObject({ response_type: "ephemeral" });
+    expect((posted[0]!.body as { text: string }).text).toMatch(
+      /^:warning: `\/ai-workflow list` could not be completed/u,
+    );
+  });
+
+  it("posts no SQL and no parameters when a command fails on a database error, only a reference to the log", async () => {
+    // drizzle-orm 0.45 spells a failed query as its SQL, then its parameters
+    // (DrizzleQueryError); this is what reached a channel that may be shared
+    // with another company. The error goes to the log, under the reference
+    // the person is given.
+    executeRunControlCommand.mockRejectedValue(
+      new Error(
+        "Failed query: select \"run_id\" from \"active_runs\" where \"ticket_key\" = $1\nparams: AWT-42",
+      ),
+    );
+
+    await app()(request("slack", "cancel AWT-42"));
+    await Promise.all(deferred);
+
+    const text = (posted[0]!.body as { text: string }).text;
+    expect(text).not.toMatch(/Failed query|select|active_runs|params/u);
+    const logged = vi.mocked(logger.error).mock.calls.find(
+      ([, event]) => event === "run_control_command_failed",
+    )?.[0] as { diagnosticId: string; error: string } | undefined;
+    expect(logged?.error).toContain("Failed query");
+    expect(logged?.diagnosticId).toMatch(/^AIW-DIAG-run-control-/u);
+    expect(text).toContain(`\`${logged!.diagnosticId}\``);
+  });
+
+  it("resolves the integration for its webhook, with this request's settings", async () => {
+    // Without the webhook purpose Slack would need its whole connection, bot
+    // token included, to answer a command that uses none of it; without the
+    // settings its allowlist would not be there to read.
+    await app()(request("slack", "help"));
+
+    expect(state.resolveInput?.forWebhook).toBeDefined();
+    expect(await state.resolveInput!.forWebhook!.settings()).toEqual({ MAX_CONCURRENT_AGENTS: 3 });
   });
 
   it("answers help itself without deferring run-control work", async () => {
@@ -561,6 +597,19 @@ describe("POST /webhooks/:id", () => {
         reason: "integration_disconnected",
       }),
     ]);
+    expect(executeRunControlCommand).not.toHaveBeenCalled();
+  });
+
+  it("names what the webhook is missing when the rest of the connection works", async () => {
+    // Slack posts run notifications fine and was never given its signing
+    // secret: "not connected" would send the admin to a connection that works.
+    state.usable = [];
+    state.states = new Map([["slack", { enabled: true, connection: "connected" }]]);
+
+    const response = await app()(request("slack", "list"));
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("webhook needs its Signing secret");
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 

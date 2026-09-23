@@ -4,11 +4,8 @@
 // boolean for a switch. This module is the only place that turns those back
 // into registry values and works out which of them actually changed, so the
 // PATCH carries the keys the operator touched and nothing else.
-import {
-  findSettingDefinition,
-  type SettingValue,
-  type SettingsEntryView,
-} from "@shared/contracts";
+import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import type { SettingValue, SettingsEntryView } from "@shared/contracts";
 
 /** One form field's live value, keyed by registry key. */
 export type SettingsDraft = Readonly<Record<string, string | boolean>>;
