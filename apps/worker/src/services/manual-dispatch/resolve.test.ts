@@ -356,7 +356,7 @@ describe("manual dispatch against a definition repository pin", () => {
     id: "jira",
     name: "Jira",
     adapter: issueTracker,
-    wiring: { projectKey: "AIW", baseUrl: "https://tracker.example" },
+    wiring: { projectKey: "AIW", connection: "tracker-connection" },
   } as unknown as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
 
   function deployed(

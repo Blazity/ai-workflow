@@ -23,7 +23,7 @@ vi.mock("../../engine/support/issue-tracker-runtime.js", () => ({
     id: "jira",
     name: "Jira",
     adapter: {},
-    wiring: { projectKey: "AIW", baseUrl: "https://acme.atlassian.net" },
+    wiring: { projectKey: "AIW", connection: "tracker-connection" },
   }),
 }));
 const {

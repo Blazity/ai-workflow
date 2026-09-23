@@ -11,6 +11,7 @@ import {
   checkIntegrationConformance,
   readProviderFailure,
   VCS_BOT_LOGIN_FIELD,
+  ISSUE_TRACKER_BOARD_FIELDS,
   VCS_LEGACY_BOT_LOGIN_FIELD,
   z,
   type ConformanceCode,
@@ -580,6 +581,44 @@ test("a tracker says how it reads an authored query, and only a tracker does", (
   const notATracker = validIntegration();
   notATracker.runtime.issueTrackerQueryRule = { problem: () => null };
   hasIssue(notATracker.manifest, notATracker.runtime, "issue_tracker_query_rule_undeclared", "runtime.issueTrackerQueryRule");
+});
+
+test("a tracker declares its board fields under the keys core reads", () => {
+  // Core reads the project and the transition ids by these keys, never by a
+  // tracker's own names; a tracker that spelled them its own way would work
+  // its board with no project check and every move by bare name.
+  const asTracker = () => {
+    const tracker = validIntegration();
+    tracker.manifest.capabilities = ["messaging", "issue_tracker"];
+    tracker.runtime.capabilities = { ...tracker.runtime.capabilities, issue_tracker: () => ({}) };
+    tracker.runtime.issueTrackerQueryRule = { problem: () => null };
+    return tracker;
+  };
+  const project = { key: ISSUE_TRACKER_BOARD_FIELDS.projectKey, label: "Project", env: "ACME_PROJECT", secret: false };
+
+  const missing = asTracker();
+  hasIssue(missing.manifest, missing.runtime, "issue_tracker_board_field_invalid", "connection.fields");
+
+  const declared = asTracker();
+  (declared.manifest.connection.fields as unknown[]).push(project, {
+    key: ISSUE_TRACKER_BOARD_FIELDS.aiTransitionId,
+    label: "AI transition",
+    env: "ACME_AI_TRANSITION",
+    secret: false,
+    optional: true,
+  });
+  assert.ok(!codes(declared.manifest, declared.runtime).includes("issue_tracker_board_field_invalid"));
+
+  // A transition id core must be able to do without cannot be required.
+  const required = asTracker();
+  (required.manifest.connection.fields as unknown[]).push(project, {
+    key: ISSUE_TRACKER_BOARD_FIELDS.backlogTransitionId,
+    label: "Backlog transition",
+    env: "ACME_BACKLOG_TRANSITION",
+    secret: false,
+  });
+  const index = required.manifest.connection.fields.length - 1;
+  hasIssue(required.manifest, required.runtime, "issue_tracker_board_field_invalid", `connection.fields[${index}]`);
 });
 
 test("a field a graph must read is one the block's output declares", () => {

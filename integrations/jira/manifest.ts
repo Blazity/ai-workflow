@@ -1,4 +1,4 @@
-import { defineIntegration } from "@integrations/sdk";
+import { defineIntegration, ISSUE_TRACKER_BOARD_FIELDS } from "@integrations/sdk";
 
 /**
  * The id is exactly `jira` and it is permanent.
@@ -38,7 +38,7 @@ export const manifest = defineIntegration({
         // every run in flight on an ordinary token rotation.
       },
       {
-        key: "projectKey",
+        key: ISSUE_TRACKER_BOARD_FIELDS.projectKey,
         label: "Project key",
         description: "The project whose tickets this deployment watches, such as ACME.",
         env: "JIRA_PROJECT_KEY",
@@ -54,7 +54,7 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "backlogTransitionId",
+        key: ISSUE_TRACKER_BOARD_FIELDS.backlogTransitionId,
         label: "Backlog transition id",
         description:
           "Set this when the backlog column can only be reached through a named transition rather than by its status name.",
@@ -63,7 +63,7 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "aiTransitionId",
+        key: ISSUE_TRACKER_BOARD_FIELDS.aiTransitionId,
         label: "AI column transition id",
         description:
           "Set this when the AI column can only be reached through a named transition rather than by its status name.",
@@ -72,7 +72,7 @@ export const manifest = defineIntegration({
         optional: true,
       },
       {
-        key: "aiReviewTransitionId",
+        key: ISSUE_TRACKER_BOARD_FIELDS.aiReviewTransitionId,
         label: "AI Review transition id",
         description:
           "Set this when the AI Review column can only be reached through a named transition rather than by its status name.",

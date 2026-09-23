@@ -23,6 +23,7 @@
  */
 import type { IntegrationConnectionPin } from "@shared/contracts";
 import { integrationManifests } from "@integrations/registry";
+import { ISSUE_TRACKER_BOARD_FIELDS } from "@integrations/sdk";
 import { oneProviderChoiceOf } from "../definition/integration-availability.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { ISSUE_TRACKER_PUBLICATIONS, redactingPublications } from "./publication-redaction.js";
@@ -43,15 +44,20 @@ const NO_PROVIDER =
  * status name. Core carries them without knowing what they mean; the provider
  * is what turns a transition id into a move.
  */
+/**
+ * The board wiring core reads from the active tracker's connection, by the
+ * SDK's keys (`ISSUE_TRACKER_BOARD_FIELDS`), never by a tracker's own names.
+ */
 export interface IssueTrackerWiring {
   readonly projectKey: string;
   /**
-   * Where the tracker's site is, as its connection says, for telling one
-   * connection from another (`trackerIdentityOf`). Never a link: how a ticket
-   * is linked is the tracker's own answer (`ticketUrl` on the port,
-   * `ticket-url.ts`).
+   * Which connection this is, for telling one from another
+   * (`trackerIdentityOf`): the connection's configuration fingerprint, the
+   * value a run pins. Opaque, and it moves whenever a non-secret value or an
+   * identity secret does, which is exactly when a status id resolved against
+   * the old connection may no longer mean anything.
    */
-  readonly baseUrl: string;
+  readonly connection: string;
   readonly backlogTransitionId?: string;
   readonly aiTransitionId?: string;
   readonly aiReviewTransitionId?: string;
@@ -217,6 +223,7 @@ export async function resolveActiveIssueTracker(
   }
 
   const connection = only.ctx.connection as Record<string, unknown>;
+  const board = ISSUE_TRACKER_BOARD_FIELDS;
   return {
     ok: true,
     id: only.manifest.id,
@@ -226,11 +233,11 @@ export async function resolveActiveIssueTracker(
     // `publication-redaction.ts` lists.
     adapter: redactingPublications(adapter, ISSUE_TRACKER_PUBLICATIONS),
     wiring: {
-      projectKey: text(connection.projectKey),
-      baseUrl: text(connection.baseUrl),
-      ...optional("backlogTransitionId", connection.backlogTransitionId),
-      ...optional("aiTransitionId", connection.aiTransitionId),
-      ...optional("aiReviewTransitionId", connection.aiReviewTransitionId),
+      projectKey: text(connection[board.projectKey]),
+      connection: resolved.states.get(only.manifest.id)?.pin.configFingerprint ?? "",
+      ...optional("backlogTransitionId", connection[board.backlogTransitionId]),
+      ...optional("aiTransitionId", connection[board.aiTransitionId]),
+      ...optional("aiReviewTransitionId", connection[board.aiReviewTransitionId]),
     },
   };
 }
@@ -245,8 +252,8 @@ export async function resolveActiveIssueTracker(
  * with two callers (the board, the reconciler), so a cache written by one and
  * read by the other agrees with itself.
  */
-export function trackerIdentityOf(id: string, baseUrl: string): string {
-  return `${id}\u0000${baseUrl.trim().toLowerCase()}`;
+export function trackerIdentityOf(id: string, connection: string): string {
+  return `${id}\u0000${connection}`;
 }
 
 /**

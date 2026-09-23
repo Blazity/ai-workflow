@@ -8,6 +8,28 @@
  * leftovers still in this port (a transition id named after Jira's, a Node
  * `Buffer`) are listed as debt in ADR-010 with what removes each.
  */
+/**
+ * The connection fields core reads from an issue tracker to work its board,
+ * by key: every tracker declares them under these keys, so core names no
+ * tracker's own field.
+ *
+ * - `projectKey` (required): the project whose tickets this deployment works,
+ *   compared against a ticket's own project before a run is dispatched.
+ * - `backlogTransitionId`, `aiTransitionId`, `aiReviewTransitionId`
+ *   (optional, each): the provider's own id for the move into that column,
+ *   for a board that cannot be moved by status name. Absent means the move is
+ *   by the column's name.
+ *
+ * The values are stored under these keys on every deployment, so they never
+ * change. Conformance holds a tracker to them.
+ */
+export const ISSUE_TRACKER_BOARD_FIELDS = {
+  projectKey: "projectKey",
+  backlogTransitionId: "backlogTransitionId",
+  aiTransitionId: "aiTransitionId",
+  aiReviewTransitionId: "aiReviewTransitionId",
+} as const;
+
 export interface TicketContent {
   id: string;
   identifier: string;

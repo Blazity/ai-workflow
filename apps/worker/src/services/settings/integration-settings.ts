@@ -60,7 +60,7 @@ export async function ticketBoardOf(
   const { trackerIdentityOf } = await import("../../engine/support/issue-tracker-runtime.js");
   return {
     trackerName: tracker.name,
-    trackerIdentity: trackerIdentityOf(tracker.id, tracker.wiring.baseUrl),
+    trackerIdentity: trackerIdentityOf(tracker.id, tracker.wiring.connection),
     projectKey: tracker.wiring.projectKey,
     aiColumn: settings.COLUMN_AI,
     aiReviewColumn: settings.COLUMN_AI_REVIEW,

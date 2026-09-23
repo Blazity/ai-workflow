@@ -18,8 +18,7 @@ vi.mock("../../engine/support/issue-tracker-runtime.js", () => ({
   resolveActiveIssueTracker,
   // The real derivation: a board and the reconciler both build this string,
   // and a cache written under one and read under the other has to agree.
-  trackerIdentityOf: (id: string, baseUrl: string) =>
-    `${id}\u0000${baseUrl.trim().toLowerCase()}`,
+  trackerIdentityOf: (id: string, connection: string) => `${id}\u0000${connection}`,
 }));
 
 function trackerConnected(
@@ -31,7 +30,7 @@ function trackerConnected(
     id: "jira",
     name: "Jira",
     adapter: ticketUrl ? { ticketUrl } : {},
-    wiring: { projectKey: "PROJ", baseUrl: "", ...wiring },
+    wiring: { projectKey: "PROJ", connection: "tracker-connection", ...wiring },
   });
 }
 
@@ -54,10 +53,10 @@ describe("integration settings", () => {
     // running. A module-level snapshot would keep publishing links to the old
     // one. And the link is the tracker's own: a Site URL saved with a path is
     // the tracker's to read, not core's to paste in front of /browse/.
-    trackerConnected({ baseUrl: "https://one.example/jira" }, (key) => `https://one.example/browse/${key}`);
+    trackerConnected({ connection: "one" }, (key) => `https://one.example/browse/${key}`);
     expect((await issueTrackerTicketLinks())("AWT-1")).toBe("https://one.example/browse/AWT-1");
 
-    trackerConnected({ baseUrl: "https://two.example" }, (key) => `https://two.example/t/${key}`);
+    trackerConnected({ connection: "two" }, (key) => `https://two.example/t/${key}`);
     expect((await issueTrackerTicketLinks())("AWT-1")).toBe("https://two.example/t/AWT-1");
   });
 

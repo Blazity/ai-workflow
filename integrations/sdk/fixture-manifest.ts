@@ -63,6 +63,7 @@ export const fixtureManifest = defineIntegration({
     fields: [
       { key: "baseUrl", label: "Site URL", env: "SDKFIXTURE_BASE_URL", secret: false, format: "url" },
       { key: "apiToken", label: "API token", env: "SDKFIXTURE_API_TOKEN", secret: true },
+      { key: "projectKey", label: "Project key", env: "SDKFIXTURE_PROJECT_KEY", secret: false },
       { key: "appId", label: "App id", env: "SDKFIXTURE_APP_ID", secret: false, format: "integer" },
       {
         key: "privateKey",

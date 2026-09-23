@@ -251,6 +251,15 @@ connection, and only while exactly one tracker is connected, in two places:
   (or does not run when there are none), and the block's theory says so in a
   sentence, with a warning in the log.
 
+**A tracker's board is read by the SDK's keys.** Core checks a ticket's
+project and moves it between columns from connection fields it reads by the
+keys in `ISSUE_TRACKER_BOARD_FIELDS` (`integrations/sdk/issue-tracker.ts`), not
+by your own names: `projectKey` required and non-secret, and
+`backlogTransitionId`, `aiTransitionId` and `aiReviewTransitionId` optional and
+non-secret when your board moves by transition id (without them core moves by
+column name). Conformance holds you to that
+(`issue_tracker_board_field_invalid`).
+
 **A block uses a capability by requiring it**, not by serving it. List it in
 the block's `requires.capabilities` and the editor offers the block only
 while the capability is served here; the executor's `ctx.capabilities` then

@@ -165,7 +165,7 @@ function connected(adapter: IssueTrackerAdapter, wiring: Partial<ConnectedIssueT
     id: "jira",
     name: "Jira",
     adapter,
-    wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example", ...wiring },
+    wiring: { projectKey: "PROJ", connection: "tracker-connection", ...wiring },
   };
 }
 

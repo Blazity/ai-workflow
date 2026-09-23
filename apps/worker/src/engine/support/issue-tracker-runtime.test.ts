@@ -35,7 +35,13 @@ async function readAsTheResolverWould(...args: unknown[]): Promise<unknown> {
   const states = new Map(result.states ?? []);
   for (const entry of result.usable ?? []) {
     if (!registered.some((manifest) => manifest.id === entry.manifest.id)) registered.push(entry.manifest);
-    if (!states.has(entry.manifest.id)) states.set(entry.manifest.id, { status: "connected", usable: true });
+    if (!states.has(entry.manifest.id)) {
+      states.set(entry.manifest.id, {
+        status: "connected",
+        usable: true,
+        pin: { integrationId: entry.manifest.id, configFingerprint: `${entry.manifest.id}@fingerprint` },
+      });
+    }
   }
   return { ...result, states, connectionFailures: result.connectionFailures ?? new Map() };
 }
@@ -146,7 +152,9 @@ describe("resolveActiveIssueTracker", () => {
       ok: true,
       id: "test tracker",
       name: "Test Tracker",
-      wiring: { projectKey: "AIW", baseUrl: "https://acme.example", aiTransitionId: "21" },
+      // Identified by the connection's fingerprint, the value a run pins,
+      // never by a field of one tracker's own naming.
+      wiring: { projectKey: "AIW", connection: "test tracker@fingerprint", aiTransitionId: "21" },
     });
   });
 
@@ -165,7 +173,7 @@ describe("resolveActiveIssueTracker", () => {
     expect(resolved.ok).toBe(true);
     expect(resolved.ok && resolved.wiring).toEqual({
       projectKey: "AIW",
-      baseUrl: "https://acme.example",
+      connection: "test tracker@fingerprint",
     });
   });
 

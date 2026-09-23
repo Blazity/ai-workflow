@@ -92,7 +92,7 @@ beforeEach(async () => {
       id: "jira",
       name: "Jira",
       adapter: {} as never,
-      wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example" },
+      wiring: { projectKey: "PROJ", connection: "tracker-connection" },
     },
     vcs: {} as Adapters["vcs"],
     messaging: {} as Adapters["messaging"],

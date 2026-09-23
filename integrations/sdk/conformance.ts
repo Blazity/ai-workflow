@@ -9,6 +9,7 @@ import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
 import { connectionValueProblem, integrationSettingKey } from "./manifest";
 import { VCS_BOT_LOGIN_FIELD, VCS_LEGACY_BOT_LOGIN_FIELD } from "./vcs";
+import { ISSUE_TRACKER_BOARD_FIELDS } from "./issue-tracker";
 
 /**
  * The check every integration package passes in CI (S1 runs it over each one).
@@ -33,6 +34,7 @@ export type ConformanceCode =
   | "connection_default_invalid"
   | "connection_identity_not_secret"
   | "connection_required_field_missing"
+  | "issue_tracker_board_field_invalid"
   | "connection_connectionless_has_required"
   | "repositories_invalid"
   | "vcs_bot_login_missing"
@@ -358,6 +360,7 @@ export function checkIntegrationConformance(
   checkCapabilities(declared, implemented, report);
   checkRepositories(declared, report);
   checkVcsBotLogin(declared, report);
+  checkIssueTrackerBoardFields(declared, report);
   checkBlocks(declared, implemented, report);
   checkHealth(declared, implemented, report);
   checkPages(declared, implemented, report);
@@ -641,6 +644,35 @@ function checkVcsBotLogin(manifest: ParsedManifest, report: Report) {
       `"${VCS_BOT_LOGIN_FIELD}" is a login, not a credential: declare it secret: false.`,
     );
   }
+}
+
+function checkIssueTrackerBoardFields(manifest: ParsedManifest, report: Report) {
+  if (!manifest.capabilities.includes("issue_tracker")) return;
+  const fields = manifest.connection.fields;
+  const projectIndex = fields.findIndex((field) => field.key === ISSUE_TRACKER_BOARD_FIELDS.projectKey);
+  const project = fields[projectIndex];
+  if (project === undefined || project.optional === true || project.secret) {
+    report(
+      "issue_tracker_board_field_invalid",
+      project === undefined ? "connection.fields" : `connection.fields[${projectIndex}]`,
+      `An issue tracker declares the project it works as a required, non-secret connection field keyed "${ISSUE_TRACKER_BOARD_FIELDS.projectKey}", which is where core reads it before dispatching a ticket.`,
+    );
+  }
+  const transitions = [
+    ISSUE_TRACKER_BOARD_FIELDS.backlogTransitionId,
+    ISSUE_TRACKER_BOARD_FIELDS.aiTransitionId,
+    ISSUE_TRACKER_BOARD_FIELDS.aiReviewTransitionId,
+  ] as const;
+  fields.forEach((field, index) => {
+    if (!(transitions as readonly string[]).includes(field.key)) return;
+    if (field.optional !== true || field.secret) {
+      report(
+        "issue_tracker_board_field_invalid",
+        `connection.fields[${index}]`,
+        `"${field.key}" is read by core as an optional, non-secret transition id: absent means the move is by the column's name. Declare it optional: true and secret: false.`,
+      );
+    }
+  });
 }
 
 /** Reports an unknown or reserved capability id; true when the id has a port. */

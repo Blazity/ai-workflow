@@ -245,7 +245,7 @@ export async function reconcileRuns(
           // What identifies the tracker these answers came from, for anything
           // that caches across passes: an admin repointing the connection makes
           // every status id from the old instance meaningless.
-          identity: trackerIdentityOf(tracker.id, tracker.wiring.baseUrl),
+          identity: trackerIdentityOf(tracker.id, tracker.wiring.connection),
         }
       : null;
 

@@ -25,8 +25,8 @@ import { ticketSubjectKey } from "../engine/support/subject-key.js";
 export interface ConnectedIssueTrackerDouble {
   /** The project this deployment watches. Defaults to `PROJ`. */
   projectKey?: string;
-  /** Where the tracker's site is, which identifies the connection. */
-  baseUrl?: string;
+  /** Which connection this is (its configuration fingerprint). */
+  connection?: string;
   /**
    * How this tracker links a ticket (the port's `ticketUrl`), for a suite
    * about the links core publishes. Absent, the tracker gives no links. Used
@@ -52,7 +52,7 @@ export interface ConnectedIssueTrackerDouble {
 export function connectedIssueTracker(options: ConnectedIssueTrackerDouble = {}) {
   const wiring = {
     projectKey: options.projectKey ?? "PROJ",
-    baseUrl: options.baseUrl ?? "https://tracker.example",
+    connection: options.connection ?? "tracker-connection",
     ...(options.backlogTransitionId
       ? { backlogTransitionId: options.backlogTransitionId }
       : {}),
@@ -75,8 +75,8 @@ export function connectedIssueTracker(options: ConnectedIssueTrackerDouble = {})
     // and agree nowhere else.
     // The real derivation, so a value the board caches and the reconciler
     // reads back agree in a suite exactly as they do in production.
-    trackerIdentityOf: (trackerId: string, baseUrl: string) =>
-      `${trackerId}\u0000${baseUrl.trim().toLowerCase()}`,
+    trackerIdentityOf: (trackerId: string, connection: string) =>
+      `${trackerId}\u0000${connection}`,
     ticketSubject: vi.fn(async (ticketKey: string) => ticketSubjectKey("jira", ticketKey)),
     trackerMoveTarget: vi.fn(
       async (columnName: string, which: "backlog" | "ai" | "aiReview") => {
@@ -110,8 +110,8 @@ export function noIssueTrackerConnected(
     })),
     issueTrackerWiring: vi.fn(refuse),
     issueTrackerName: vi.fn(async () => "the issue tracker"),
-    trackerIdentityOf: (trackerId: string, baseUrl: string) =>
-      `${trackerId}\u0000${baseUrl.trim().toLowerCase()}`,
+    trackerIdentityOf: (trackerId: string, connection: string) =>
+      `${trackerId}\u0000${connection}`,
     ticketSubject: vi.fn(refuse),
     trackerMoveTarget: vi.fn(refuse),
   };
@@ -161,7 +161,7 @@ export function adaptersFor(
           id: "jira",
           name: "Jira",
           adapter: tracker,
-          wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example" },
+          wiring: { projectKey: "PROJ", connection: "tracker-connection" },
         };
   return { ...rest, issueTrackerResolution } as Adapters;
 }

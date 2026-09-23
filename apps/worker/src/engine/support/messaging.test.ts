@@ -36,7 +36,13 @@ async function readAsTheResolverWould(...args: unknown[]): Promise<unknown> {
   const states = new Map(result.states ?? []);
   for (const entry of result.usable ?? []) {
     if (!registered.some((manifest) => manifest.id === entry.manifest.id)) registered.push(entry.manifest);
-    if (!states.has(entry.manifest.id)) states.set(entry.manifest.id, { status: "connected", usable: true });
+    if (!states.has(entry.manifest.id)) {
+      states.set(entry.manifest.id, {
+        status: "connected",
+        usable: true,
+        pin: { integrationId: entry.manifest.id, configFingerprint: `${entry.manifest.id}@fingerprint` },
+      });
+    }
   }
   return { ...result, states, connectionFailures: result.connectionFailures ?? new Map() };
 }
@@ -69,7 +75,6 @@ vi.mock("../../infra/logger.js", () => ({
 // `issue-tracker-runtime.test.ts`.
 vi.mock("./issue-tracker-runtime.js", () =>
   connectedIssueTracker({
-    baseUrl: "https://acme.atlassian.net/jira",
     ticketUrl: (key) => (key.startsWith("AWT-") ? `https://tracker.example/t/${key}` : null),
   }),
 );

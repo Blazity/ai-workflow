@@ -190,6 +190,7 @@ export {
 } from "./conformance";
 
 export {
+  ISSUE_TRACKER_BOARD_FIELDS,
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
   type IssueTrackerQueryRule,
