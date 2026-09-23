@@ -418,6 +418,10 @@ describe("memory routes answer for the provider, not for the store", () => {
     expect(await statuses()).toEqual([503, 503, 503]);
     const body = await (await get(documentQuery(SUBJECT_KEY, DOC_PATH))).text();
     expect(body).toContain("Acme Memory");
+    // The next step travels with it: a screen quoting this sentence has no
+    // other way to know that waiting, then the connection, is the fix.
+    expect(body).toContain("Try again in a moment");
+    expect(body).toContain("Integrations page");
   });
 
   it("404s the document rather than 501 when the provider can enumerate", async () => {
