@@ -1,4 +1,4 @@
-import { canEditSettings } from "@shared/contracts";
+import { canEditSettings, canResetSettings } from "@shared/contracts";
 import type {
   RepositoryCatalogListResponse,
   SettingsReadResponse,
@@ -53,6 +53,7 @@ export async function SettingsData() {
       scanReadable={scanReadable}
       catalogState={catalog?.state ?? null}
       canEdit={canEditSettings(session.role)}
+      canReset={canResetSettings(session.role)}
       available={settings !== null}
     />
   );

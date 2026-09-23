@@ -7,6 +7,7 @@ import { settingDefinition } from "@integrations/registry";
 import {
   SETTING_LIST_ENTRY_RULE,
   type SettingValue,
+  type SettingsFallbackView,
   type SettingsInFlightRule,
   type SettingsSource,
 } from "@shared/contracts";
@@ -71,9 +72,9 @@ export function settingLabel(key: string): string {
  * sees what the first execution saw.
  */
 export const SETTINGS_CADENCE_NOTICE =
-  "Values saved here are stored and read by the worker per request, cron " +
-  "tick and MCP call. Each setting says whether a change applies immediately " +
-  "or to the next run.";
+  "A stored setting is read by the worker per request, cron tick and MCP " +
+  "call. Each setting says whether a change applies immediately or to the " +
+  "next run.";
 
 /** The label above a field's resolved value. Deliberately not "in force": what
  *  a run already under way uses is the snapshot it started with, which the
@@ -124,16 +125,37 @@ export function formatSettingTimestamp(value: string): string {
   return formatDateTime(value);
 }
 
-/** Who made a recorded change. The store keeps the user id, not a display name,
- *  so the label says which one it is rather than passing an opaque string off
- *  as a person's name. */
-export function formatSettingActor(actor: string): string {
+/** Who made a recorded change. The worker names the person behind a user id
+ *  (`actorLabel`: their name, else their email) and echoes the id when no user
+ *  has it; only then does the text say it is an id, rather than passing an
+ *  opaque string off as a person's name. */
+export function formatSettingActor(actor: string, actorLabel?: string): string {
+  if (actorLabel !== undefined && actorLabel !== actor) return `by ${actorLabel}`;
   if (actor === "migration") return "by the seed migration";
   // Not a person either: the worker writing a value it found in its own
   // environment so the variable can be retired. "by user environment import"
   // would read as somebody's account name.
   if (actor === "environment import") return "by the environment import";
   return `by user ${actor}`;
+}
+
+/**
+ * What answers for a key once its stored value is removed, as the removal
+ * confirmation says it. `variable` is the environment variable the key names,
+ * from the registry. Without a fallback (a worker from before the field) it
+ * says what is known instead of inventing a value.
+ */
+export function fallbackSentence(
+  fallback: SettingsFallbackView | undefined,
+  variable: string | undefined,
+): string {
+  if (fallback === undefined) {
+    return "The environment variable or, without one, the built-in default takes over.";
+  }
+  const value = displaySettingValue(fallback.value);
+  return fallback.source === "environment" && variable !== undefined
+    ? `${value} takes over, from the environment variable ${variable}.`
+    : `${value} takes over: the built-in default.`;
 }
 
 /**

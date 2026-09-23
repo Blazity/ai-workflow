@@ -6,7 +6,9 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { settingDefinition } from "@integrations/registry";
 import type { RepositoryCatalogState, SettingsEntryView } from "@shared/contracts";
 
+import { groupSettings } from "@/lib/settings/groups";
 import { hasUnsavedSettings, resetUnsavedSettings } from "@/lib/settings/unsaved";
+import { SettingsGroupForm } from "./settings-group-form";
 import { SettingsScreen } from "./settings-screen";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -18,6 +20,13 @@ import { SettingsScreen } from "./settings-screen";
 // next/link's intersection observer reaches for `self` on mount, and the page
 // links to the Repositories page from two places.
 (globalThis as { self?: typeof globalThis }).self ??= globalThis;
+// The shared Modal opens on an animation frame, which node has no browser to
+// give it. Running the callback at once is what a test wants anyway.
+globalThis.requestAnimationFrame ??= ((callback: FrameRequestCallback) => {
+  callback(0);
+  return 0;
+}) as typeof globalThis.requestAnimationFrame;
+globalThis.cancelAnimationFrame ??= (() => {}) as typeof globalThis.cancelAnimationFrame;
 
 function entry(
   key: string,
@@ -110,7 +119,7 @@ test("the standing caveat states the read cadence, not a worker that ignores the
   // Since stage B1 the worker loads a settings snapshot per request, cron tick
   // and MCP call, so the old sentence was the falsehood on this page.
   const root = render(t);
-  assert.match(text(root), /Values saved here are stored and read/);
+  assert.match(text(root), /A stored setting is read by the worker/);
   assert.match(text(root), /per request, cron tick and MCP call/);
   assert.doesNotMatch(text(root), /still reads most settings from its environment/);
 });
@@ -260,4 +269,290 @@ test("an emptied number field is refused before a request is made", (t) => {
 
   assert.equal(fetched, false, "an empty required number reached the worker");
   assert.match(text(root), /Enter a whole number, at least 1/);
+});
+
+interface Sent {
+  url: string;
+  method: string | undefined;
+  body: unknown;
+}
+
+/** Answers every request with the next reply in order, and records it. */
+function stubReplies(t: TestContext, replies: Array<{ status: number; body: unknown }>): Sent[] {
+  const sent: Sent[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    sent.push({
+      url: String(url),
+      method: init?.method,
+      body: init?.body === undefined ? null : JSON.parse(String(init.body)),
+    });
+    const reply = replies.shift() ?? { status: 500, body: { error: "unexpected request" } };
+    return Promise.resolve(
+      new Response(JSON.stringify(reply.body), {
+        status: reply.status,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }) as typeof globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  return sent;
+}
+
+function buttonLabelled(root: ReactTestInstance, label: string): ReactTestInstance {
+  const found = root.findAll((node) => node.type === "button" && text(node).includes(label));
+  assert.ok(found.length > 0, `no button labelled ${label}`);
+  return found[0]!;
+}
+
+async function press(node: ReactTestInstance): Promise<void> {
+  await act(async () => {
+    node.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+}
+
+function typeInto(node: ReactTestInstance, value: string): void {
+  act(() => {
+    node.props.onChange?.({ target: { value } });
+  });
+}
+
+function versionOf(id: number, newValue: SettingsEntryView["value"], actorLabel: string) {
+  return {
+    id,
+    key: "MAX_CONCURRENT_AGENTS",
+    previousValue: 3,
+    newValue,
+    actor: "usr_ada",
+    actorLabel,
+    reason: "their reason",
+    createdAt: "2026-09-23T12:00:00.000Z",
+  };
+}
+
+test("a second tab's save is refused, keeps what was typed, and offers both ways out", async (t) => {
+  // QA: two tabs on /settings, the second store silently overwrote the first.
+  const root = render(t);
+  const field = () =>
+    root.find((node) => node.props?.["aria-label"] === "Value of MAX_CONCURRENT_AGENTS");
+  typeInto(field(), "9");
+  typeInto(
+    root.find(
+      (node) => node.type === "input" && node.props?.["aria-label"] === "Reason for changing Capacity",
+    ),
+    "more capacity",
+  );
+
+  const won = entry("MAX_CONCURRENT_AGENTS", 5, {
+    source: "stored",
+    lastVersion: versionOf(12, 5, "ada@example.com"),
+  });
+  const sent = stubReplies(t, [
+    {
+      status: 409,
+      body: {
+        error: "settings_version_conflict",
+        conflicts: [
+          { key: "MAX_CONCURRENT_AGENTS", expectedVersion: 0, currentVersion: 12, setting: won },
+        ],
+      },
+    },
+    { status: 200, body: { settings: [{ ...won, value: 9, lastVersion: versionOf(13, 9, "me") }], versions: [] } },
+  ]);
+
+  await press(buttonLabelled(root, "Store 1 change"));
+
+  // The save carried the version this tab loaded.
+  assert.ok(sent[0], "the save never reached the worker");
+  assert.deepEqual((sent[0].body as { expectedVersions?: unknown }).expectedVersions, {
+    MAX_CONCURRENT_AGENTS: 0,
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Max concurrent agents was changed by ada@example\.com on /);
+  assert.match(rendered, /it is now 5\./);
+  assert.match(rendered, /Nothing was stored/);
+  assert.equal(field().props.value, "9", "the typed value was thrown away");
+  assert.equal(hasUnsavedSettings(), true, "the kept edit stopped counting as unsaved");
+
+  // Storing over it is a decision made after seeing it, so it carries the
+  // version that won.
+  await press(buttonLabelled(root, "Store mine anyway"));
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1]?.body, {
+    settings: { MAX_CONCURRENT_AGENTS: 9 },
+    reason: "more capacity",
+    expectedVersions: { MAX_CONCURRENT_AGENTS: 12 },
+  });
+  assert.match(text(root), /Stored 1 setting/);
+});
+
+test("taking theirs drops the edit to the conflicting key and stores nothing", async (t) => {
+  const root = render(t);
+  typeInto(
+    root.find((node) => node.props?.["aria-label"] === "Value of MAX_CONCURRENT_AGENTS"),
+    "9",
+  );
+  typeInto(
+    root.find(
+      (node) => node.type === "input" && node.props?.["aria-label"] === "Reason for changing Capacity",
+    ),
+    "more capacity",
+  );
+  const won = entry("MAX_CONCURRENT_AGENTS", 5, {
+    source: "stored",
+    lastVersion: versionOf(12, 5, "ada@example.com"),
+  });
+  const sent = stubReplies(t, [
+    {
+      status: 409,
+      body: {
+        error: "settings_version_conflict",
+        conflicts: [
+          { key: "MAX_CONCURRENT_AGENTS", expectedVersion: 0, currentVersion: 12, setting: won },
+        ],
+      },
+    },
+  ]);
+  await press(buttonLabelled(root, "Store 1 change"));
+  await press(buttonLabelled(root, "Use theirs"));
+
+  assert.equal(
+    root.find((node) => node.props?.["aria-label"] === "Value of MAX_CONCURRENT_AGENTS").props.value,
+    "5",
+  );
+  assert.equal(sent.length, 1, "taking theirs sent a request");
+  assert.equal(hasUnsavedSettings(), false);
+});
+
+test("an owner removes a stored value after being told what takes over", async (t) => {
+  const stored = entry("MAX_CONCURRENT_AGENTS", 7, {
+    source: "stored",
+    lastVersion: versionOf(4, 7, "Filip"),
+    fallback: { value: 3, source: "default" },
+  });
+  const root = render(t, { settings: [stored], canReset: true });
+  await press(buttonLabelled(root, "Remove stored value"));
+
+  const dialog = text(root);
+  assert.match(dialog, /Remove the stored value of Max concurrent agents\?/);
+  assert.match(dialog, /3 takes over: the built-in default\./);
+  const confirm = () =>
+    root
+      .findAll((node) => node.type === "button" && text(node).includes("Remove stored value"))
+      .at(-1)!;
+  assert.equal(confirm().props.disabled, true, "removal went ahead without a reason");
+
+  typeInto(
+    root.find((node) => node.type === "input" && node.props?.placeholder === "Why is this going back? (required)"),
+    "back to the default",
+  );
+  const sent = stubReplies(t, [
+    {
+      status: 200,
+      body: {
+        removed: true,
+        setting: entry("MAX_CONCURRENT_AGENTS", 3, {
+          source: "default",
+          lastVersion: versionOf(5, 3, "Filip"),
+          fallback: { value: 3, source: "default" },
+        }),
+      },
+    },
+  ]);
+  await press(confirm());
+
+  assert.deepEqual(sent, [
+    {
+      url: "/api/settings/reset",
+      method: "POST",
+      body: { key: "MAX_CONCURRENT_AGENTS", reason: "back to the default", expectedVersion: 4 },
+    },
+  ]);
+  assert.match(text(root), /Removed the stored value of Max concurrent agents\. It now resolves to 3 \(default\)\./);
+  assert.equal(
+    root.findAll((node) => node.type === "button" && text(node).includes("Remove stored value")).length,
+    0,
+    "a value that is no longer stored still offered removal",
+  );
+});
+
+test("an admin is told who can remove a stored value instead of being offered a refused button", (t) => {
+  const stored = entry("MAX_CONCURRENT_AGENTS", 7, { source: "stored" });
+  const root = render(t, { settings: [stored], canReset: false });
+  assert.equal(
+    root.findAll((node) => node.type === "button" && text(node).includes("Remove stored value")).length,
+    0,
+  );
+  assert.match(text(root), /Only an owner can remove a stored value/);
+});
+
+test("a removal refused because the value changed says nothing was removed and shows the new value", async (t) => {
+  const stored = entry("MAX_CONCURRENT_AGENTS", 7, {
+    source: "stored",
+    lastVersion: versionOf(4, 7, "Filip"),
+    fallback: { value: 3, source: "default" },
+  });
+  const root = render(t, { settings: [stored], canReset: true });
+  await press(buttonLabelled(root, "Remove stored value"));
+  typeInto(
+    root.find((node) => node.type === "input" && node.props?.placeholder === "Why is this going back? (required)"),
+    "back to the default",
+  );
+  stubReplies(t, [
+    {
+      status: 409,
+      body: {
+        error: "settings_version_conflict",
+        conflicts: [
+          {
+            key: "MAX_CONCURRENT_AGENTS",
+            expectedVersion: 4,
+            currentVersion: 9,
+            setting: entry("MAX_CONCURRENT_AGENTS", 8, {
+              source: "stored",
+              lastVersion: versionOf(9, 8, "ada@example.com"),
+              fallback: { value: 3, source: "default" },
+            }),
+          },
+        ],
+      },
+    },
+  ]);
+  await press(
+    root
+      .findAll((node) => node.type === "button" && text(node).includes("Remove stored value"))
+      .at(-1)!,
+  );
+
+  const rendered = text(root);
+  assert.match(rendered, /changed by ada@example\.com/);
+  assert.match(rendered, /Nothing was removed/);
+  assert.doesNotMatch(rendered, /Store mine anyway/);
+  assert.equal(
+    root.find((node) => node.props?.["aria-label"] === "Value of MAX_CONCURRENT_AGENTS").props.value,
+    "8",
+  );
+});
+
+test("a panel that does not decide about removal offers neither the button nor the hint", (t) => {
+  // The Memory panel mounts the group form without saying who may remove.
+  resetUnsavedSettings();
+  const stored = entry("MAX_CONCURRENT_AGENTS", 7, { source: "stored" });
+  const [group] = groupSettings([stored]);
+  assert.ok(group);
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={{ refresh: () => {} } as never}>
+        <SettingsGroupForm group={group} canEdit />
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => {
+    act(() => renderer.unmount());
+    resetUnsavedSettings();
+  });
+  assert.doesNotMatch(text(renderer.root), /Remove stored value|Only an owner can remove/);
 });

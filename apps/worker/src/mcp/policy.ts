@@ -368,9 +368,10 @@ const CATALOG_ACTIVATE_POLICY = {
 
 // Clearing a stored value is owner-only for the reason activation is: it does
 // not set a value, it hands the key back to whatever the environment or the
-// registry default answers with, which is a value nobody on the call can see
-// without asking, and the run-facing effect is the same as any other settings
-// change.
+// registry default answers with, and the run-facing effect is the same as any
+// other settings change. The HTTP route (routes/api/v1/settings/reset.post.ts)
+// applies the same rule through `canResetSettings`, and a test holds the two
+// equal; widening either is one decision for both.
 const SETTINGS_RESET_POLICY = {
   ...SETTINGS_CONFIG_POLICY,
   roles: ["owner"],
