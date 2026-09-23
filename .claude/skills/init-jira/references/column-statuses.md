@@ -1,6 +1,6 @@
 # Column statuses — the most common silent failure
 
-AI Workflow polls Jira with this JQL every minute:
+AI Workflow polls Jira with this JQL every 15 minutes (`apps/worker/vercel.json`), and a Jira trigger can override the column per workflow:
 
 ```jql
 project = "$JIRA_PROJECT_KEY" AND status = "<configured AI status>"

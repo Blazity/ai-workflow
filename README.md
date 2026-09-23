@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-23
 
 # AI Workflow
 
@@ -102,7 +102,7 @@ See [workflow definitions](./docs/architecture/workflow-definition.md) for the g
 
 ## Get Started
 
-Follow [SETUP.md](./SETUP.md) for local development, environment variables, and deployment.
+Follow [SETUP.md](./SETUP.md) for accounts, environment variables, and deployment, and [apps/worker/AGENTS.md](./apps/worker/AGENTS.md) for running the worker locally.
 
 Version-control setup:
 
@@ -117,6 +117,7 @@ ai-workflow/
 │   ├── worker/      # Events, orchestration, agents, adapters, and APIs
 │   └── dashboard/   # Workflow authoring, observability, and administration
 ├── packages/        # Pure code with two consumers: contracts, prompts, agent visibility
+├── integrations/    # One package per third party (Jira, Slack, GitHub, GitLab, Arthur, Mem0) plus the SDK
 ├── docs/            # index.md lists every current document
 ├── SETUP.md
 └── package.json

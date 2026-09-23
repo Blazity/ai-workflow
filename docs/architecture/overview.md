@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-23
 
 # The services tier
 
@@ -19,26 +19,28 @@ what lives inside the tier.
 
 A services file may import `engine/`, `adapters/`, `db/`, `infra/` and the
 workspace packages. It may not import `app/` (`routes/`, `mcp/`, middleware,
-plugins, `auth.ts`) or `config/`. The boundary gate counts every violation and
+plugins, `auth.ts`). The boundary gate counts every violation and
 fails on growth, so the table below states only what each cluster owns.
 
-Five directories keep their old names because stage 7 still owns the store
-files inside them: `approvals/`, `clarifications/`, `manual-dispatch/`,
-`schedule-trigger/` and `webhook-trigger/` each retain a `store.ts`,
-`*-store.ts` or `*-schema.ts` that becomes a repository in stage 7. Everything
-else in those directories moved into the matching services cluster.
+Two top-level directories outside the tier keep their old names:
+`apps/worker/src/schedule-trigger/` and `apps/worker/src/webhook-trigger/` each
+hold only a compatibility re-export of their repository in `db/repositories/`
+and its test. Everything else moved into the matching services cluster.
 
 ## The clusters
 
 | Cluster | What it owns |
 |---|---|
-| `approvals/` | Turning an approved plan into a new run, on top of the approval store that stage 7 still owns |
+| `agent-visibility/` | The record of what one send gave a model, and of every answer a repository question received (read half; capture lives in `run-observability/`) |
+| `approvals/` | Turning an approved plan into a new run |
 | `auth/` | Dashboard identity: roles, invites, SSO handoff, trusted origins, the seeded auth environment, and the request actor |
+| `capabilities/` | The capability overview: which connected integration serves each capability, read through the resolver a run uses |
 | `clarifications/` | The clarification lifecycle outside its store: answering and resuming, expiry, checkpoints, and comment formatting |
 | `dispatch/` | Trigger ingestion and run dispatch: eligibility, rate limits, delivery bookkeeping, the post-PR gate hand-off, and autofix caps |
 | `dispatch-queue/` | The at-capacity queue that holds a subject until dispatch capacity frees up |
 | `email/` | Outbound email: the provider client, invite delivery, message templates, and the verified Resend delivery webhook that updates the delivery ledger |
 | `harness/` | Harness profiles: what an organization may author, publish and pin, the skill sources it pins from, and the capability catalog behind them |
+| `integrations/` | Integration connection state: where an integration's values come from, whether they are complete, whether a human turned it off, and whether the last test passed |
 | `json-schema/` | Authoring-time inspection of a JSON Schema the dashboard is editing |
 | `manual-dispatch/` | Operator-initiated dispatch of one trigger node, its preflight, its HTTP shape, and recovery |
 | `mcp/` | The MCP surface below its transport: the contract vocabulary, the actor a verified token resolves to, the audit, idempotency and rate-limit ledgers, and the database-backed work a tool performs |
@@ -47,17 +49,19 @@ else in those directories moved into the matching services cluster.
 | `pre-pr-checks/` | The stored pre-PR check configuration: what the dashboard reads of it, and how it is edited and restored |
 | `prompts/` | Prompt library service operations over the stored prompt records |
 | `publication/` | Text that leaves the worker: scrubbing, branch and gate-check naming, push suppression, dashboard links, and the human-decisions memory section |
+| `repository-catalog/` | Which repositories this deployment knows, whether the catalog decides access yet, and the versioned profile each repository carries |
 | `repository-discovery/` | The repository catalog and the expansion protocol the agent answers with |
+| `run-control/` | The commands somebody outside the product can give a run, and what core answers |
 | `run-lifecycle/` | A run from reservation to cancellation: the subject key, active-run ownership, start, stall watchdog, step drain, and reconcile |
 | `schedule-trigger/` | Schedule parsing, occurrence planning, revocation, and the scheduled dispatch pass |
-| `settings/` | Deployment settings the rest of the tier reads, as named accessors, so `config/env` is read in one place |
-| `slack/` | The Slack surface: signature verification, slash-command parsing and handling, formatting, and message search |
+| `settings/` | Deployment settings the rest of the tier reads, as named accessors over the settings store |
 | `system/` | Deployment identity plus system-health probes, observations, the stored scan, and the body `/health` answers with |
 | `telemetry/` | Run telemetry: snapshots, awaiting resolution, and orphan sweeps |
 | `tickets/` | Issue-tracker state: transitions, labels, move targets, and AI-review routing |
-| `triggers/` | Trigger ingress: the provider webhooks (Jira, GitHub, GitLab, Slack, email delivery), the public custom webhook endpoints, and the scheduled poll |
-| `vcs/` | Provider integrations: the adapter factory, VCS clients and runtime, bot identity, and webhook normalization |
-| `webhook-trigger/` | The mechanics `triggers/` calls for a custom webhook delivery: authentication, rate limits, payload mapping, rejection counters, and dispatch, on top of the endpoint store stage 7 still owns |
+| `triggers/` | The ingress core still owns: the public custom webhook endpoints, the scheduled poll, and what a ticket event means for a run. Each provider answers at the generic `/webhooks/<id>` route and translates its own deliveries in `integrations/<id>/` |
+| `vcs/` | The version control runtime core still asks for: which connected provider can read a repository, and the bot login. The providers themselves are `integrations/github` and `integrations/gitlab` |
+| `webhook-trigger/` | The mechanics `triggers/` calls for a custom webhook delivery: authentication, rate limits, payload mapping, rejection counters, and dispatch, on top of the endpoint repository |
+| `work-scope/` | The durable record of which repositories a subject's work may touch: reading a person's answer into it, and a person's read and edit of it |
 | `workflow-definitions/` | Workflow definitions: what the editor may read, author, deploy and roll back, and how a trigger node is wired to a schedule, a webhook or a manual dispatch |
 
 ## The cluster interface

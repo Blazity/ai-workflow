@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-19
+Last-verified: 2026-09-23
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -54,7 +54,7 @@ Do these in any order — you'll paste the resulting values into Vercel in step 
 
 ### 2.1 Jira
 
-Jira is an integration: its credentials live on its connection, seeded from the `JIRA_*` variables below or entered in the dashboard under **Integrations → Jira → Connection**. The worker boots without it, and its two health checks (Account access and Project access) say on the Health screen whether the token is accepted and whether the project key names a project this account can actually see.
+Jira is an integration: its credentials live on its connection, seeded from the `JIRA_*` variables below or entered in the dashboard under **Integrations → Jira → Connection**. The worker boots without it. Its health checks say on the Health screen whether the token is accepted (Account access), whether the project key names a project this account can actually see (Project access), and whether a Jira webhook points at this deployment and sends issue updates (Webhook registration, not critical) (`integrations/jira/manifest.ts`).
 
 ai-workflow authenticates to Jira as an **Atlassian service account** — a machine identity managed in the organization admin, with no human login. Tokens are Bearer-style and routed through `api.atlassian.com/ex/jira/{cloudId}`. Don't use a personal API token from a real user account: rotation, audit, and least-privilege all break down when the bot shares identity with a human.
 
@@ -86,8 +86,11 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
    them if they do not exist, then record their display names on the Settings
    page as AI, AI Review, and Backlog column settings.
 4. Optional but recommended: capture stable Jira transition IDs for workflow moves:
-   - `JIRA_BACKLOG_TRANSITION_ID` for the transition back to the configured Backlog status
+   - `JIRA_AI_TRANSITION_ID` for the transition to the configured AI status
    - `JIRA_AI_REVIEW_TRANSITION_ID` for the transition to the configured AI Review status
+   - `JIRA_BACKLOG_TRANSITION_ID` for the transition back to the configured Backlog status
+
+   All three are Jira connection fields, so they can also be entered under **Integrations → Jira → Connection**.
 
    These avoid relying on localized transition display names. You can fetch IDs from `GET /rest/api/3/issue/<KEY>/transitions` while the ticket is in the source status.
 5. Generate a webhook secret to authenticate Jira → Vercel deliveries:
@@ -96,16 +99,16 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
    ```
    Save as `JIRA_WEBHOOK_SECRET`. You'll register the webhook itself in step 7.
 
-> Without a webhook, dispatch falls back to the 1-minute cron poll — workable for testing, sluggish in production.
+> Without a webhook, dispatch falls back to the cron poll, which runs every 15 minutes (`apps/worker/vercel.json`): workable for testing, too slow for production. Without `JIRA_WEBHOOK_SECRET` the worker refuses every Jira delivery with 503, so the poll is then the only path.
 
 ### 2.2 GitHub (or GitLab)
 
 **GitHub (GitHub App — required):**
 
-ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot to a single installation, commits as `<app-slug>[bot]`, and lets you rotate the private key without touching a human account. See [`docs/GITHUB-APP-SETUP.md`](./docs/runbooks/GITHUB-APP-SETUP.md) for the full step-by-step walkthrough. Short version:
+ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot to a single installation, commits as `<app-slug>[bot]`, and lets you rotate the private key without touching a human account. See [`docs/runbooks/GITHUB-APP-SETUP.md`](./docs/runbooks/GITHUB-APP-SETUP.md) for the full step-by-step walkthrough. Short version:
 
-1. Go to **https://github.com/settings/apps → New GitHub App**.
-2. Set **Webhook → Active** to **on**, set the URL to `https://<your-deployment>/webhooks/github` (placeholder ok pre-deploy), and generate a secret (`openssl rand -hex 32`) → `GITHUB_WEBHOOK_SECRET`. The worker verifies `X-Hub-Signature-256` on every delivery.
+1. Go to **https://github.com/organizations/<YOUR-ORG>/settings/apps → New GitHub App** (organization-owned, so the App survives its creator leaving).
+2. Set **Webhook → Active** to **on**, set the URL to `https://<your-deployment>/webhooks/github` (placeholder ok pre-deploy), and generate a secret (`openssl rand -hex 32`) → `GITHUB_WEBHOOK_SECRET`. The worker verifies `X-Hub-Signature-256` on every delivery, and answers 503 to every delivery while the secret is unset.
 3. Under **Repository permissions**, grant exactly:
 
    | Permission    | Access       | Why                                                                       |
@@ -119,13 +122,13 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 
    Leave every other permission at **No access**.
 
-4. Under **Subscribe to events**, enable **Pull request** (drives `trigger_pr_created` on `opened`, `trigger_pr_updated` on `synchronize`, `trigger_pr_ready` on `reopened` and `ready_for_review`, and `trigger_pr_merged` on a merged `closed`), **Check run** (drives the `trigger_pr_checks_failed` workflow trigger), **Pull request review** (drives the `trigger_pr_review` workflow trigger), **Pull request review comment** (inline review-thread comments and replies, so a run can react to line-level feedback) and **Issue comment** (conversation comments on a pull request). None of them needs an extra permission grant: `Checks`, `Pull requests` and `Issues` are already **Read & write** from step 3. Leave everything else unchecked. A missing event means a trigger that never fires, with nothing to see on this side: the Health page's GitHub check names any event the App does not subscribe to. See [`docs/GITHUB-APP-SETUP.md` §5](./docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events) for the full rationale per event.
+4. Under **Subscribe to events**, enable **Pull request** (drives `trigger_pr_created` on `opened`, `trigger_pr_updated` on `synchronize`, `trigger_pr_ready` on `reopened` and `ready_for_review`, and `trigger_pr_merged` on a merged `closed`), **Check run** (drives the `trigger_pr_checks_failed` workflow trigger), **Pull request review** (drives the `trigger_pr_review` workflow trigger), **Pull request review comment** (inline review-thread comments and replies, so a run can react to line-level feedback) and **Issue comment** (conversation comments on a pull request). None of them needs an extra permission grant: `Checks`, `Pull requests` and `Issues` are already **Read & write** from step 3. Leave everything else unchecked. A missing event means a trigger that never fires, with nothing to see on this side: the GitHub **App webhook** health check names any event the App does not subscribe to (the code's list is `REQUIRED_WEBHOOK_EVENTS` in `integrations/github/worker.ts`). See [`docs/runbooks/GITHUB-APP-SETUP.md` §5](./docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events) for the full rationale per event.
 5. Choose **Only on this account** for installation scope, create the app, then **Install App** on the target repo's owner and select that one repo. If you change permissions later, every installed repo will need a one-click re-acceptance from a repo admin.
 6. From the app settings page, capture:
    - **App ID** → `GITHUB_APP_ID`
-   - **Generate a private key** → download the `.pem`. Base64-encode the file contents (`base64 -i app.pem | tr -d '\n'`) → `GITHUB_APP_PRIVATE_KEY`.
+   - **Generate a private key** → download the `.pem` → `GITHUB_APP_PRIVATE_KEY`. The worker accepts the file's contents or their base64 (`base64 -i app.pem | tr -d '\n'`); base64 survives Vercel's env editor more reliably (`integrations/github/auth.ts`).
    - From the **Installations** list, the numeric installation ID → `GITHUB_INSTALLATION_ID`.
-7. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
+7. Leave `GITHUB_OWNER` and `GITHUB_REPO` unset: they are legacy single-repo defaults (`integrations/github/manifest.ts`).
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
@@ -133,29 +136,30 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 
 **GitLab:**
 
-For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md). The short version:
+For GitLab.com setup, see [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md). The short version:
 
-1. Create a Project Access Token when available, or a dedicated bot/service-account PAT if project tokens are unavailable. Grant `api` and `write_repository` scopes → `GITLAB_TOKEN`.
+1. Create a Project Access Token when available, or a dedicated bot/service-account PAT if project tokens are unavailable. Grant the scopes in [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md#create-the-token) → `GITLAB_TOKEN`.
 2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest. Prefer leaving `ai-workflow/*` unprotected; if protected, the token identity must be allowed to push and force-push that pattern.
-3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
-4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
+3. Leave `GITLAB_PROJECT_ID` unset on a new deployment. It is a legacy single-project filter: when set, the webhook ignores merge requests from every other project (reason `other_project`), even projects enabled on the Repositories page (`integrations/gitlab/webhook.ts`).
+4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`. Without it every GitLab delivery is refused with 503.
 5. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
-6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
+6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` from the repository catalog's path (`apps/worker/src/infra/vcs-urls.ts`).
 
 ### 2.3 Slack
 
-The Slack app powers two things: **notifications** (run start, success, failure messages posted to a channel) and the **`/ai-workflow` slash command** (registered later in step 8).
+The Slack app powers two things: **notifications** (run start, success, failure messages posted to a channel) and the **`/ai-workflow` slash command** (registered later in step 9).
 
 **Create the app:**
 
 1. Go to https://api.slack.com/apps → **Create New App** → **From scratch**. Name it (e.g. `ai-workflow`) and pick the workspace.
-2. Under **OAuth & Permissions → Bot Token Scopes**, add exactly:
+2. Under **OAuth & Permissions → Bot Token Scopes**, add:
 
    | Scope        | Why                                                      |
    | ------------ | -------------------------------------------------------- |
    | `chat:write` | Post notifications to the channel                        |
    | `commands`   | Register and respond to the `/ai-workflow` slash command |
+   | `channels:history` | Only if a workflow's research (Investigate) block searches Slack messages; the bot must be invited to each channel it reads. Without it those channels are skipped as `missing_scope` (`integrations/slack/search.ts`) |
 
    Don't add `chat:write.public` unless you want the bot to post in channels it isn't a member of — keeping it out forces the explicit invite below, which is what you want.
 
@@ -176,27 +180,30 @@ author. Change that name in the Slack app configuration.
 >
 > An admin can instead enter these values in the dashboard (Integrations, Slack, Connection), which switches the source from the environment to the stored connection; until they do, the environment is the source.
 
-The slash command itself is registered in step 8 (after you have a deployment URL). For the deeper walkthrough, see [`.claude/skills/init-slack/`](./.claude/skills/init-slack/).
+The slash command itself is registered in step 9 (after you have a deployment URL). For the deeper walkthrough, see [`.claude/skills/init-slack/`](./.claude/skills/init-slack/).
 
 ### 2.4 Agent runtime
 
-Pick one. The default agent and provider models are selected on the Settings
-page after the first deployment.
+Configure the credentials for the providers your Harness Profiles use. No
+setting selects the agent or the model: the Harness Profile pinned to each agent
+block does. With no authored profile in force, the built-in `builtin-codex`
+profile runs (`packages/harness/model-catalog.ts`), so configure a Codex
+credential unless every agent block pins a Claude profile.
 
-**Claude (default):**
+**Claude:**
 
 - Configure either a standard Console API key or a Claude Code OAuth token as
   `ANTHROPIC_API_KEY`. The same credential is used for execution and pinned-CLI
   Harness Profile discovery.
-- Optionally select a different Claude model on Settings.
+- Pin a Claude Harness Profile on the agent blocks that should use Claude.
 
 **Codex:**
 
 - `CODEX_API_KEY=sk-...` (or `CODEX_CHATGPT_OAUTH_TOKEN`)
-- Select Codex as the default agent on Settings and optionally choose its model.
+- Pin a Codex Harness Profile, or rely on the `builtin-codex` fallback.
 
 To edit Harness Profiles for both providers, configure `ANTHROPIC_API_KEY` and
-one Codex credential even when Settings selects only one execution default.
+one Codex credential even when your blocks pin only one provider.
 The scheduled worker refresh populates both exact-version catalogs.
 
 ---
@@ -283,10 +290,10 @@ vercel env add JIRA_API_TOKEN production
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | If Jira is configured: the site, a scoped service-account Bearer token, and the project this deployment watches. Jira is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → Jira → Connection). The worker starts without them, and a deployment with no issue tracker runs the workflows that do not involve a ticket. |
 | `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`              | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth). Provider credentials are additive: configure GitHub, GitLab, or both in one deployment, and a run can then mix repositories from both providers. |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID` | If GitHub is configured (GitHub App auth). Provider credentials are additive: configure GitHub, GitLab, or both in one deployment, and a run can then mix repositories from both providers. |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured: signs the GitHub webhook deliveries that drive the PR workflow triggers. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. GitLab is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → GitLab → Connection). |
-| `ANTHROPIC_API_KEY`                                                                                | Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
+| `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, and the merge request webhook secret (without it every delivery is refused with 503). Generate: `openssl rand -hex 32`. GitLab is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → GitLab → Connection). |
+| `ANTHROPIC_API_KEY`                                                                                | For the providers your Harness Profiles use (section 2.4): Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | Codex execution or Harness Profile capability discovery |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
 | `BETTER_AUTH_SECRET` | Signing/encryption key for Better Auth (dashboard human login). At least 32 chars. Generate: `openssl rand -base64 32`. |
@@ -295,7 +302,7 @@ vercel env add JIRA_API_TOKEN production
 | `DASHBOARD_AUTH_EMAIL` | Email of the single predefined dashboard admin (seeded at build; no registration UI). |
 | `DASHBOARD_AUTH_PASSWORD` | Password for that admin. Changing it re-hashes on the next deploy. |
 
-This is enough for password-only dashboard login. SSO and Resend are optional worker-side additions.
+Only `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `DASHBOARD_ORIGIN`, `DASHBOARD_AUTH_EMAIL` and `DASHBOARD_AUTH_PASSWORD` are checked at boot (`apps/worker/src/infra/runtime-env.ts`); the integration rows are what each integration you use needs, and a missing one shows as Failing on the Integrations page rather than stopping the worker. This is enough for password-only dashboard login. SSO and Resend are optional worker-side additions.
 
 ### Optional / has defaults
 
@@ -306,7 +313,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `SLACK_SIGNING_SECRET`                        | unset                                                                                                                                                       | Required only if you register the `/ai-workflow` slash command, and the only variable the command needs. When unset, `/webhooks/slack` rejects all requests. |
 | `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands. Read while no value is saved for it on the Settings page, which then takes precedence. |
 | `CRON_SECRET`                                 | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
-| `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency).                                            |
+| `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, every Jira delivery is refused with 503 and dispatch waits for the cron poll (every 15 minutes, `apps/worker/vercel.json`). |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`               | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither                                                                                           |
 | `DASHBOARD_ORG_SLUG`                          | `ai-workflow`                                                                                                                                               | Fixed dashboard organization slug. Override before first auth bootstrap only; changing it requires a redeploy.                    |
 | `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | unset | Optional SSO config. Set all four together, or leave all four unset for password-only login. |
@@ -315,6 +322,13 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `DASHBOARD_TRUSTED_ORIGINS`                   | empty (only `DASHBOARD_ORIGIN` is trusted)                                                                                                                  | Extra origins trusted for dashboard login on top of `DASHBOARD_ORIGIN`, e.g. a preview deployment's stable alias. Comma-separated; each entry must be a full origin URL (scheme included) or startup validation fails. `DASHBOARD_ORIGIN` remains the canonical origin for links and SSO redirects. |
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
+| `GITHUB_OWNER`, `GITHUB_REPO`                 | unset                                                                                                                                                        | Legacy single-repo defaults. Leave unset on a new deployment; repositories come from the Repositories page. |
+| `GITLAB_PROJECT_ID`                           | unset                                                                                                                                                        | Legacy single-project filter (numeric id or `namespace/project` path). When set, GitLab webhooks from every other project are ignored. Leave unset. |
+| `AIW_MEM0_API_KEY`                            | unset                                                                                                                                                        | Mem0 hosted memory; see [`integrations/mem0/README.md`](./integrations/mem0/README.md) before connecting on a shared database. |
+| `INTEGRATION_SECRETS_KEY`, `WEBHOOK_TRIGGER_ENCRYPTION_KEY` | unset                                                                                                                                          | 64 hex characters each. Storing integration secrets from the dashboard, and the webhook trigger. See [Integration secrets](#integration-secrets) and [Webhook trigger](#webhook-trigger). |
+| `MCP_ALLOW_PUBLIC_DCR`                        | `false`                                                                                                                                                      | Lets MCP clients register themselves. See [Remote MCP](#remote-mcp--connect-your-agent). |
+| `PRE_PR_CHECKS_ALLOWED_ENV`                   | empty                                                                                                                                                        | Names of variables the worker may forward to repository check commands. Read from the environment; redeploy to change (section 14). |
+| `LOG_LEVEL`                                   | `info`                                                                                                                                                       | Pino log level. |
 
 `apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `RESEND_API_KEY` without `RESEND_FROM_EMAIL`, or only some of the four `SSO_*` variables) crash the process with a precise error.
 
@@ -371,18 +385,18 @@ Or push to your production branch if you've connected the Vercel Git integration
 
 - HTTP routes from `apps/worker/src/routes/` — health, cron, webhooks, slash commands, and the read-only `/api/v1/*` API.
 - Vercel Workflow definitions — workflow state is managed by Vercel in production (no Postgres needed).
-- Cron job from `vercel.json` (`* * * * *` → `/cron/poll`) — activates automatically. Vercel injects the `CRON_SECRET` auth header.
+- Cron jobs from `apps/worker/vercel.json`: `*/15 * * * *` → `/cron/poll` and `*/30 * * * *` → `/cron/harness-capabilities`. They activate automatically, and Vercel sends `CRON_SECRET` as a bearer header when it is set.
 
 ---
 
 ## 7. Register the Jira webhook
 
-Without this, ai-workflow only learns about ticket changes via the 1-minute cron poll.
+Without this, ai-workflow only learns about ticket changes via the cron poll, which runs every 15 minutes.
 
 1. Go to **Jira → System Settings → WebHooks** (admin only) or use the Atlassian REST API.
 2. Create a webhook:
    - **URL:** `https://<your-vercel-domain>/webhooks/jira`
-   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header, and the Jira integration verifies it over the exact bytes received (`integrations/jira/webhook.ts`). The URL is served by the shared integration webhook route, `apps/worker/src/routes/webhooks/[id].post.ts`, which records each delivery for the Webhook delivery health check.
+   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from section 2.1, step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header, and the Jira integration verifies it over the exact bytes received (`integrations/jira/webhook.ts`). The URL is served by the shared integration webhook route, `apps/worker/src/routes/webhooks/[id].post.ts`, which records each delivery for the Webhook delivery health check.
    - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly. Answering clarification questions does not require `comment_created`: the answers are picked up when the ticket is moved back to the AI column (comment first, then move), and the cron poller is the backstop if that webhook is missed.
    - **JQL filter** (optional): `project = AWT` to limit deliveries to the relevant project.
 3. Save.
@@ -395,23 +409,23 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 The provider webhook feeds the PR and MR workflow triggers: `trigger_pr_created`, `trigger_pr_updated`, `trigger_pr_ready`, `trigger_pr_merged`, `trigger_pr_checks_failed` and `trigger_pr_review`. A workflow that reports on a pull request publishes its checks through the provider: GitHub surfaces them as Check Runs, GitLab.com as commit statuses on the MR head SHA.
 
-If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/runbooks/GITHUB-APP-SETUP.md) in step 2.2, the App is already configured with the right webhook URL, secret, permissions, and event subscription. This section is the post-deploy verification, and the place to fix things if any of the above were skipped.
+If you followed [`docs/runbooks/GITHUB-APP-SETUP.md`](./docs/runbooks/GITHUB-APP-SETUP.md) in step 2.2, the App is already configured with the right webhook URL, secret, permissions, and event subscription. This section is the post-deploy verification, and the place to fix things if any of the above were skipped.
 
 1. **Update the webhook URL** if you used a placeholder during App creation. In the App settings (`https://github.com/settings/apps/<your-app>` or via the org's developer settings), set **Webhook URL** to `https://<your-vercel-domain>/webhooks/github`.
 2. **Confirm the App has the right permissions and event subscription:**
    - Repository permissions → **Checks: Read & write**, **Pull requests: Read & write**
-   - Subscribe to events → **Pull request**, **Check run**, **Pull request review**, **Pull request review comment**, **Issue comment** (all five checked). See [`docs/GITHUB-APP-SETUP.md` §5](./docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events). Without **Check run** and **Pull request review**, the `trigger_pr_checks_failed` and `trigger_pr_review` workflow triggers never fire; without the two comment events, comments on a pull request start nothing. The Health page's GitHub check lists any event that is missing.
-3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the webhook stays silent.
-4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
+   - Subscribe to events → **Pull request**, **Check run**, **Pull request review**, **Pull request review comment**, **Issue comment** (all five checked). See [`docs/runbooks/GITHUB-APP-SETUP.md` §5](./docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events). Without **Check run** and **Pull request review**, the `trigger_pr_checks_failed` and `trigger_pr_review` workflow triggers never fire; without the two comment events, comments on a pull request start nothing. The GitHub **App webhook** health check lists any event that is missing.
+3. **Re-accept on every installed repo** if you changed permissions after the initial install. Subscribing to an event that an existing permission already covers needs no re-acceptance. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the webhook stays silent.
+4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 and a missing secret 503 on every delivery, visible in the App's **Advanced → Recent Deliveries** tab.
 5. **Leave `apps/worker/post-pr-gate.yaml` alone.** The legacy post-PR gate it configures was neutralized in AIW-220: its sentinel base branch can never match a real ref, so eligibility returns before dispatch and no gate run starts. The PR and MR triggers above replace it. Do not delete the file either: on ENOENT the built-in default in `apps/worker/src/post-pr-gate/config.ts` takes over and the gate is live again. The file is still copied from `nitro.options.rootDir`, which is `apps/worker/`, not the monorepo root; a copy at the monorepo root is silently ignored. (The deployment skills directory ships by a twin mechanism but follows the opposite location rule: see [§12 Agent skills shipped with this deployment](#agent-skills-shipped-with-this-deployment).)
 
-For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and **Merge request events**, **Pipeline events** (the **Pipeline Hook**), and **Comments** (the **Note Hook**) are required. Pipeline events drive `trigger_pr_checks_failed`; Comments can drive only the `commented` variant of `trigger_pr_review`. GitLab Request Changes, with or without a summary, is unsupported until GitLab emits a reliable event that distinguishes that transition. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
+For GitLab.com, configure the project webhook instead, following [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md#configure-the-webhook), which is the one list of the URL (`https://<your-vercel-domain>/webhooks/gitlab`), the secret token and the three required events. GitLab has no health check for its webhook subscription, so a missing event is silent: check the list there. GitLab Request Changes, with or without a summary, is unsupported until GitLab emits a reliable event that distinguishes that transition. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
 
 For GitHub, verify from the App's **Advanced → Recent Deliveries** tab: opening a pull request on the target repo produces a `pull_request` delivery that answers 2xx. With a deployed definition carrying a PR trigger, the run appears in the dashboard and its checks appear on the PR head SHA under the `AI Workflow /` prefix. With no PR-triggered definition deployed, a 2xx answer and an `ignored` reason in the runtime log is the correct outcome.
 
 **At capacity.** When this deployment is at its run limit, a GitHub or GitLab delivery is answered 2xx with the reason `at_capacity` in the body, not 5xx: GitHub never redelivers a failed delivery by itself, and GitLab switches a webhook off after a few consecutive failures, which would lose every later event. The delivery therefore reads as successful in the provider's log, nobody redelivers it, and nothing dispatches it again later; the reason in the stored response body is the only record that a run did not start. A custom webhook endpoint answers 503 instead, because its caller keeps no delivery log and retrying is what it should do.
 
-For GitLab.com, verify by opening or updating an `ai-workflow/*` merge request and checking that the webhook delivery succeeds; when a deployed definition claims the merge request, its checks appear on the MR head commit as `AI Workflow / ...` commit statuses. See the smoke checklist in [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
+For GitLab.com, verify by opening or updating an `ai-workflow/*` merge request and checking that the webhook delivery succeeds; when a deployed definition claims the merge request, its checks appear on the MR head commit as `AI Workflow / ...` commit statuses. See the smoke checklist in [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ---
 
@@ -461,7 +475,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-vercel-domain>/cron/p
 
 1. Create a test Jira ticket with a clear acceptance criterion (e.g. "add a `/ping` route returning `pong`").
 2. Move it to the **AI** column.
-3. Within ~1 minute (cron) or instantly (webhook), watch:
+3. Within 15 minutes (cron) or instantly (webhook), watch:
    - Vercel logs — workflow starts, sandbox provisions.
    - Jira ticket — moves to **AI Review** (success) or **Backlog** (clarification needed).
    - Target repo — new branch `ai-workflow/<ticket-key>` and an open PR.
@@ -617,7 +631,10 @@ production connection string as a manual entry and set
 `DATABASE_SHARED_WITH=production`. Remove the Neon integration value for
 `DATABASE_URL` from that environment because it points at a separate branch.
 Every retired settings variable listed in section 14 must also be absent from
-that environment because the build refuses those variables.
+that environment because the build refuses those variables. If production
+carries `INTEGRATION_SECRETS_KEY`, give the demo environment the identical
+value: it reads production's stored connections, and a different key reads them
+as "stored under another key" (see [Integration secrets](#integration-secrets)).
 
 The canary target environment must also carry `JIRA_BACKLOG_TRANSITION_ID` and
 `JIRA_AI_REVIEW_TRANSITION_ID` with the production values, because the bot's
@@ -874,9 +891,20 @@ Leaving both unset leaves Arthur disconnected, and that is now a visible state r
 
 The tracer travels with the integration as `integrations/arthur/tracer.generated.ts` and is installed into each sandbox at run time, so no deploy-time build step is involved. Regenerate it from a newer upstream tracer with `pnpm --filter @integrations/arthur run build:tracer`.
 
+### Agent memory (built-in store or Mem0)
+
+Memory is an integration capability. With nothing connected, runs keep what
+they learn about repositories and owners, and each ticket's notebook, in the
+built-in store in this deployment's database; nothing needs configuring. To
+store it in a hosted [Mem0](https://mem0.ai) project instead, connect the Mem0
+integration (Integrations → Mem0, or `AIW_MEM0_API_KEY`). Read
+[`integrations/mem0/README.md`](./integrations/mem0/README.md) first: every
+deployment that shares this database switches with it, and what the built-in
+store already holds is not copied over.
+
 ### GitLab alongside (or instead of) GitHub
 
-GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` and optionally `GITLAB_PROJECT_ID`. There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. One connection per integration means one GitLab host per deployment: a repository's identity does not record its host, so pointing an existing deployment at a second GitLab instance would retarget the repositories it already has. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
+GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN` and `GITLAB_WEBHOOK_SECRET` (leave the legacy `GITLAB_PROJECT_ID` unset: it makes the webhook ignore every other project). There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. One connection per integration means one GitLab host per deployment: a repository's identity does not record its host, so pointing an existing deployment at a second GitLab instance would retarget the repositories it already has. For GitLab.com setup, see [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ### Webhook trigger
 
@@ -973,13 +1001,13 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 
 | Scope | Grants |
 | --- | --- |
-| `mcp:read` | Read tickets, runs, workflows, prompts and the block catalog. Enough to inspect a deployment without changing anything. |
-| `runs:dispatch` | Start a manual run, answer a run's clarification, cancel a run. |
-| `workflows:write` | Author workflows: create a definition, save a draft graph, publish it live. |
+| `mcp:read` | Read tickets, runs and their logs, agent briefings (the full prompt each agent was sent), workflows, prompts, the block catalog, repositories, settings, work scope and agent memory. Enough to inspect a deployment without changing anything. |
+| `runs:dispatch` | Start a manual run and check it first, answer a run's clarification, cancel a run, edit which repositories a ticket's work may touch, and permanently forget one agent memory document. |
+| `workflows:write` | Author workflows: create a definition, read its draft and deployed graph, save a draft, publish it live, and enable or disable it. |
 | `prompts:write` | Edit the prompt library. |
 | `tickets:write` | Comment on, transition, or create a ticket in the connected tracker. |
 | `repositories:write` | Configure the repository catalog: save a profile, flip a repository's switch, import from a provider, ask for a suggestion, and end the bridge by activating the catalog. Separate from `workflows:write` because it decides which repositories the platform may enter at all. |
-| `settings:write` | Change a deployment setting, or clear one back to what the environment or the default answers. Cannot change this transport's own group, which stays on the dashboard Settings page. |
+| `settings:write` | Change a deployment setting, or clear one back to its default (an integration setting falls back to its variable first). Cannot change `MCP_ENABLED`, the MCP group, or the settings read from the deployment environment; those stay on the dashboard Settings page or in the environment. |
 
 The last two scopes were added after the first clients registered, and a client carries the ceiling it registered with: re-authorizing an existing client does not grant a scope its registration never included, so a client registered before `repositories:write` and `settings:write` existed cannot reach the configuration tools no matter what its next consent screen says. Register a new client, or update the stored client row's scopes, before expecting them to work.
 
@@ -1008,10 +1036,10 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 | Tickets in AI column never get picked up              | Cron disabled / webhook misregistered                                                                                                   | Check **Vercel → Project → Cron Jobs** is enabled. Curl `/cron/poll` with the secret to test manually.                                                                  |
 | Workflow starts but sandbox fails to provision        | Missing Vercel OIDC / Sandbox quota                                                                                                     | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`.                 |
 | Run registry: `DATABASE_URL undefined`                | Neon integration not connected to this project, or env var scoped to the wrong environments                                             | Reinstall the Neon integration / check it's connected to this project.                                                                                                  |
-| Agent runs but PR isn't created                       | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the _target_ repo, not this repo. |
-| A PR trigger never fires on an opened PR              | App webhook inactive, `Pull request` event not subscribed, missing `Checks: Read & write`, permission/event change not re-accepted on the installed repo, or no deployed definition carries that trigger | App settings → **Webhook: Active** + URL set to `/webhooks/github`. Subscribe to **Pull request**. Bump **Checks** to read & write. Then have a repo admin re-accept the install at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>`. Check **Advanced → Recent Deliveries** for 2xx responses, and the workflow editor for a deployed, enabled definition whose trigger and repository pin match. |
-| A delivery answers `ignored` with `vcs_credential_refused` | The provider refused this deployment's credential while reading the pull request: a token that expired or was revoked, a GitLab token without `read_api`, a GitHub App without **Pull requests: Read** or with a permission change not re-accepted on the installed repo. The Webhook delivery row on the Integrations page is red with the same reason | Repair the connection on the Integrations page (rotate the token, or accept the App's new permissions). The webhook stays on, queued reviews and failed checks start by themselves once the credential works, and deliveries answered in the meantime are not replayed. The diagnostic id in the answer finds the log line (`trigger_vcs_credential_refused`) |
-| GitHub webhook returns 401 in Recent Deliveries       | `GITHUB_WEBHOOK_SECRET` missing on the deployment or different from the value pasted into the App | Set the var on **every** environment (production + preview + development): preview deployments receive the webhook too. Redeploy after changing. Test by re-sending a delivery from the App's Recent Deliveries tab. |
+| Agent runs but PR isn't created                       | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Check the repository is imported and enabled on the Repositories page. |
+| A PR trigger never fires on an opened PR              | App webhook inactive, `Pull request` event not subscribed, missing `Checks: Read & write`, permission/event change not re-accepted on the installed repo, or no deployed definition carries that trigger | App settings → **Webhook: Active** + URL set to `/webhooks/github`. Subscribe to every event in [`GITHUB-APP-SETUP.md` §5](./docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events) (the App webhook health check names a missing one). Bump **Checks** to read & write. Then have a repo admin re-accept the install at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>`. Check **Advanced → Recent Deliveries** for 2xx responses, and the workflow editor for a deployed, enabled definition whose trigger and repository pin match. |
+| A delivery answers `ignored` with `vcs_credential_refused` | The provider refused this deployment's credential while reading the pull request: a token that expired or was revoked, a GitLab token without the `api` scope, a GitHub App without **Pull requests: Read** or with a permission change not re-accepted on the installed repo. The Webhook delivery row on the Integrations page is red with the same reason | Repair the connection on the Integrations page (rotate the token, or accept the App's new permissions). The webhook stays on, queued reviews and failed checks start by themselves once the credential works, and deliveries answered in the meantime are not replayed. The diagnostic id in the answer finds the log line (`trigger_vcs_credential_refused`) |
+| GitHub webhook returns 401 or 503 in Recent Deliveries | 401: `GITHUB_WEBHOOK_SECRET` differs from the value pasted into the App. 503: it is not set on this deployment | Set the var on **every** environment (production + preview + development): preview deployments receive the webhook too. Redeploy after changing. Test by re-sending a delivery from the App's Recent Deliveries tab. |
 | Slack messages don't arrive                           | Bot not in channel, wrong `CHAT_SDK_CHANNEL_ID`, or Slack disabled on the Integrations page                                                                                      | Invite bot to the channel. Re-copy the channel ID. Check the Slack card on Integrations: a disabled integration sends nothing, and its two health checks say what Slack refused. |
 | Slash command returns `dispatch_failed`               | Signing secret wrong, or app not reinstalled                                                                                            | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command.                                                                                  |
 | Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll; wait one cycle after correcting the underlying issue. |
@@ -1028,8 +1056,10 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 ## 14. Removing migrated environment variables
 
 H2 completed the environment exit. Ordinary registered product behavior is
-read from a stored settings row and then the registry default; the worker no
-longer parses or imports an environment fallback. Change a registered value on
+read from a stored settings row and then the registry default; core no longer
+parses or imports an environment fallback. An integration setting that names a
+variable (today only `SLACK_ALLOWED_USER_IDS`) still reads it while nothing is
+stored. Change a registered value on
 the dashboard **Settings** page or with MCP `settings.set` (with the required
 reason). A run keeps the settings snapshot it started with, so a `next run`
 change applies to the next dispatch.
@@ -1049,10 +1079,8 @@ agent block. When no authored profile is in force, the code-owned
 `builtin-codex` profile is the single fallback. The Settings page and stored
 settings rows do not select either value.
 
-For this release, production still carries the three retired board column
-variables from the rollback. The operator must remove those variables before
-this release is merged. The build refusal prevents a
-candidate with any retired name from being promoted. Remove every named
+The build refusal prevents a candidate with any retired name from being
+promoted. Remove every named
 variable from each deployment environment, then redeploy:
 
 ```text

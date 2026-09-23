@@ -37,10 +37,11 @@ If the user replies with anything other than a clear go-signal, do not advance �
 4.  init-agent              → branch on claude  | codex
 5.  init-slack              → bot token, channel, signing secret
 6.  init-neon               → Marketplace install runbook
-7.  Inline: CRON_SECRET     → auto-generate, paste-template
-8.  vercel env pull + validate → .env.local + pnpm tsx env.ts
+7.  Inline: CRON_SECRET + dashboard auth → auto-generate, paste-template
+8.  vercel env pull + validate → .env.local + apps/worker/src/infra/runtime-env.ts
 9.  vercel --prod           → single production deploy
 10. init-jira (phase 2)     → webhook registration with deploy URL
+10b. VCS webhook            → GitHub App webhook URL or GitLab project hook (SETUP.md section 8)
 11. Slack slash command     → /ai-workflow registration with deploy URL
 12. Smoke checks            → /health + /cron/poll auth + manual ticket
 13. Final summary
@@ -159,13 +160,13 @@ Invoke `init-slack`. It walks the user through creating the Slack app (or findin
 
 ## Step 6 — Invoke `init-neon`
 
-Invoke `init-neon`. It walks the user through the Vercel Marketplace install of Neon Postgres with branch-per-environment enabled so Vercel auto-injects `DATABASE_URL` for each environment that `env.ts` expects.
+Invoke `init-neon`. It walks the user through the Vercel Marketplace install of Neon Postgres with branch-per-environment enabled so Vercel auto-injects `DATABASE_URL` for each environment, which `apps/worker/src/infra/runtime-env.ts` requires.
 
 → **Stop. Ask:** *"Neon installed. Ready for Step 7: cron secret?"*
 
 ---
 
-## Step 7 — `CRON_SECRET` (inline)
+## Step 7: `CRON_SECRET` and dashboard auth (inline)
 
 Generate locally and emit a one-line paste-template:
 
@@ -180,25 +181,42 @@ Tell the user:
 CRON_SECRET=<the generated value>
 ```
 
-Without `CRON_SECRET`, the cron endpoint at `/cron/poll` accepts unauthenticated callers (`src/routes/cron/poll.get.ts:40` returns early when unset). Vercel's auto-injected `Authorization: Bearer $CRON_SECRET` only protects the endpoint when the env var is set.
+Without `CRON_SECRET`, the cron endpoint at `/cron/poll` accepts unauthenticated callers (`apps/worker/src/services/triggers/polling/cron-authorization.ts` allows every caller when the secret is unset). Vercel's auto-injected `Authorization: Bearer $CRON_SECRET` only protects the endpoint when the env var is set.
 
-→ **Stop. Ask:** *"`CRON_SECRET` set. Ready for Step 8: pull and validate?"*
+Then collect the dashboard login variables. The worker refuses to boot without them (`apps/worker/src/infra/runtime-env.ts`), so the Step 9 deploy fails if any is missing:
+
+```
+BETTER_AUTH_SECRET=<openssl rand -base64 32>
+BETTER_AUTH_URL=https://<project>.vercel.app
+DASHBOARD_ORIGIN=<the dashboard deployment's origin>
+DASHBOARD_AUTH_EMAIL=<the admin's email>
+DASHBOARD_AUTH_PASSWORD=<8+ characters>
+```
+
+See [SETUP.md section 5](../../../SETUP.md#5-configure-environment-variables) for what each one does.
+
+→ **Stop. Ask:** *"`CRON_SECRET` and dashboard auth set. Ready for Step 8: pull and validate?"*
 
 ---
 
 ## Step 8 — `vercel env pull` and validate
 
+Run from the directory linked in Step 1:
+
 ```bash
 vercel env pull .env.local
-pnpm tsx --env-file=.env.local env.ts
+pnpm --dir <repo root>/apps/worker exec tsx --env-file="$PWD/.env.local" \
+  -e "import('./src/infra/runtime-env.ts').then(() => console.log('env ok'))"
 ```
 
-The validator (`env.ts` via `@t3-oss/env-core`) catches:
-- Missing required keys.
-- URL/email/UUID format violations.
-- Cross-field violations, including incomplete VCS credentials and missing credentials for providers used by harness profiles.
+The validator (`apps/worker/src/infra/runtime-env.ts`, `@t3-oss/env-core`) checks the core variables only:
+- Missing boot-required keys (`DATABASE_URL`, `BETTER_AUTH_*`, `DASHBOARD_ORIGIN`, `DASHBOARD_AUTH_*`).
+- Format violations (URLs, the 64-hex encryption keys).
+- Cross-field violations (`COMMIT_AUTHOR`/`COMMIT_EMAIL`, the four `SSO_*`, `RESEND_*`).
 
-**On failure:** the validator prints `Invalid environment variables:` followed by the specific paths. Identify the responsible subskill from the path prefix (`JIRA_*` → init-jira; `GITHUB_*` / `GITLAB_*` → init-vcs; etc.) and direct the user to fix in the Vercel dashboard, then re-run this step.
+It does **not** check Jira, GitHub, GitLab, Slack or agent credentials: those are integration connection values, and a missing one shows as Failing on that integration's card on the Integrations page after the deploy. Check the cards after Step 9.
+
+**On failure:** the validator prints `Invalid environment variables:` followed by the specific keys. Direct the user to fix them in the Vercel dashboard, then re-run this step.
 
 → **Stop. Ask:** *"Validator passed. Ready for Step 9: production deploy?"*
 
@@ -235,7 +253,20 @@ Phase 2 derives the webhook URL from `.vercel/project.json` (`https://<project>.
 
 If the user opts to defer webhook registration (custom domain coming, admin permission missing, etc.), record it as a TODO for the final summary and continue.
 
-→ **Stop. Ask:** *"Webhook registered (or deferred). Ready for Step 11: Slack slash command?"*
+→ **Stop. Ask:** *"Webhook registered (or deferred). Ready for Step 10b: VCS webhook?"*
+
+---
+
+## Step 10b: Register the VCS webhook
+
+Walk the user through [SETUP.md section 8](../../../SETUP.md#8-register-the-vcs-webhook):
+
+- **GitHub:** set the App's webhook URL to `https://<project>.vercel.app/webhooks/github` if a placeholder was used, and confirm the App subscribes to all five events in [GITHUB-APP-SETUP.md section 5](../../../docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events). The GitHub card's App webhook health check on the Integrations page names any missing event.
+- **GitLab:** add the project hook at `https://<project>.vercel.app/webhooks/gitlab` with the settings in [GITLAB-SETUP.md](../../../docs/runbooks/GITLAB-SETUP.md#configure-the-webhook). GitLab has no health check for its event selection, so read the list there.
+
+If deferred, record it as a TODO for the final summary.
+
+→ **Stop. Ask:** *"VCS webhook registered (or deferred). Ready for Step 11: Slack slash command?"*
 
 ---
 
@@ -259,7 +290,7 @@ Walk the user through the runbook (full version: `init-slack/references/slash-co
    - **Short description:** `Manage ai-workflow runs`
    - **Usage hint:** `list | status <KEY> | cancel <KEY>`
 4. Save and **reinstall the app** to the workspace if Slack prompts.
-5. Confirm `SLACK_SIGNING_SECRET` is set in Vercel (collected in Step 5). The handler at `src/routes/webhooks/slack.post.ts` rejects bad signatures.
+5. Confirm `SLACK_SIGNING_SECRET` is set in Vercel (collected in Step 5). The shared webhook route (`apps/worker/src/routes/webhooks/[id].post.ts`) hands the request to `integrations/slack/slash-command.ts`, which rejects a bad signature with 401; with no signing secret every request is refused with 503.
 
 Verify in Slack:
 
@@ -319,7 +350,7 @@ Last check. Drop a test ticket in Jira to verify the bot end-to-end.
          - The repo has a HELLO.md file
   3. Drag the ticket from the Backlog column to the AI column.
 
-Within ~5s (with webhook) or ~60s (cron fallback), expect:
+Within ~5s (with webhook) or up to 15 minutes (cron fallback), expect:
   - A bot comment on the ticket
   - A branch `ai-workflow/<ticket-key>` and a PR opened in your VCS
   - A Slack message in your channel
@@ -348,27 +379,28 @@ Slack request URL:      https://<project>.vercel.app/webhooks/slack
 
 Configured:
   Jira     <project_key>           webhook <registered | deferred>
-  VCS      <github|gitlab>         <owner>/<repo>
-  Agent    <claude|codex>          model <model>
+  VCS      <github|gitlab|both>    webhook <registered | deferred>
+  Agent    <claude|codex|both>     credentials set (model comes from each block's Harness Profile)
   Slack    channel <id>            bot @<bot_name>, slash <registered | deferred>
   Neon     DATABASE_URL per env    via Marketplace
-  Cron     CRON_SECRET set         schedule * * * * *
+  Cron     CRON_SECRET set         poll every 15 minutes
 
 Skipped (see SETUP.md for the full how-to):
   - Arthur AI tracing — SETUP.md §12. Set GENAI_ENGINE_API_KEY and
     GENAI_ENGINE_TRACE_ENDPOINT to enable per-run tracing and the
     prompt-injection check.
   - GitLab alongside or instead of GitHub: SETUP.md §12. Provide
-    GITLAB_TOKEN (+ GITLAB_HOST for self-hosted), or connect GitLab on the
-    Integrations page, then import its repositories on the Repositories page.
+    GITLAB_TOKEN and GITLAB_WEBHOOK_SECRET (+ GITLAB_HOST for self-hosted),
+    or connect GitLab on the Integrations page, register the project webhook
+    (SETUP.md section 8), then import its repositories on the Repositories page.
   - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment
     needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_APP_ID,
     E2E_GITHUB_APP_PRIVATE_KEY (base64 PEM), E2E_GITHUB_INSTALLATION_ID,
     E2E_GITHUB_OWNER, E2E_GITHUB_REPO, and VERCEL_AUTOMATION_BYPASS_SECRET
     as secrets.
   - Custom domain — point a domain at the Vercel project for a stable
-    webhook URL (then update Jira webhook + Slack request URLs).
-  - WORKFLOW_POSTGRES_URL — local dev only (SETUP.md §6).
+    webhook URL (then update the Jira webhook, the VCS webhook and the Slack
+    request URLs).
   - VERCEL_TOKEN local PAT — local dev only; Vercel uses OIDC in prod.
 
 Smoke checks:
@@ -401,4 +433,4 @@ No git changes were made. .env.local and .vercel/project.json are gitignored.
 - **Don't bulk through subskill invocations.** Each subskill is its own step; pause for the user's confirmation between them.
 - **Don't auto-`vercel link` to a team without confirming.** Linking writes `.vercel/project.json` and binds future deploys.
 - **Don't write `.env`.** Decision 12: skip `.env` entirely. `.env.local` (from `vercel env pull`) is the only local file. `.env.example` is committed reference.
-- **Don't invent variables that aren't in `env.ts`.** If you need a new key, propose adding it to `env.ts` first.
+- **Don't invent variables.** Core variables live in `apps/worker/src/infra/runtime-env.ts`, integration variables in each `integrations/<id>/manifest.ts`. If you need a new key, propose adding it there first.

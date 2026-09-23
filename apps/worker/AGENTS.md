@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-23
 
 # apps/worker
 
@@ -66,7 +66,7 @@ The worker's traps live in `.claude/rules/`, loaded when a matching file is
 read: `worker-settings` (snapshots, what a run may read),
 `worker-repository-catalog`, `worker-database`, `workflow-steps`,
 `workflow-graph`, `zod-bundle`, `worker-mcp`, `worker-observability`,
-`agent-visibility`, `adapters`, `sandbox-agents`, `arthur-engine`,
+`agent-visibility`, `adapters`, `memory`, `sandbox-agents`, `arthur-engine`,
 `e2e-tests`. The production gotchas that bind every edit are in the root
 router.
 

@@ -17,7 +17,7 @@ The command is gated by Slack's request signature (HMAC over the raw body) and a
 
 In api.slack.com → your AI Workflow app → **Basic Information** → **App Credentials** → **Signing Secret** → **Show** → copy.
 
-This is `SLACK_SIGNING_SECRET`. Store it in Vercel for **all three environments** (Production, Preview, Development). Without it the route 401s every request — slash commands won't work.
+This is `SLACK_SIGNING_SECRET`. Store it in Vercel for **all three environments** (Production, Preview, Development). Without it the route refuses every request with 503, naming the missing signing secret, so slash commands won't work.
 
 ## Step 2 — (Optional) Restrict who can run /ai-workflow
 
@@ -61,9 +61,9 @@ If you instead see Slack's "operation_timeout" error, the function probably can'
 
 ## Troubleshooting
 
-- **`/ai-workflow` returns "command failed with the error 'dispatch_failed'"** — Slack thinks the URL didn't 200. Check Vercel logs; usually a missing `SLACK_SIGNING_SECRET` (route 401s) or a 5xx from Nitro startup.
+- **`/ai-workflow` returns "command failed with the error 'dispatch_failed'"**: Slack thinks the URL didn't 200. Check Vercel logs; usually a missing `SLACK_SIGNING_SECRET` (route answers 503) or a wrong one (401) or a 5xx from Nitro startup.
 - **`Not authorized.`** — your user ID isn't in `SLACK_ALLOWED_USER_IDS`. Add it or unset the variable.
-- **Cancel says "is mid-dispatch"** — a workflow was just claimed but not yet started. Wait a moment, then re-run the cancel.
+- **Cancel says "was mid-dispatch"**: a workflow was just claimed but not yet started. Wait a moment, then re-run the cancel.
 
 ## Rotation
 

@@ -1,8 +1,8 @@
 # Webhook setup — phase 2 detail
 
-**Don't skip this if you can avoid it.** Without webhooks, AI Workflow only polls every minute via cron, so every ticket waits up to ~60 seconds before the agent even *starts*. With webhooks, dispatch is sub-second.
+**Don't skip this if you can avoid it.** Without webhooks, AI Workflow only polls every 15 minutes via cron (`apps/worker/vercel.json`), so every ticket waits up to 15 minutes before the agent even *starts*. With webhooks, dispatch is sub-second.
 
-## Why "Issue updated" only
+## Why "Issue updated" is the required one
 
 The handler dispatches when the ticket lands in the configured AI status and cancels in-flight runs when it leaves. Both cases are detected on `jira:issue_updated`. Subscribing to `created`, `deleted`, and other events just adds noise that gets filtered away. The handler ignores anything without a project-key match or without an issue key.
 
@@ -33,7 +33,7 @@ Manual menu fallback: gear icon (⚙) at top-right → System → WebHooks (unde
 | URL | `https://<project>.vercel.app/webhooks/jira` (use your custom domain if you have one) |
 | Secret | the value already in Vercel env as `JIRA_WEBHOOK_SECRET` |
 | JQL filter | `project = "<JIRA_PROJECT_KEY>"` |
-| Events | check **Issue → Issue updated** (only this one) |
+| Events | check **Issue → Issue updated** (required; see the optional ones above) |
 | Exclude body | leave **unchecked** |
 
 Save.
@@ -47,12 +47,11 @@ Use `vercel dev` plus a tunnel like `cloudflared tunnel --url http://localhost:3
 In Jira, drag any ticket into the AI column. In `vercel logs --prod`:
 
 ```
-webhook_received        ticketKey=AWT-42
-webhook_payload_parsed  webhookEvent=jira:issue_updated payloadStatus=AI
-webhook_dispatch_started
-webhook_dispatch_result started=true runId=...
+jira_webhook_understood        ticketKey=AWT-42 webhookEvent=jira:issue_updated
+ticket_event_dispatch_started
+ticket_event_dispatch_result
 ```
 
-If you see `401 Invalid webhook signature`, the secret in Jira and Vercel env don't match. Re-copy.
+If you see `401 The signature did not match.`, the secret in Jira and Vercel env don't match. Re-copy.
 
 If you see no webhook log at all, the JQL filter or events checkbox is wrong. Check Webhooks → [your hook] → Last delivery in Jira admin.

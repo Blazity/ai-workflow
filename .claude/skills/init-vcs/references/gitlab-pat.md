@@ -5,17 +5,12 @@
 1. Open https://gitlab.com/-/user_settings/personal_access_tokens (or `<GITLAB_HOST>/-/user_settings/personal_access_tokens` for self-hosted).
 2. Token name: `ai-workflow`
 3. Expiration: 90 days (set a calendar reminder)
-4. Scopes: check **`api`** — this grants read/write to repository, MRs, issues. (`read_api` + `write_repository` is narrower but AI Workflow's adapter currently expects full `api`.)
+4. Scopes: check **`api`** and **`write_repository`**, as [GITLAB-SETUP.md](../../../../docs/runbooks/GITLAB-SETUP.md#create-the-token) requires.
 5. Click **Create personal access token** and copy it immediately. The token starts with `glpat-`.
 
-## Find `GITLAB_PROJECT_ID`
+## `GITLAB_PROJECT_ID`
 
-Two formats both work:
-
-- **Path with namespace:** `acme-corp/ai-workflow-target` (mirrors the URL `https://gitlab.com/acme-corp/ai-workflow-target`)
-- **Numeric ID:** find at Settings → General → Project ID (top of page)
-
-Path format is more readable; numeric ID is stable across renames.
+Leave it unset. It is a legacy single-project filter: when set, webhooks from every other project are ignored. Repositories are imported on the Repositories page.
 
 ## `GITLAB_HOST`
 
@@ -25,12 +20,10 @@ Path format is more readable; numeric ID is stable across renames.
 ## Verify
 
 ```bash
-curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "$GITLAB_HOST/api/v4/projects/$(printf '%s' "$GITLAB_PROJECT_ID" | jq -sRr @uri)" | \
-  jq '.path_with_namespace, .permissions'
+curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "${GITLAB_HOST:-https://gitlab.com}/api/v4/user" | jq '.username'
 ```
 
-Should print the project path and permissions. A 401 → bad token. A 404 → token works but no access to that project.
+Should print the token account's username (the value for `GITLAB_BOT_LOGIN`). A 401 means a bad token.
 
 ## Rotation
 

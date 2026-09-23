@@ -5,7 +5,7 @@ description: Configure the Neon Postgres database for AI Workflow (run registry,
 
 # Initialize Neon Postgres
 
-Walks the user through installing **Neon Postgres** from the Vercel Marketplace with branch-per-environment enabled so Vercel auto-injects a separate `DATABASE_URL` per environment that `env.ts` expects.
+Walks the user through installing **Neon Postgres** from the Vercel Marketplace with branch-per-environment enabled so Vercel auto-injects a separate `DATABASE_URL` per environment, which `apps/worker/src/infra/runtime-env.ts` requires at boot.
 
 AI Workflow uses Postgres as its run registry and its store for workflow definitions, approvals and telemetry: tracking active workflow runs per ticket, deduplicating dispatch, and locking concurrent cron cycles. The legacy post-PR gate that also used it was neutralized in AIW-220 (`apps/worker/post-pr-gate.yaml`), and PR and MR triggers inside workflow definitions replace it. Tables are created automatically; migrations run during every deploy's build step (`apps/worker/scripts/db-migrate.ts`).
 
@@ -65,7 +65,7 @@ If `DATABASE_URL` is missing or the same value appears across environments, the 
 
 ## Step 3 — Done
 
-No paste-template needed — `DATABASE_URL` is auto-injected by Vercel. The end-of-flow validator (in `init-env`) confirms it made it.
+No paste-template needed: `DATABASE_URL` is auto-injected by Vercel. The `init-env` Step 8 validator (`apps/worker/src/infra/runtime-env.ts`) confirms it made it.
 
 If invoked from `init-env`, return control. If standalone, end.
 
@@ -73,7 +73,7 @@ If invoked from `init-env`, return control. If standalone, end.
 
 - Build fails with `[db-migrate] FATAL: this Neon branch is already claimed by VERCEL_ENV='production', but this build is VERCEL_ENV='…'`: two environments share one Neon branch (the `env_marker` guard). Reconfigure the integration for branch-per-environment, redeploy.
 - `DATABASE_URL undefined` at build: integration not connected to this project, or env var scoped to the wrong environments.
-- Stale run registry (e.g. after a bad deploy or smoke test): run `pnpm exec tsx scripts/clear-run-registry.ts <ticket>` from `apps/worker` (after `vercel env pull .env.local`) to dump and clear `active_runs` / `failed_tickets` / `thread_parents`.
+- Stale run registry for one ticket (e.g. after a bad deploy or smoke test): run `/ai-workflow redis inspect <KEY>` in Slack to see its entries, then `/ai-workflow redis reset <KEY>` to clear them (`integrations/slack/commands.ts`). Reset does not cancel a live run; cancel it first with `/ai-workflow cancel <KEY>` or MCP `runs.cancel`. The old `scripts/clear-run-registry.ts` no longer exists.
 
 ## Don'ts
 

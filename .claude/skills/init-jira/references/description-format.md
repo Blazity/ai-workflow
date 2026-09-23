@@ -4,7 +4,7 @@ The agent reads `summary`, `description`, `comments`, and `attachments`. The des
 
 ## Acceptance Criteria block
 
-`extractAcceptanceCriteria` (`src/adapters/issue-tracker/jira.ts:202`) runs this regex on the description text:
+`extractAcceptanceCriteria` (`integrations/jira/issue-tracker.ts`) runs this regex on the description text:
 
 ```regex
 /acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i

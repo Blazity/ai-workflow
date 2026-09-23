@@ -1,17 +1,17 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-23
 
 # Worker data model
 
-The stable `db/schema.ts` barrel exposes 75 `pgTable` declarations. Production
+The stable `db/schema.ts` barrel exposes 77 `pgTable` declarations. Production
 worker source has zero executable `.transaction(` calls; tests and test support
 are excluded from that production-only check.
 
-Of those declarations, 58 live in the 18 domain modules under `db/schema/`.
+Of those declarations, 60 live in the 19 domain modules under `db/schema/`.
 The other 17 remain in five pre-existing single-purpose files beside the
 barrel: `auth-schema.ts` has 13, while `approvals-schema.ts`,
 `clarifications-schema.ts`, `email-delivery-schema.ts`, and `memory-schema.ts`
-have one each. The barrel re-exports all 23 modules. Mutually dependent tables
+have one each. The barrel re-exports all 24 modules. Mutually dependent tables
 share a module, and cross-domain foreign keys import their owning module
 directly so initialization order remains explicit.
 
@@ -92,3 +92,5 @@ directly so initialization order remains explicit.
 | agentBriefingTexts | agent_briefing_texts | agent-visibility | agent-visibility repository | run observability, agent visibility services |
 | agentBriefingRuns | agent_briefing_runs | agent-visibility | agent-visibility repository | run observability, agent visibility services |
 | clarificationAnswerDeliveries | clarification_answer_deliveries | agent-visibility | agent-visibility repository | clarification services |
+| integrationConnections | integration_connections | integrations | integrations repository | integration services |
+| integrationConnectionVersions | integration_connection_versions | integrations | integrations repository | integration services |

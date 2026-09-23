@@ -41,8 +41,8 @@ the bypass has to be narrow enough that using it is visible.
 
 Gates are dependency-free Node scripts under `scripts/gates/`, each with a
 header stating why it exists and what makes it exit non-zero, a test under
-`scripts/ci/`, and one entry each in `verify:changed` and
-`.github/workflows/ci.yml`. Third-party tools
+`scripts/ci/`, and one entry in the root `gates` script, which `verify:changed`
+and `.github/workflows/ci.yml` both run. Third-party tools
 (dependency-cruiser, knip, oxlint) are invoked by those scripts rather than
 configured separately, so the ladder has one shape and one place to read.
 
@@ -68,6 +68,12 @@ One line per gate: what it observes, and whether it carries a recorded list.
 | `single-schema-version` | a reinstated `schemaVersion === 1` branch | no | stage 3b |
 | `transactions-in-repositories` | `.transaction(` in every non-test file under `apps/worker/src` | no | stage 7 |
 | `db-client-fence` | value imports of Drizzle or table schemas, and all `db/client` imports, outside `db/` | no | stage 7 |
+
+This table records the ladder as decided. Gates added later (for example
+`core-references`, `model-catalog-drift`, `ui-primitives`,
+`consecutive-writes`) and the widening of lint and package contracts to
+`integrations/` are not in it: the current list of gate scripts, and what turns
+each red, is [docs/architecture/gates.md](../architecture/gates.md).
 
 As of 2026-09-11, stage 11 has driven the ratchets to zero. Import boundaries,
 unused code, lint, and the database client fence are hard checks; their

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-23
 
 # apps/dashboard
 
@@ -33,7 +33,7 @@ are colocated (`lib/*.test.ts`, `components/**/*.test.tsx`) and render through
 
 | Directory | What lives there |
 |---|---|
-| `app/(cockpit)/` | the routed screens: runs, tickets, editor, approvals, cost, evals, health, memory, prompts, harness profiles, repositories, settings |
+| `app/(cockpit)/` | the routed screens: runs, ticket, trace, editor, approvals, checks, cost, memory, prompts, harness profiles (`profiles/`), repositories, integrations (with each integration's contributed pages), settings (with health and users under it) |
 | `app/*-data.tsx`, `app/*-skeleton.tsx` | the server components that fetch a screen's data and its loading shape |
 | `app/api/` | route handlers that proxy to the worker or serve dashboard-only reads; they share `app/api/worker-forward.ts` |
 | `components/cockpit/screens/` | the screen bodies |

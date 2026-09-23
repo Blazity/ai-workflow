@@ -6,6 +6,7 @@ paths:
   - "apps/worker/src/engine/steps/memory-steps.ts"
   - "apps/worker/src/engine/steps/repo-memory-steps.ts"
   - "apps/worker/src/engine/steps/repo-seed-steps.ts"
+  - "integrations/mem0/**"
 ---
 
 # Memory

@@ -1,10 +1,12 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-23
 
 # Block modules
 
-Each workflow block has one directory under
-`apps/worker/src/engine/blocks/<block-name>/`. The directory is the source of
+Each core workflow block has one directory under
+`apps/worker/src/engine/blocks/<block-name>/`. An integration's blocks are
+declared in its `integrations/<id>/manifest.ts` instead; see
+[integrations.md](./integrations.md). The directory is the source of
 the block catalog and contains a pure `manifest.ts`. A mapped block also has an
 `execute.ts` file. Inline blocks keep their run-scoped switch in the workflow
 runner and do not need an executor file.

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-21
+Last-verified: 2026-09-23
 
 # GitHub App setup
 
@@ -15,12 +15,12 @@ Required GitHub provider values to set on the Vercel deployment:
 
 ```bash
 GITHUB_APP_ID=<numeric app id>
-GITHUB_APP_PRIVATE_KEY=<base64 of the .pem file>
+GITHUB_APP_PRIVATE_KEY=<the .pem file, or its base64 (step 11)>
 GITHUB_INSTALLATION_ID=<numeric installation id>
-GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
+GITHUB_WEBHOOK_SECRET=<random hex; GitHub signs every webhook delivery with it>
 ```
 
-`GITHUB_OWNER` and `GITHUB_REPO` are legacy single-repo defaults. They may remain set for older deployments, but multi-repo runs discover repositories from the GitHub App installation permissions instead. The Repositories import records GitHub's default branch in each profile.
+`GITHUB_OWNER` and `GITHUB_REPO` are legacy single-repo defaults. Leave them unset on a new deployment (`integrations/github/manifest.ts` names them legacy so nobody configures them). Runs work in the repositories of the repository catalog; the installation decides which repositories can be imported there. The Repositories import records GitHub's default branch in each profile.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 
@@ -60,7 +60,7 @@ The bot receives GitHub pull request, check run and review events to drive the P
   openssl rand -hex 32
   ```
 
-  Save the same value as `GITHUB_WEBHOOK_SECRET` in Vercel (step 11). The deployment validates `X-Hub-Signature-256` on every delivery — a missing or mismatched secret returns 401.
+  Save the same value as `GITHUB_WEBHOOK_SECRET` in Vercel (step 12). The deployment validates `X-Hub-Signature-256` on every delivery: a mismatched secret is answered 401, and a deployment with no secret answers 503 (`integrations/github/webhook.ts`).
 
 > No need to subscribe to events yet — the next step (permissions) gates which event types are available, and event subscription is configured separately in step 5.
 
@@ -89,15 +89,17 @@ Leave everything on **No access**.
 
 ## 5. Subscribe to events
 
+The code's own list of the events the App needs is `REQUIRED_WEBHOOK_EVENTS` in `integrations/github/worker.ts`, and the GitHub card's **App webhook** health check on the Integrations page reads down and names every event the App does not subscribe to.
+
 Under **Subscribe to events**, enable these five:
 
 - **Pull request**: fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `ready_for_review` / `closed`. Drives `trigger_pr_created` (`opened`), `trigger_pr_updated` (`synchronize`), `trigger_pr_ready` (`reopened` and `ready_for_review`) and `trigger_pr_merged` (a `closed` that merged). The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
 - **Check run**: fires the `check_run` event when a CI check completes. Drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot PR's checks fail). Needs the `Checks` permission, which is already read & write from step 4.
-- **Pull request review**: fires the `pull_request_review` event when a human submits a review. Drives the `trigger_pr_review` workflow trigger (react to "request changes" reviews on a bot PR). Needs the `Pull requests` permission, which is already read & write from step 4.
-- **Pull request review comment**: fires the `pull_request_review_comment` event for inline review-thread comments and replies. Lets the agent read and react to line-level PR feedback. Needs the `Pull requests` permission, which is already read & write from step 4.
-- **Issue comment**: fires the `issue_comment` event for general comments on a pull request. Lets the agent read and react to PR conversation comments outside review threads. Needs the `Issues` permission, which is already read & write from step 4.
+- **Pull request review**: fires the `pull_request_review` event when a human submits a review. Drives the `trigger_pr_review` workflow trigger for submitted reviews in the `changes_requested` and `commented` states. Needs the `Pull requests` permission, which is already read & write from step 4.
+- **Pull request review comment**: fires the `pull_request_review_comment` event for inline review-thread comments and replies. Drives `trigger_pr_review` with state `commented`. Needs the `Pull requests` permission, which is already read & write from step 4.
+- **Issue comment**: fires the `issue_comment` event for general comments on a pull request. Drives `trigger_pr_review` with state `commented` for PR conversation comments outside review threads. Needs the `Issues` permission, which is already read & write from step 4.
 
-Leave every other event unchecked.
+Leave every other event unchecked, except optionally **Repository**: with it, renaming a repository logs `trigger_repo_renamed`, naming workflows pinned to the old path. Nothing else depends on it.
 
 > Adding **Check run**, **Pull request review**, **Pull request review comment**, and **Issue comment** needs no permission change: `Checks`, `Pull requests`, and `Issues` are already configured in step 4. Event-only changes do not require re-accepting the installation; if GitHub still flags the install as "pending" (step 9), a repo admin accepts it before the new events start delivering.
 
@@ -137,7 +139,7 @@ On the App's page, click **"Install App"** in the left sidebar.
 3. Pick the repo(s) the bot will operate on.
 4. Click **"Install"**.
 
-> **Re-accepting after permission changes.** GitHub flags the installation as "pending acceptance" on every installed repo whenever you change permissions (e.g. raising `Checks` to read & write, or adding the `Pull request` event subscription). A repo admin must click "Review request" at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and accept the new permission set. Until they do, the new permissions are inert and webhook deliveries fail silently.
+> **Re-accepting after permission changes.** GitHub flags the installation as "pending acceptance" on every installed repo whenever you change permissions (e.g. raising `Checks` to read & write). Subscribing to an event that an existing permission already covers needs no re-acceptance (step 5). A repo admin must click "Review request" at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and accept the new permission set. Until they do, the new permissions are inert and webhook deliveries fail silently.
 
 ## 10. Get the Installation ID
 
@@ -148,7 +150,7 @@ Pick whichever of the three paths below matches your situation.
 
 ### Path A — right after installing (easiest)
 
-Immediately after step 8, GitHub redirects you to the configuration page. Copy
+Immediately after step 9, GitHub redirects you to the configuration page. Copy
 the trailing number from the browser URL:
 
 ```text
@@ -192,7 +194,7 @@ curl -H "Authorization: Bearer $APP_JWT" \
 
 Each entry has an `id` field — that's the Installation ID. If your App is
 installed in multiple places (e.g. several orgs), you'll see one entry per
-install; pick the one whose `account.login` matches `GITHUB_OWNER`.
+install; pick the one whose `account.login` is the account that owns the repositories this deployment works in.
 
 > Each org/user that installs the App gets its **own** Installation ID. If you
 > later install the App on a second org, that's a new ID — don't reuse the old
@@ -221,24 +223,24 @@ GITHUB_INSTALLATION_ID=98765432
 GITHUB_WEBHOOK_SECRET=<the same secret you pasted in step 3>
 ```
 
-Optional legacy single-repo defaults:
+Legacy single-repo defaults, only for an older deployment that already sets them (leave them unset on a new one):
 
 ```bash
 GITHUB_OWNER=<target-org>
 GITHUB_REPO=<target-repo>
 ```
 
-Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed). `GITHUB_WEBHOOK_SECRET` is required in **every** environment — the webhook fires on preview deployments too, and the handler returns 401 without it.
+Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed). `GITHUB_WEBHOOK_SECRET` is required in **every** environment: the webhook fires on preview deployments too, and the handler answers 503 without it.
 
 ## 13. Redeploy
 
-The bot validates env vars at startup. After setting the values, trigger a redeploy so the new env is loaded.
+The GitHub values are not checked at boot. After setting them, trigger a redeploy so the new env is loaded, then open the GitHub card on the Integrations page: it names any value that is missing or refused.
 
 ---
 
 ## Rotating the private key
 
-1. Generate a new key from the App settings page (step 6).
+1. Generate a new key from the App settings page (step 7).
 2. Update `GITHUB_APP_PRIVATE_KEY` on Vercel with the base64 of the new `.pem`.
 3. Redeploy.
 4. **Then** revoke the old key from the App settings page.

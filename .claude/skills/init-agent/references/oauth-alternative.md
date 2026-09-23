@@ -6,7 +6,7 @@ Codex accepts either an API key or an OAuth token. The default `init-agent` flow
 - You want the bot to act under a specific human's account (each request shows up under that account in usage logs).
 - You're on a managed plan that doesn't expose API key management.
 
-> Claude only supports `ANTHROPIC_API_KEY` in this project — OAuth was removed.
+> Claude reads one variable, `ANTHROPIC_API_KEY`, which accepts a Console API key or a Claude Code OAuth token (`sk-ant-oat...`); the worker hands an OAuth token to the sandbox as `CLAUDE_CODE_OAUTH_TOKEN` (`apps/worker/src/harness-profiles/capability-catalog.ts`).
 
 ## Codex — `CODEX_CHATGPT_OAUTH_TOKEN`
 
@@ -16,7 +16,7 @@ Replace the API_KEY line in the paste-template with:
 CODEX_CHATGPT_OAUTH_TOKEN=<value>
 ```
 
-The validator in `env.ts:124` accepts either `CODEX_API_KEY` *or* `CODEX_CHATGPT_OAUTH_TOKEN`. Don't paste both — pick one.
+The worker accepts either `CODEX_API_KEY` *or* `CODEX_CHATGPT_OAUTH_TOKEN` (`apps/worker/src/infra/runtime-env.ts`, `apps/worker/src/harness-profiles/capability-catalog.ts`). Don't paste both: pick one.
 
 OAuth tokens are obtained via the Codex CLI's login flow.
 
