@@ -45,7 +45,7 @@ export type KnownSecretsTakenOut<T> =
 export const KNOWN_SECRETS_UNREADABLE = "this deployment's secrets could not be read";
 
 /** Reads the secrets this deployment knows, once, into a cleaner. */
-export async function readKnownSecretCleaner(): Promise<KnownSecretCleaner> {
+async function readKnownSecretCleaner(): Promise<KnownSecretCleaner> {
   try {
     const { knownSecretValues } = await import("../services/integrations/runtime.js");
     const secrets = await knownSecretValues();
