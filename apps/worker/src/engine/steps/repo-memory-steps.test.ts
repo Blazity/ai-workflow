@@ -3671,7 +3671,7 @@ describe("loadRepoMemorySourcesStep", () => {
     // jump the queue the manifest ordered.
     const long = `# facts\n${Array.from(
       { length: 20 },
-      (_, index) => `- ${String.fromCharCode(97 + index).repeat(1500)}\n`,
+      (_, index) => `- ${String.fromCodePoint(97 + index).repeat(1500)}\n`,
     ).join("")}`;
     await storeDocument(REPO_SUBJECT_KEY, "facts", long);
     await storeDocument(
