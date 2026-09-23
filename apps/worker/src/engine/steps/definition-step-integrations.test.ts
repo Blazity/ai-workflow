@@ -81,6 +81,7 @@ vi.mock("../../db/repositories/definitions/connected.js", () => ({
   getConnectedCurrentWorkflowDefinitionVersion: deployedVersion,
   getConnectedDeployedWorkflowDefinitionVersion: deployedVersion,
   getConnectedWorkflowDefinition: vi.fn(),
+  getConnectedWorkflowDefinitionName: vi.fn(async () => ({ name: "Integration triage" })),
   getConnectedWorkflowDefinitionVersion: deployedVersion,
   getConnectedEnabledWorkflowDefinitionForTrigger: vi.fn(),
 }));

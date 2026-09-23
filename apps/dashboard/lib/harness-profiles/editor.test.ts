@@ -6,6 +6,7 @@ import {
   draftFromManifest,
   isProfileSlug,
   newProfileDraft,
+  modelSelectionLabel,
   selectableHarnessModels,
   upgradeProfileDraft,
   upsertProfile,
@@ -228,14 +229,14 @@ test("selecting an advertised model pins its exact capability snapshot and contr
   assert.deepEqual(selected.compaction, { mode: "model_default" });
 });
 
-test("an advertised model outside policy stays readable but is not upgraded", () => {
+test("a model the catalog does not advertise stays readable but is not upgraded", () => {
   const draft = {
     ...newProfileDraft("codex"),
     model: { id: "gpt-5.5", options: {} },
   };
   const capabilities: HarnessCapabilitiesResponse = {
     ...draft.harness,
-    models: [modelCapability(draft.model.id)],
+    models: [modelCapability("gpt-5.4")],
     catalogHash: "catalog-current",
     fetchedAt: "2026-09-11T00:00:00.000Z",
     stale: false,
@@ -246,15 +247,20 @@ test("an advertised model outside policy stays readable but is not upgraded", ()
   assert.equal(draft.model.id, "gpt-5.5");
 });
 
-test("dashboard model options use the exact catalog intersection sequence", () => {
-  const draft = newProfileDraft("codex");
+// Red when: the editor offers only the catalog entries that are also on a
+// hand-kept list of API model ids, and the Claude CLI's catalog (its aliases)
+// shares none of them, so nobody can pick a Claude model (QA on production).
+test("the editor offers the capability catalog's own models, in its order, once each", () => {
+  const draft = newProfileDraft("claude");
   const capabilities: HarnessCapabilitiesResponse = {
     ...draft.harness,
+    // What the Claude CLI reports: aliases, not API ids.
     models: [
-      modelCapability("gpt-5-mini"),
-      modelCapability("gpt-5.5"),
-      modelCapability("gpt-5.4"),
-      modelCapability("gpt-5-mini"),
+      modelCapability("default"),
+      modelCapability("opus[1m]"),
+      modelCapability("sonnet"),
+      modelCapability("haiku"),
+      modelCapability("sonnet"),
     ],
     catalogHash: "catalog-current",
     fetchedAt: "2026-09-11T00:00:00.000Z",
@@ -264,8 +270,24 @@ test("dashboard model options use the exact catalog intersection sequence", () =
 
   assert.deepEqual(
     selectableHarnessModels(capabilities).map((candidate) => candidate.id),
-    ["gpt-5-mini", "gpt-5.4"],
+    ["default", "opus[1m]", "sonnet", "haiku"],
   );
+});
+
+// Red when: the built-in Claude profile, whose model is an API id the CLI
+// accepts, reads "claude-opus-4-8 · unavailable" and "Historical selection"
+// while runs on it succeed (QA on production).
+test("a model outside the catalog is named for what it is, built in or historical", () => {
+  const catalog = [modelCapability("sonnet")];
+  assert.deepEqual(modelSelectionLabel("claude-opus-4-8", catalog, true), {
+    label: "claude-opus-4-8 · set by the built-in profile",
+    warning: null,
+  });
+  assert.deepEqual(modelSelectionLabel("claude-retired", catalog, false), {
+    label: "claude-retired · not in the current catalog",
+    warning: "Historical selection; choose a current model before publishing.",
+  });
+  assert.deepEqual(modelSelectionLabel("sonnet", catalog, false), { label: "sonnet", warning: null });
 });
 
 test("profile slugs match the worker-owned public constraint", () => {

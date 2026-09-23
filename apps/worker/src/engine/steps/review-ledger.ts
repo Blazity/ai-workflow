@@ -5,6 +5,7 @@ import {
   buildReviewLedgerDurableState,
   type ReviewLedgerGuardWorkItem,
   type SettledThread,
+  runFailureNoteSubject,
 } from "../helpers/review-ledger.js";
 import { settleReviewLedgerStep } from "./review-ledger-settle.js";
 
@@ -98,6 +99,9 @@ export async function postReviewLedgerFailureNoteStep(payload: {
    * is a step input, so it is serialized into the durable event log. */
   workItems: ReviewLedgerGuardWorkItem[];
   integrationPins?: readonly IntegrationConnectionPin[];
+  /** The workflow the run ran, so the note names it. Optional so an input
+   *  recorded before it existed replays: the note then names the run alone. */
+  workflowName?: string;
 }): Promise<{ posted: boolean; error?: string }> {
   "use step";
   const { loadVcsRuntimePort } = await import("../internal/ports.js");
@@ -113,7 +117,7 @@ export async function postReviewLedgerFailureNoteStep(payload: {
     // Deliberately silent about threads: this run either never read the feed or
     // read one with nothing in it, and it cannot tell the reviewer which.
     const body = [
-      `AI Workflow run \`${runId}\` failed on this pull request: ${reason.slice(0, 300)}.`,
+      `${runFailureNoteSubject(runId, payload.workflowName)} failed on this pull request: ${reason.slice(0, 300)}.`,
       payload.pushedHead ? `It pushed \`${payload.pushedHead}\` before failing.` : null,
     ]
       .filter((line): line is string => line !== null)
@@ -135,5 +139,6 @@ export async function postReviewLedgerFailureNoteStep(payload: {
     workItems: payload.workItems,
     pushedHead: payload.pushedHead,
     answeredCount: payload.answeredCount,
+    ...(payload.workflowName ? { workflowName: payload.workflowName } : {}),
   });
 }

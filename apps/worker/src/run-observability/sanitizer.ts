@@ -185,6 +185,16 @@ function isTokenCountEntry(key: string, value: unknown): boolean {
   );
 }
 
+/**
+ * Whether a field's value could be a credential at all. A name decides nothing
+ * on its own: `maxTokens: null` (a limit nobody set, as the model catalog
+ * writes it) or `useToken: false` holds no secret, and showing it as
+ * "[REDACTED:token]" tells the reader something was hidden when nothing was.
+ */
+function holdsAValue(value: unknown): boolean {
+  return value !== null && typeof value !== "boolean";
+}
+
 function isCommandArgumentsKey(key: string): boolean {
   return [
     "args",
@@ -373,7 +383,14 @@ export const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-
 export const PERSONAL_DATA_RULES: readonly SanitizerTextRule[] = [
   { kind: "iban", pattern: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gi, accept: isLikelyIban },
   { kind: "payment_card", pattern: /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g, accept: isLikelyPaymentCard },
-  { kind: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi },
+  {
+    kind: "email",
+    // The local part starts after a character that cannot belong to it, or
+    // right after an escape in JSON text (`\n`, `\t`): the escape's letter is
+    // not part of an address. Without that, "\n@pytest.mark.unit_tests" in an
+    // agent's escaped output read as the address "n@pytest.mark".
+    pattern: /(?:(?<=\\[nrtbf])|(?<![A-Z0-9._%+\\-]))[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+  },
   {
     kind: "phone",
     // Phone separators (hyphens, spaces) overlap UUID segment separators, so a
@@ -900,7 +917,11 @@ function sanitizeValue(
       if (isHardExcludedKey(key)) {
         output[sanitizedKey] = redacted("hard_exclusion");
         addRedaction(context.redactions, "hard_exclusion");
-      } else if (isSensitiveValueKey(key) && !isTokenCountEntry(key, item)) {
+      } else if (
+        isSensitiveValueKey(key) &&
+        holdsAValue(item) &&
+        !isTokenCountEntry(key, item)
+      ) {
         output[sanitizedKey] = redacted("token");
         addRedaction(context.redactions, "token");
       } else if (isCommandArgumentsKey(key)) {

@@ -14,7 +14,7 @@ import { environmentSecretValues } from "../../run-observability/configured-secr
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
-import { analysisCommentMarker, buildApprovedPlanAnalysisReport, buildResearchAnalysisReport, formatPublishedAnalysisComment, formatResearchAnalysisComment, hasAnalysisComment } from "../support/run-analysis-report.js";
+import { analysisCommentMarker, legacyAnalysisCommentMarker, buildApprovedPlanAnalysisReport, buildResearchAnalysisReport, formatPublishedAnalysisComment, formatResearchAnalysisComment, hasAnalysisComment } from "../support/run-analysis-report.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 import { errorMessage } from "../helpers/repository-failure.js";
 import type { RunAnalysisReport, RunStatusReason } from "@shared/contracts";
@@ -136,16 +136,22 @@ export async function postRunAnalysisCommentStep(
   const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   const attemptedAt = new Date().toISOString();
-  const marker = analysisCommentMarker(report.runId, stage);
+  // The current marker, then the one comments carried before it was renamed,
+  // so a post retried across that deploy finds the comment it already made.
+  const markers = [
+    analysisCommentMarker(report.runId, stage),
+    legacyAnalysisCommentMarker(report.runId, stage),
+  ];
   let existingCommentUrl: string | null | undefined;
   if (issueTracker.findCommentByMarker) {
-    existingCommentUrl =
-      (await issueTracker.findCommentByMarker(ticketKey, marker)) ?? undefined;
+    for (const marker of markers) {
+      existingCommentUrl =
+        (await issueTracker.findCommentByMarker(ticketKey, marker)) ?? undefined;
+      if (existingCommentUrl !== undefined) break;
+    }
   } else {
-    existingCommentUrl = hasAnalysisComment(
-      await issueTracker.fetchTicket(ticketKey),
-      marker,
-    )
+    const ticket = await issueTracker.fetchTicket(ticketKey);
+    existingCommentUrl = markers.some((marker) => hasAnalysisComment(ticket, marker))
       ? null
       : undefined;
   }

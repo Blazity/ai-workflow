@@ -7,6 +7,7 @@ import {
   manualDispatchRequests,
   workflowDefinitions,
   workflowDefinitionVersions,
+  workflowRuns,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { unactivatedRepositoryCatalog } from "../../test-support/repository-catalog.js";
@@ -489,6 +490,49 @@ describe("manual dispatch on a deployment with no issue tracker", () => {
         repositoryCatalog: unactivatedRepositoryCatalog(),
       }),
     ).resolves.toMatchObject({ scanned: 1, started: 1, recovering: 0, failed: 0 });
+  });
+
+  // Red when: a subject whose last run already finished is refused with
+  // "already has an active workflow run". The claim outlives the run until the
+  // reconcile pass releases it, and a person told the run is active looks for
+  // a run that is not there.
+  it("says a held claim belongs to a run that finished, and that it releases shortly", async () => {
+    const claim = (runId: string) => ({
+      subjectKey: "pr:github:acme/api#16",
+      ownerToken: "owner-1",
+      runId,
+      state: "started",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    await db.insert(workflowRuns).values({
+      runId: "run-finished",
+      status: "failed",
+      completedAt: new Date(),
+    });
+    const preflight = async () =>
+      await preflightManualDispatch({
+        db,
+        adapters: withoutTracker(),
+        definitionId: 9,
+        triggerNodeId: "ticket-trigger",
+        dispatchInput: { kind: "pull_request", url: PR_URL },
+        maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
+        integrations: { byId: new Map(), providers: new Map() } as never,
+      });
+
+    runRegistry.get.mockResolvedValueOnce(claim("run-finished"));
+    const finished = await preflight();
+    expect(finished.runnable).toBe(false);
+    expect(finished.blocker?.code).toBe("active_run");
+    expect(finished.blocker?.message).toMatch(/run-finished\) has finished \(failed\)/u);
+    expect(finished.blocker?.message).toMatch(/released automatically within about 20 minutes/u);
+
+    // A run still going keeps the plain answer.
+    runRegistry.get.mockResolvedValueOnce(claim("run-live"));
+    const live = await preflight();
+    expect(live.blocker?.message).toBe("This ticket or pull request already has an active workflow run.");
   });
 
   it("previews a pull request dispatch rather than failing the modal", async () => {

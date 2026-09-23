@@ -372,6 +372,8 @@ export interface RetiredWorkflowFailureDeps {
   /** Whether it was delivered is deliberately ignored: a notification must
    *  never change what a run reports. */
   notifyTicket(reason: string): Promise<unknown>;
+  /** Present when a pull request started the run: see `handleWorkflowFailureExit`. */
+  pullRequest?: { note(reason: string): Promise<unknown> };
 }
 
 /** The concrete standard failure exit for a run that stops before it can do its
@@ -396,6 +398,9 @@ export async function runRetiredWorkflowFailureExit(
     commentFailure: () => deps.commentFailure(sentence),
     moveTicket: deps.moveTicket,
     notifyTicket: () => deps.notifyTicket(sentence),
+    ...(deps.pullRequest
+      ? { pullRequest: { note: () => deps.pullRequest!.note(sentence) } }
+      : {}),
   });
   return "failed";
 }
@@ -674,6 +679,72 @@ async function agentWorkflowBody(
     }
   };
   /**
+   * What this run knows about the definition it runs, once the plan is
+   * loaded. Read by the failure sentences below, which can be reached before
+   * the plan exists (a retired definition fails while loading it).
+   */
+  let loadedPlanFacts: {
+    definitionName?: string;
+    version: number | null;
+    integrationPins?: LoadedWorkflowPlan["integrationPins"];
+  } | null = null;
+  /** The workflow as a person knows it: "Autofix PR checks v3". */
+  const workflowLabel = (): string => {
+    const version = loadedPlanFacts?.version ?? ("definitionVersion" in entry ? entry.definitionVersion : undefined);
+    const versionText = typeof version === "number" ? ` v${version}` : "";
+    if (loadedPlanFacts?.definitionName) return `${loadedPlanFacts.definitionName}${versionText}`;
+    return entry.definitionId !== undefined
+      ? `workflow definition ${entry.definitionId}${versionText}`
+      : "workflow";
+  };
+  /**
+   * A run a pull request started reports its failure there, naming the
+   * workflow, and never parks a linked ticket (`handleWorkflowFailureExit`).
+   * The ticket comment, when there is a linked ticket, names the pull request
+   * and the workflow, because the reader of the ticket did not start this run.
+   */
+  const notePullRequestFailure = async (reason: string): Promise<void> => {
+    if (entry.kind !== "pr_trigger") return;
+    // A review comment run with the review ledger off posts nothing on the
+    // pull request, as before the ledger existed: a production decision taken
+    // after a note on MR !11, which this plain note must not undo.
+    if (entry.triggerType === "trigger_pr_review" && !runSettings.REVIEW_LEDGER_ENABLED) return;
+    await postReviewLedgerFailureNoteStep({
+      pr: {
+        provider: entry.pr.provider,
+        repoPath: entry.pr.repoPath,
+        baseRef: entry.pr.baseRef,
+        prNumber: entry.pr.prNumber,
+      },
+      ...(loadedPlanFacts?.integrationPins
+        ? { integrationPins: loadedPlanFacts.integrationPins }
+        : {}),
+      runId: workflowRunId,
+      reason,
+      unsettledAliases: [],
+      variant: "pre_feed",
+      workItems: [],
+      pushedHead: null,
+      answeredCount: 0,
+      workflowName: workflowLabel(),
+    }).catch(() => {});
+  };
+  /** The failure exit's pull request half, for the exits that stop a run
+   *  before its work: present exactly when a pull request started the run. */
+  const pullRequestFailureExit = (): {
+    pullRequest?: { note(reason: string): Promise<unknown> };
+  } => (entry.kind === "pr_trigger" ? { pullRequest: { note: notePullRequestFailure } } : {});
+  const { pullRequestRunFailureComment } = await import("./runtime/workflow-failure-exit.js");
+  const ticketFailureComment = (reason: string): string =>
+    entry.kind === "pr_trigger"
+      ? pullRequestRunFailureComment({
+          workflow: workflowLabel(),
+          pullRequestUrl: entry.pr.prUrl,
+          reason,
+        })
+      : reason;
+
+  /**
    * The run stops before it starts, and the ticket is told why.
    *
    * The same exit the retired-plan refusal takes, without the execution-error
@@ -690,7 +761,11 @@ async function agentWorkflowBody(
       logFailure: (failureReason) =>
         logPhaseFailure(entry.subjectKey, "engine", failureReason),
       commentFailure: (failureReason) =>
-        postFailureReasonCommentStep(ticket.identifier, failureReason, transitionOwner),
+        postFailureReasonCommentStep(
+          ticket.identifier,
+          ticketFailureComment(failureReason),
+          transitionOwner,
+        ),
       moveTicket: () => moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
       notifyTicket: (failureReason) =>
         notifyTicket(
@@ -698,6 +773,7 @@ async function agentWorkflowBody(
           { kind: "failed", reason: failureReason },
           transitionOwner,
         ),
+      ...pullRequestFailureExit(),
     });
   const failRetiredDefinition = async (
     reason: typeof RETIRED_SCHEMA_MESSAGE,
@@ -714,7 +790,7 @@ async function agentWorkflowBody(
         commentFailure: (failureReason) =>
           postFailureReasonCommentStep(
             ticket.identifier,
-            failureReason,
+            ticketFailureComment(failureReason),
             transitionOwner,
           ),
         moveTicket: () =>
@@ -725,6 +801,7 @@ async function agentWorkflowBody(
             { kind: "failed", reason: failureReason },
             transitionOwner,
           ),
+        ...pullRequestFailureExit(),
       });
     } finally {
       const retiredExecutionError = createWorkflowExecutionErrorState(
@@ -809,6 +886,13 @@ async function agentWorkflowBody(
   // for and the run would die after its block had already run. One
   // canonicalisation here covers the fresh run and the replay alike.
   const plan = canonicalPlanBlockTypes(loadedPlan);
+  if (plan) {
+    loadedPlanFacts = {
+      version: plan.version,
+      ...(plan.definitionName ? { definitionName: plan.definitionName } : {}),
+      ...(plan.integrationPins ? { integrationPins: plan.integrationPins } : {}),
+    };
+  }
   if (!plan) {
     console.warn(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
@@ -1779,23 +1863,23 @@ async function agentWorkflowBody(
         }
       };
 
-      // The reviewer is waiting in a thread, and a failed run that says
-      // nothing is indistinguishable from a webhook that never fired. Posted
-      // before the ticket side effects and independent of them, because the
-      // note belongs to the PR, not to the ticket.
+      // Every run a pull request started says on that pull request that it
+      // failed, naming the workflow: a failed run that says nothing is
+      // indistinguishable from a webhook that never fired, and a failed
+      // autofix used to be visible only as its ticket moving back to To Do.
       //
-      // Only for runs a review comment started: a failed checks-fix run owes
-      // the reviewer nothing, and a note about review threads on it would be
-      // noise about work nobody asked for. A run that died before the feed
-      // existed (clone, 401) still owes the reviewer the fact that it died,
-      // so it gets a variant that claims to have seen no threads.
+      // A review comment run with the ledger on says more: which threads it
+      // owed the reviewer. A run that died before the feed existed (clone,
+      // 401) still owes the reviewer the fact that it died, so it gets a
+      // variant that claims to have seen no threads. Every other pull request
+      // run (a checks-fix) gets that same variant, which says nothing about
+      // threads. A review run with the ledger off posts nothing.
       const postReviewLedgerFailureNoteOnFailureExit = async (
         reason: string,
       ): Promise<void> => {
-        if (
-          ctx.entry.kind !== "pr_trigger" ||
-          ctx.entry.triggerType !== "trigger_pr_review"
-        ) {
+        if (ctx.entry.kind !== "pr_trigger") return;
+        if (ctx.entry.triggerType !== "trigger_pr_review") {
+          await notePullRequestFailure(reason);
           return;
         }
         // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
@@ -1829,6 +1913,7 @@ async function agentWorkflowBody(
           // Counted off what settlement actually wrote, so a run that answered
           // every thread before dying does not apologise for silence.
           answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
+          workflowName: workflowLabel(),
         }).catch(() => {});
       };
 
@@ -1851,7 +1936,6 @@ async function agentWorkflowBody(
         await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
-        await postReviewLedgerFailureNoteOnFailureExit(reason);
         // The ticket comment, and only the ticket comment, carries the script
         // evidence beside the reason. The run header, the run list and the
         // messaging notification keep the reason alone: they read one bounded string each and AIW-254
@@ -1892,7 +1976,7 @@ async function agentWorkflowBody(
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
           commentFailure: () =>
-            postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner),
+            postFailureReasonCommentStep(ticket.identifier, ticketFailureComment(comment), transitionOwner),
           moveTicket: () =>
             moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {
@@ -1901,6 +1985,9 @@ async function agentWorkflowBody(
             reason,
             usageReport,
           }, transitionOwner),
+          ...(entry.kind === "pr_trigger"
+            ? { pullRequest: { note: () => postReviewLedgerFailureNoteOnFailureExit(reason) } }
+            : {}),
         });
       };
 

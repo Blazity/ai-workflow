@@ -346,6 +346,9 @@ export interface BuildRunFailureNoteInput {
    * zero, so a caller that has not wired it up yet gets today's note rather
    * than a claim about work it cannot vouch for. */
   answeredCount?: number;
+  /** The workflow the run ran, as a person knows it ("Autofix PR checks v3").
+   *  Optional: absent names the run alone, as the note always did. */
+  workflowName?: string;
 }
 
 /**
@@ -363,11 +366,20 @@ export interface BuildRunFailureNoteInput {
  *   already, and telling them otherwise sends them looking for nothing;
  * - nothing to answer: the neutral note, unchanged.
  */
+/** "AI Workflow run `id`", with the workflow it ran when that is known, so a
+ *  reviewer can tell an autofix's note from a review run's. */
+export function runFailureNoteSubject(runId: string, workflowName?: string): string {
+  return workflowName
+    ? `AI Workflow run \`${runId}\` of the "${workflowName}" workflow`
+    : `AI Workflow run \`${runId}\``;
+}
+
 export function buildRunFailureNote(input: BuildRunFailureNoteInput): string {
-  const plainHead = `AI Workflow run \`${input.runId}\` failed before it could address review feedback: ${input.reason}.`;
+  const run = runFailureNoteSubject(input.runId, input.workflowName);
+  const plainHead = `${run} failed before it could address review feedback: ${input.reason}.`;
   if (input.unsettledAliases.length > 0) {
     const head = input.pushedHead
-      ? `AI Workflow run \`${input.runId}\` pushed \`${input.pushedHead}\` but the run failed at \`${input.reason}\` before replying in the threads.`
+      ? `${run} pushed \`${input.pushedHead}\` but the run failed at \`${input.reason}\` before replying in the threads.`
       : plainHead;
     const named = input.unsettledAliases.map((alias) =>
       describeAlias(alias, input.workItems ?? []),
@@ -378,8 +390,8 @@ export function buildRunFailureNote(input: BuildRunFailureNoteInput): string {
   if (answered > 0) {
     const head =
       answered === 1
-        ? `AI Workflow run \`${input.runId}\` answered the open review thread, then failed at \`${input.reason}\`.`
-        : `AI Workflow run \`${input.runId}\` answered all ${answered} open review threads, then failed at \`${input.reason}\`.`;
+        ? `${run} answered the open review thread, then failed at \`${input.reason}\`.`
+        : `${run} answered all ${answered} open review threads, then failed at \`${input.reason}\`.`;
     return input.pushedHead ? `${head} The branch carries \`${input.pushedHead}\`.` : head;
   }
   return plainHead;

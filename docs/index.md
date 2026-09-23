@@ -50,11 +50,12 @@ checking the smaller set that is left (ADR-007).
 | [adr/ADR-003-definition-schema-v1-retirement.md](./adr/ADR-003-definition-schema-v1-retirement.md) | Why schema v1 is retired, what is deleted, and what stays readable |
 | [adr/ADR-004-gates-and-required-ci.md](./adr/ADR-004-gates-and-required-ci.md) | The gate ladder, one shape per gate, and what has to be true before a check can be required |
 | [adr/ADR-005-documentation-taxonomy.md](./adr/ADR-005-documentation-taxonomy.md) | This taxonomy: the status header, the currency rule, the reachability rule, per-app agent files |
-| [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
+| [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | Superseded by ADR-011; still the account of the recognised API-id policy, stored-ID compatibility, and catalog ownership |
 | [adr/ADR-007-empty-scan-is-a-refusal.md](./adr/ADR-007-empty-scan-is-a-refusal.md) | Why a gate that scanned nothing refuses instead of passing, the two helpers that refuse, and the one gate that cannot |
 | [adr/ADR-008-claims-the-code-owns.md](./adr/ADR-008-claims-the-code-owns.md) | When a document may restate a list the code owns, and the test that holds the copy level in both directions |
 | [adr/ADR-009-agent-instruction-layers.md](./adr/ADR-009-agent-instruction-layers.md) | Where agent instructions live (router, per-area files, path-scoped rules, archive) and the byte ceilings a hook warns about |
 | [adr/ADR-010-integrations.md](./adr/ADR-010-integrations.md) | What an integration is and what it receives: the package layout, the capability ports, the context, connection sources, the conformance check, the inventory it was designed from, and the change log of the SDK |
+| [adr/ADR-011-harness-profiles-pick-from-the-capability-catalog.md](./adr/ADR-011-harness-profiles-pick-from-the-capability-catalog.md) | Why a harness profile picks from what the provider CLI advertises, and the workflow editor from the recognised API-id policy |
 
 ## Product
 

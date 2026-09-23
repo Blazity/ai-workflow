@@ -655,6 +655,16 @@ describe("sanitizeReplayValue: fields named after tokens", () => {
     expect(envelope.metadata.redactions.token).toBeUndefined();
   });
 
+  // Red when: a limit that is not set (`maxTokens: null`, as the model catalog
+  // writes it) is shown as a redacted credential. Production served a harness
+  // manifest's `limits.maxTokens` as "[REDACTED:token]" through runs.logs.
+  it("keeps a token-named field whose value holds nothing", () => {
+    const manifest = { limits: { maxTokens: null, maxOutputTokens: 64000 }, token: null, useToken: false };
+    const envelope = sanitizeReplayValue(manifest);
+    expect(envelope.value).toEqual(manifest);
+    expect(envelope.metadata.redactions.token).toBeUndefined();
+  });
+
   // Red when: the count exemption lets a credential through, by its name or
   // by a value that is not a count.
   it("still redacts fields that hold a credential", () => {
@@ -679,5 +689,24 @@ describe("sanitizeReplayValue: fields named after tokens", () => {
     }
     expect(text).not.toContain("12345678");
     expect(envelope.metadata.redactions.token).toBe(Object.keys(credentials).length);
+  });
+});
+
+describe("sanitizeReplayValue: an address inside escaped JSON", () => {
+  // Red when: the letter of an escape (`\n`) is read as the local part of an
+  // email address. A pytest marker on its own line inside an agent's JSON
+  // output came back as "\[REDACTED:email].unit_tests".
+  it("keeps a decorator that follows an escaped newline", () => {
+    const text = '{"patch":"import pytest\\n@pytest.mark.unit_tests\\ndef test_x(): pass"}';
+    const envelope = sanitizeReplayValue(text);
+    expect(envelope.value).toBe(text);
+    expect(envelope.metadata.redactions.email).toBeUndefined();
+  });
+
+  it("still redacts an address that follows an escaped newline", () => {
+    const text = '{"body":"Contact\\nalice@example.com\\nthanks"}';
+    const envelope = sanitizeReplayValue(text);
+    expect(envelope.value).toBe('{"body":"Contact\\n[REDACTED:email]\\nthanks"}');
+    expect(envelope.metadata.redactions.email).toBe(1);
   });
 });
