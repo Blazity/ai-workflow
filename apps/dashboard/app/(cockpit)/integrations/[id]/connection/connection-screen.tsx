@@ -1,5 +1,6 @@
 "use client";
 
+import { SECRETS_KEY_SETUP_URL } from "@/lib/docs-links";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -36,7 +37,6 @@ import {
   fieldHint,
   nothingToDisconnectLine,
   sourceInUse,
-  SECRETS_KEY_SETUP_URL,
   secretsKeyNotice,
   integrationImpactConfirmLabel,
   integrationImpactLines,

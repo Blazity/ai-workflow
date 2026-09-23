@@ -549,10 +549,6 @@ export function fieldHint(
   return withDescription("Nothing is stored yet. What you type is encrypted and never shown again.");
 }
 
-/** Where SETUP.md explains the key stored secrets are encrypted with. */
-export const SECRETS_KEY_SETUP_URL =
-  "https://github.com/Blazity/ai-workflow/blob/main/SETUP.md#integration-secrets";
-
 /**
  * What the connection screen says when this deployment cannot store a secret
  * (no `INTEGRATION_SECRETS_KEY`), or null when it can or the integration has no

@@ -226,6 +226,16 @@
       "paths": [
         "packages/prompts/default-prompts.ts"
       ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "never",
+      "reason": "the address of this product's own repository, where its setup documents live (SETUP.md), linked from the dashboard so an admin can read how to set a deployment variable. It names the host of the product's source, not the GitHub provider, and a deployment that connects no GitHub at all still links there.",
+      "paths": [
+        "apps/dashboard/lib/docs-links.ts"
+      ]
     }
   ]
 }
