@@ -1,0 +1,6 @@
+Source URL: https://github.com/mem0ai/mem0/blob/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+Raw bytes: https://raw.githubusercontent.com/mem0ai/mem0/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+What it is: Mem0's 200 answer to GET /v1/ping/ with only the one property the schema gives an example for; the answer this integration must read as not naming a project.
+How these bytes were made: Composed: status set to the schema's example value.
+Retrieved: 2026-09-23
+SHA-256: d37208a9be5dfe712a7ee54fdce2f1b0a006ec021754f2c3b70e2d55d6fb585e

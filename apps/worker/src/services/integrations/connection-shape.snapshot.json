@@ -227,6 +227,20 @@
     ]
   },
   {
+    "integration": "mem0",
+    "fields": [
+      {
+        "key": "apiKey",
+        "env": "AIW_MEM0_API_KEY",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "slack",
     "fields": [
       {
