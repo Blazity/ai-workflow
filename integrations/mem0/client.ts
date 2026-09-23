@@ -104,12 +104,25 @@ const pingAnswer = z.object({
 });
 export type PingAnswer = z.infer<typeof pingAnswer>;
 
-/** Mem0's error bodies: `{ detail }` for auth, `{ error, details: { message } }` for validation. */
+/**
+ * Mem0's error bodies: `{ detail }` for auth, `{ error, details: { message } }`
+ * for validation, and `upgrade_required: true` on a 403 that is about the
+ * plan rather than the key (documented on the plan-gated endpoints; an
+ * exhausted monthly quota is not documented at all, and may answer the same).
+ */
 const errorBody = z.object({
   detail: z.string().optional(),
   error: z.string().optional(),
   details: z.object({ message: z.string().optional() }).optional(),
+  upgrade_required: z.boolean().optional(),
 });
+
+/** Whether a 403 says the plan, not the key, is what stopped the call. */
+export async function isPlanRefusal(response: Response): Promise<boolean> {
+  if (response.status !== 403) return false;
+  const said = errorBody.safeParse(await response.clone().json().catch(() => null));
+  return said.success && said.data.upgrade_required === true;
+}
 
 /** What a filter selects, in Mem0's filter language (see memory.ts for which fields). */
 export type Mem0Filters = Readonly<Record<string, unknown>>;
@@ -167,7 +180,7 @@ export function mem0Client(ctx: Context): Mem0Client {
   }
 
   async function answered<T>(response: Response, schema: z.ZodType<T>, what: string): Promise<T> {
-    if (!response.ok) throw await statusFailure(response, what);
+    if (!response.ok) throw await statusFailure(response, what, ctx.connection.apiKey);
     const parsed = schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) {
       throw new Mem0Failure("unavailable", `Mem0 answered ${what} in a shape this integration does not read.`);
@@ -201,13 +214,19 @@ export function mem0Client(ctx: Context): Mem0Client {
           immutable: true,
         },
       });
-      return answered(response, addAnswer, "an add");
+      const answer = await answered(response, addAnswer, "an add");
+      if (answer.status === "FAILED") {
+        // Mem0's own word that the write did not happen; whether a second try
+        // would succeed it does not say.
+        throw new Mem0Failure("unavailable", "Mem0 reported the add as FAILED, so nothing was stored.");
+      }
+      return answer;
     },
 
     async deleteById(id) {
       const response = await send(`/v1/memories/${encodeURIComponent(id)}/`, { method: "DELETE" });
       if (response.status === 404) return "missing";
-      if (!response.ok) throw await statusFailure(response, "a delete");
+      if (!response.ok) throw await statusFailure(response, "a delete", ctx.connection.apiKey);
       return "deleted";
     },
   };
@@ -233,7 +252,7 @@ export async function readPing(response: Response): Promise<PingAnswer | null> {
  * 401 on its memory calls and 404 on a single memory; it documents no 429 and
  * no 5xx, so those are read by what HTTP says they mean.
  */
-async function statusFailure(response: Response, what: string): Promise<Mem0Failure> {
+async function statusFailure(response: Response, what: string, apiKey: string): Promise<Mem0Failure> {
   const status = response.status;
   if (status === 429) {
     const wait = response.headers.get("retry-after");
@@ -245,15 +264,22 @@ async function statusFailure(response: Response, what: string): Promise<Mem0Fail
   if (readProviderFailure(response).kind === "no_verdict") {
     return new Mem0Failure("unavailable", `Mem0 did not complete ${what} (${status}).`);
   }
+  if (await isPlanRefusal(response)) {
+    return new Mem0Failure(
+      "unavailable",
+      `Mem0 refused ${what} under the project's plan (403, upgrade required); its monthly quota may be spent.`,
+    );
+  }
   if (status === 401 || status === 403) {
     return new Mem0Failure("rejected", `Mem0 refused the API key for ${what} (${status}).`);
   }
   const said = errorBody.safeParse(await response.json().catch(() => null));
   const words = said.success ? (said.data.details?.message ?? said.data.error ?? said.data.detail) : undefined;
-  return new Mem0Failure(
-    "rejected",
-    `Mem0 refused ${what} (${status})${words ? `: ${words.slice(0, 200)}` : ""}.`,
-  );
+  // Mem0's words are quoted, so they are cleaned first: a provider that echoes
+  // a request back would otherwise hand the key to every log line this
+  // detail reaches.
+  const quoted = words ? words.split(apiKey).join("[REDACTED]").slice(0, 200) : undefined;
+  return new Mem0Failure("rejected", `Mem0 refused ${what} (${status})${quoted ? `: ${quoted}` : ""}.`);
 }
 
 /**

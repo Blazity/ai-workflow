@@ -9,7 +9,7 @@ import {
   refusedOrThrow,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
-import { MEM0_ATTEMPT_MS, ping, readPing } from "./client";
+import { MEM0_ATTEMPT_MS, isPlanRefusal, ping, readPing } from "./client";
 import { manifest } from "./manifest";
 import { mem0Memory } from "./memory";
 
@@ -20,6 +20,18 @@ import { mem0Memory } from "./memory";
  * saying why, so such a key is recognised and never sent there.
  */
 const SELF_HOSTED_KEY_PREFIX = "m0sk_";
+
+/**
+ * Whether a failed ping is Mem0's verdict on the key. Only 401 and 403 are
+ * documented as that, and not a 403 that is a rate limit (`readProviderFailure`)
+ * or about the plan (`upgrade_required`). Any other status says nothing about
+ * the key: a 404 or a 422 there is Mem0 changing, not the key being wrong.
+ */
+async function refusesKey(response: Response): Promise<boolean> {
+  if (response.status !== 401 && response.status !== 403) return false;
+  if (readProviderFailure(response).kind !== "refused") return false;
+  return !(await isPlanRefusal(response));
+}
 
 const definition: IntegrationRuntimeDefinition<typeof manifest> = {
   /**
@@ -52,7 +64,11 @@ const definition: IntegrationRuntimeDefinition<typeof manifest> = {
       return refusedOrThrow(error);
     }
     if (!response.ok) {
-      return refusedOrThrow(response, `Mem0 refused this API key (${response.status}).`);
+      if (await refusesKey(response)) return { ok: false, reason: `Mem0 refused this API key (${response.status}).` };
+      if (await isPlanRefusal(response)) {
+        throw new Error("Mem0 refused the key check under the project's plan (403, upgrade required); the key itself was not judged.");
+      }
+      throw new Error(`Mem0 answered the key check with ${response.status}, which says nothing about the key.`);
     }
     const answer = await readPing(response);
     if (!answer) throw new Error("api.mem0.ai did not answer the way the Mem0 API does.");
@@ -80,9 +96,11 @@ const definition: IntegrationRuntimeDefinition<typeof manifest> = {
     api: async (ctx) => {
       const response = await ping(ctx, 3_000);
       if (response.ok) return { status: "live" };
-      return readProviderFailure(response).kind === "refused"
-        ? { status: "down", message: `Mem0 refused the API key (${response.status}).` }
-        : { status: "down", message: `Mem0 did not answer, so the key could not be checked (${response.status}).` };
+      if (await refusesKey(response)) return { status: "down", message: `Mem0 refused the API key (${response.status}).` };
+      if (await isPlanRefusal(response)) {
+        return { status: "down", message: "Mem0 refused the call under the project's plan (403, upgrade required); its monthly quota may be spent." };
+      }
+      return { status: "down", message: `Mem0 did not answer, so the key could not be checked (${response.status}).` };
     },
   },
 };

@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FAKE_KEY, mem0Answering, recorded, undocumented } from "./test-support";
+import { FAKE_KEY, json, mem0Answering, recorded, undocumented } from "./test-support";
 import { runtime } from "./worker";
 
 test("a key Mem0 refuses says the key is wrong, not that Mem0 is unreachable", async () => {
@@ -75,4 +75,26 @@ test("the health probe tells a refused key from Mem0 not answering", async () =>
   assert.match(busy.message ?? "", /did not answer/u);
   const live = await runtime.health.api(mem0Answering(() => recorded("ping-status-only.json")).ctx);
   assert.deepEqual(live, { status: "live" });
+});
+
+test("only 401 and 403 are a verdict on the key; any other 4xx throws", async () => {
+  // Mistake: filing every 4xx as a refused key, so Mem0 moving or retiring
+  // the ping path marks a working connection Failing and stops runs. The
+  // bodies are Mem0's documented 401 body under other statuses.
+  for (const status of [400, 404, 410, 422]) {
+    const { ctx } = mem0Answering(() => recorded("ping-unauthorized.json", status));
+    await assert.rejects(runtime.testConnection(ctx), new RegExp(`${status}, which says nothing about the key`, "u"));
+  }
+  const forbidden = await runtime.testConnection(mem0Answering(() => recorded("ping-unauthorized.json", 403)).ctx);
+  assert.deepEqual(forbidden, { ok: false, reason: "Mem0 refused this API key (403)." });
+});
+
+test("a 403 about the plan throws rather than calling the key wrong", async () => {
+  // Composed: `upgrade_required: true` is how Mem0 documents a plan refusal
+  // (openapi.json, the plan-gated endpoints); a spent quota is undocumented.
+  const plan = () => json({ detail: "Upgrade required", upgrade_required: true }, 403);
+  await assert.rejects(runtime.testConnection(mem0Answering(plan).ctx), /under the project's plan/u);
+  const probe = await runtime.health.api(mem0Answering(plan).ctx);
+  assert.equal(probe.status, "down");
+  assert.match(probe.message ?? "", /monthly quota may be spent/u);
 });

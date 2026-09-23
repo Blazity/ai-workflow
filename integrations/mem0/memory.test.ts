@@ -199,7 +199,8 @@ test("removed counts only the deletes Mem0 confirmed", async () => {
     sent.method === "DELETE" ? recorded("memory-not-found.json", 404) : undefined,
   );
   const write = await against(mem0).memory.observe(items([], ["Tests run with jest"]));
-  assert.deepEqual(write, { ok: true, stored: false, removed: 0, dropped: 0, remaining: 1 });
+  // Mem0 said it was not there (404), so it is not counted and not held.
+  assert.deepEqual(write, { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 });
 });
 
 test("a refutation quoting a redacted secret still finds the raw stored text", () => {
@@ -381,25 +382,125 @@ test("the admin half throws what it could not read instead of answering an empty
   await assert.rejects(mem0Memory(ctx).store?.list({}) ?? Promise.resolve(), /did not complete a listing \(503\)/u);
 });
 
-test("no answer and no log line carries the API key", async () => {
-  const answers = [
-    () => recorded("ping-unauthorized.json", 401),
-    undocumented.gatewayPage,
-    () => recorded("add-bad-request.json", 400),
-    () => {
-      throw new TypeError(`fetch failed for Token ${FAKE_KEY}`);
-    },
-  ];
-  for (const answer of answers) {
-    const { ctx, logs } = mem0Answering(answer);
-    const memory = mem0Memory(ctx);
-    const said: string = JSON.stringify([
-      await memory.recall({ subject: REPO, scope: FACTS }),
-      await memory.observe(items(["Uses pnpm 9"])),
-      logs,
-    ]);
-    assert.equal(said.includes(FAKE_KEY), false, said);
-  }
+test("Mem0's own words are quoted without the key, even when Mem0 echoes it", async () => {
+  // Mistake: quoting a refusal body as it came. The detail reaches core's
+  // logger, which does not know this integration's key. The body is the
+  // documented 400 with its message changed to echo the key, which Mem0 is
+  // not documented to do; it is the worst case the quote has to survive.
+  const echoed = recordedJson<{ error: string; details: { message: string } }>("add-bad-request.json");
+  echoed.details.message = `Invalid header: Token ${FAKE_KEY}`;
+  const mem0 = fakeMem0([], (sent) => (sent.url.pathname === "/v3/memories/add/" ? json(echoed, 400) : undefined));
+  const write = await against(mem0).memory.observe(items(["Uses pnpm 9"]));
+  assert.equal(!write.ok && write.code, "rejected");
+  assert.match(!write.ok ? write.detail : "", /Invalid header: Token \[REDACTED\]/u);
+  assert.equal(JSON.stringify(write).includes(FAKE_KEY), false);
+});
+
+test("a 403 about the plan is not read as a refused key", async () => {
+  // Composed: Mem0 documents `upgrade_required: true` on plan-gated 403s
+  // (openapi.json, the dream endpoints); what a spent monthly quota answers is
+  // not documented.
+  const { memory } = mem0AnsweringWith(json({ detail: "Upgrade required", upgrade_required: true }, 403));
+  const read = await memory.recall({ subject: REPO, scope: FACTS });
+  assert.equal(!read.ok && read.code, "unavailable");
+  assert.match(!read.ok ? read.detail : "", /plan \(403, upgrade required\)/u);
+});
+
+// ---------------------------------------------------------------------------
+// How much one subject holds
+
+function learnedAt(text: string, day: number, origin = "learned"): Partial<FakeMemory> {
+  const at = new Date(Date.UTC(2026, 0, day)).toISOString();
+  return held(text, { created_at: at, updated_at: at, metadata: { origin } });
+}
+
+test("an add past the limit forgets the oldest learned facts, never a derived one", async () => {
+  // Mistake: never evicting, so a repository's facts grow with every run
+  // until every observe refuses.
+  const seed = [learnedAt("Package manager: pnpm", 1, "derived"), ...Array.from({ length: 39 }, (_, i) => learnedAt(`Fact ${i}`, i + 2))];
+  const mem0 = fakeMem0(seed);
+  const write = await against(mem0).memory.observe(items(["New A", "New B", "New C"]));
+  assert.deepEqual(write, { ok: true, stored: true, removed: 0, dropped: 3, remaining: 40 });
+  const texts = mem0.memories.map((memory) => memory.memory);
+  assert.equal(texts.length, 40);
+  assert.ok(texts.includes("Package manager: pnpm"));
+  for (const gone of ["Fact 0", "Fact 1", "Fact 2"]) assert.equal(texts.includes(gone), false, gone);
+  assert.ok(texts.includes("Fact 3") && texts.includes("New C"));
+});
+
+test("lessons keep their own, smaller limit", async () => {
+  const seed = Array.from({ length: 30 }, (_, i) => Object.assign(learnedAt(`Lesson ${i}`, i + 1), { agent_id: "lessons" }));
+  const mem0 = fakeMem0(seed);
+  const write = await against(mem0).memory.observe({ ...items(["New lesson"]), scope: { kind: "lessons" } });
+  assert.deepEqual(write, { ok: true, stored: true, removed: 0, dropped: 1, remaining: 30 });
+});
+
+test("a pure retraction never trims, even past the limit", async () => {
+  const seed = Array.from({ length: 45 }, (_, i) => learnedAt(`Fact ${i}`, i + 1));
+  const mem0 = fakeMem0(seed);
+  const write = await against(mem0).memory.observe(items([], ["Fact 44"]));
+  assert.deepEqual(write, { ok: true, stored: true, removed: 1, dropped: 0, remaining: 44 });
+});
+
+test("a seed on a subject too full to reconcile answers stored: false, not a refusal", async () => {
+  const seed = Array.from({ length: 1001 }, (_, i) => held(`Fact ${i}`));
+  const write = await against(fakeMem0(seed)).memory.observe(
+    items(["Package manager: pnpm"], [], { derived: true, onlyIfEmpty: true }),
+  );
+  assert.deepEqual(write, { ok: true, stored: false, removed: 0, dropped: 0, remaining: 1000 });
+});
+
+// ---------------------------------------------------------------------------
+// What an add answered
+
+test("an add Mem0 reports as FAILED stored nothing", async () => {
+  // Mistake: reading any 200 as stored. The body is composed: `FAILED` is one
+  // of the documented values of `status` (openapi.json, POST /v3/memories/add/).
+  const mem0 = fakeMem0([], (sent) =>
+    sent.url.pathname === "/v3/memories/add/" ? json({ event_id: "evt-uuid", status: "FAILED" }) : undefined,
+  );
+  const write = await against(mem0).memory.observe(items(["Uses pnpm 9"]));
+  assert.deepEqual(write, { ok: false, code: "unavailable", detail: "Mem0 reported the add as FAILED, so nothing was stored." });
+});
+
+test("an add answered with no results stored nothing, unlike one only queued", async () => {
+  const empty = (sent: { url: URL }) =>
+    sent.url.pathname === "/v3/memories/add/"
+      ? json({ ...recordedJson<Record<string, unknown>>("direct-import-add.json"), results: [] })
+      : undefined;
+  const items0 = await against(fakeMem0([], empty)).memory.observe(items(["Uses pnpm 9"]));
+  assert.deepEqual(items0, { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 });
+  const mem0 = fakeMem0(
+    [{ memory: "old notebook", user_id: TICKET.key, agent_id: "notebook/AIW-1", app_id: MEM0_NAMESPACE }],
+    empty,
+  );
+  const { memory, sent } = against(mem0);
+  const write = await memory.observe(notebook("new notebook"));
+  assert.equal(!write.ok && write.code, "unavailable");
+  assert.equal(sent.filter((request) => request.method === "DELETE").length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// The memory screen shows what a prompt carries
+
+test("Mem0's own documented listing is reported partial, never as an empty store", async () => {
+  // Mistake: skipping memories this integration cannot address and still
+  // answering complete. The recorded get-all answer carries no entity fields.
+  const { memory } = mem0AnsweringWith(recorded("get-memories.json"));
+  const listing = await memory.store?.list({});
+  assert.deepEqual(listing, { documents: [], complete: false });
+});
+
+test("the memory screen's content is exactly what recall renders", async () => {
+  const mem0 = fakeMem0([
+    learnedAt("Flaky test in auth suite", 5),
+    learnedAt("Package manager: pnpm", 1, "derived"),
+    learnedAt("Uses vitest", 3),
+  ]);
+  const { memory } = against(mem0);
+  const read = await memory.recall({ subject: REPO, scope: FACTS });
+  const shown = await memory.store?.read({ subjectKey: REPO.key, docPath: "facts" });
+  assert.equal(shown?.content, read.ok ? read.rendering : "not ok");
 });
 
 /** A Mem0 that answers every request with one response. */

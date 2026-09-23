@@ -19,23 +19,25 @@
  * model and only appends. So every write here is a Direct Import (infer false):
  * synchronous, verbatim, one memory per item, and this adapter does the
  * reconciling Mem0 leaves undone: it skips an item it already holds, deletes by
- * id what a run refuted, and replaces a notebook by adding the new text and
- * then deleting the old one.
+ * id what a run refuted, keeps each subject within `MEMORY_ITEMS_MAX` by
+ * forgetting the oldest learned entries, and replaces a notebook by adding the
+ * new text and then deleting the old one.
  *
  * `recall` and `observe` never throw: each is one try around its whole body,
  * and `answerOf` turns anything caught into an answer.
  */
-import type {
-  IntegrationContext,
-  MemoryAdapter,
-  MemoryObserveRequest,
-  MemoryRecall,
-  MemoryRecallRequest,
-  MemoryScope,
-  MemoryStoreAdapter,
-  MemoryStoredDocumentRef,
-  MemoryStoredSummary,
-  MemoryWrite,
+import {
+  MEMORY_ITEMS_MAX,
+  type IntegrationContext,
+  type MemoryAdapter,
+  type MemoryObserveRequest,
+  type MemoryRecall,
+  type MemoryRecallRequest,
+  type MemoryScope,
+  type MemoryStoreAdapter,
+  type MemoryStoredDocumentRef,
+  type MemoryStoredSummary,
+  type MemoryWrite,
 } from "@integrations/sdk";
 import {
   MEM0_PAGE_SIZE,
@@ -64,6 +66,9 @@ const MAX_PAGES_PER_SCOPE = 5;
 
 /** The memory screen's listing reads further: 2,000 memories, then says it stopped. */
 const MAX_PAGES_PER_LISTING = 10;
+
+/** Erasing re-reads the pair after each page of deletes, at most this often. */
+const MAX_FORGET_ROUNDS = MAX_PAGES_PER_SCOPE;
 
 /** What core writes in place of a known secret inside a quoted entry (see `MemoryObservation.refuted`). */
 const REDACTION_MARKER = "[REDACTED:configured_secret]";
@@ -162,14 +167,25 @@ async function recall(mem0: Mem0Client, request: MemoryRecallRequest): Promise<M
     return { ok: true, held: true, entries, rendering: entries[0]?.text ?? "" };
   }
 
-  // Get-all's order is not documented, so the order is this adapter's: what
-  // a manifest said first (nothing else reproduces it), then newest first.
-  const entries = [...memories]
+  const texts = orderedTexts(memories).filter((text) => !excluded.has(text));
+  return { ok: true, held: true, entries: texts.map((text) => ({ text })), rendering: rendered(texts) };
+}
+
+/**
+ * Facts or lessons in the order they are shown, each text once. Get-all's
+ * order is not documented, so the order is this adapter's: what a manifest
+ * said first (nothing else reproduces it), then newest first. `recall` and the
+ * memory screen both read it, so a person sees what a prompt carries.
+ */
+function orderedTexts(memories: readonly StoredMemory[]): string[] {
+  return [...memories]
     .sort((a, b) => Number(originOf(b) === "derived") - Number(originOf(a) === "derived") || timeOf(b) - timeOf(a))
     .map((memory) => memory.memory)
-    .filter((text, index, all) => !excluded.has(text) && all.indexOf(text) === index)
-    .map((text) => ({ text }));
-  return { ok: true, held: true, entries, rendering: entries.map((entry) => `- ${entry.text}`).join("\n") };
+    .filter((text, index, all) => all.indexOf(text) === index);
+}
+
+function rendered(texts: readonly string[]): string {
+  return texts.map((text) => `- ${text}`).join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +198,10 @@ async function observe(mem0: Mem0Client, request: MemoryObserveRequest): Promise
   }
   const filters = filtersFor(request.subject.key, scope);
   const held = await readAll(mem0, filters, MAX_PAGES_PER_SCOPE);
+  if (observation.kind === "items" && observation.onlyIfEmpty && held.memories.length > 0) {
+    // A seed never edits what a run wrote, however much that is.
+    return { ok: true, stored: false, removed: 0, dropped: 0, remaining: held.memories.length };
+  }
   if (!held.complete) {
     // Without the whole list, a learned item may already be held and a
     // refuted one may be on a page never read.
@@ -199,10 +219,6 @@ async function observe(mem0: Mem0Client, request: MemoryObserveRequest): Promise
       origin: "notebook",
       ...(observation.sourceTruncated ? { truncated: true } : {}),
     });
-  }
-
-  if (observation.onlyIfEmpty && held.memories.length > 0) {
-    return { ok: true, stored: false, removed: 0, dropped: 0, remaining: held.memories.length };
   }
 
   // Forget what the run refuted: find each by its exact words, delete by id.
@@ -225,14 +241,31 @@ async function observe(mem0: Mem0Client, request: MemoryObserveRequest): Promise
       messages: fresh.map((content) => ({ role: "user", content })),
       metadata: { ...metadata, origin: observation.derived ? "derived" : "learned" },
     });
-    added = answer.results?.length ?? fresh.length;
+    // Without `results` Mem0 only queued the add: counted as taken. An empty
+    // `results` is Mem0 saying it stored none of them (an exact repeat).
+    added = answer.results === undefined ? fresh.length : answer.results.length;
+  }
+
+  // Stay within what one subject holds (the port's limit, the built-in
+  // store's too): past it, forget the oldest entries a run learned, by id.
+  // Only after an add, so a pure retraction never trims.
+  const kept = held.memories.filter((memory) => !doomed.includes(memory));
+  const limit = scope.kind === "lessons" ? MEMORY_ITEMS_MAX.lessons : MEMORY_ITEMS_MAX.facts;
+  const excess = kept.length + added - limit;
+  let dropped = 0;
+  if (added > 0 && excess > 0) {
+    const oldestLearned = kept
+      .filter((memory) => originOf(memory) !== "derived")
+      .sort((a, b) => timeOf(a) - timeOf(b))
+      .slice(0, excess);
+    dropped = await deleteAll(mem0, oldestLearned);
   }
   return {
     ok: true,
-    stored: fresh.length > 0 || removed > 0,
+    stored: added > 0 || removed > 0,
     removed,
-    dropped: 0,
-    remaining: held.memories.length - removed + added,
+    dropped,
+    remaining: kept.length + added - dropped,
   };
 }
 
@@ -264,11 +297,19 @@ async function replaceNotebook(
     messages: [{ role: "user", content: text }],
     metadata,
   });
-  const stored = answer.results?.[0];
-  if (!stored) {
+  if (answer.results === undefined) {
     // Accepted without a result: queued, not confirmed. The previous version
     // stays until a later write confirms a new one; recall reads the newest.
     return { ok: true, stored: true, removed: 0, dropped: 0, remaining: held.length };
+  }
+  const stored = answer.results[0];
+  if (!stored) {
+    // Mem0 answered that it stored nothing: the text was not held a moment
+    // ago, so another writer stored it since, or Mem0 dropped it.
+    throw new Mem0Failure(
+      "unavailable",
+      "Mem0 answered the notebook's add with nothing stored, so the previous version was kept.",
+    );
   }
   if (stored.data.memory !== text && stored.data.memory !== text.trim()) {
     // Mem0 kept something other than the text it was given (shortened, most
@@ -354,10 +395,7 @@ function documentPair(ref: MemoryStoredDocumentRef): { subjectKey: string; agent
 /** What the memory screen shows for one document: what `recall` would render. */
 function contentOf(agentId: string, memories: readonly StoredMemory[]): string {
   if (agentId.startsWith("notebook/")) return newest(memories).memory;
-  return [...memories]
-    .sort((a, b) => Number(originOf(b) === "derived") - Number(originOf(a) === "derived") || timeOf(b) - timeOf(a))
-    .map((memory) => `- ${memory.memory}`)
-    .join("\n");
+  return rendered(orderedTexts(memories));
 }
 
 function store(mem0: Mem0Client): MemoryStoreAdapter {
@@ -377,10 +415,15 @@ function store(mem0: Mem0Client): MemoryStoreAdapter {
       const read = await readAll(mem0, { AND: conditions }, MAX_PAGES_PER_LISTING);
 
       const groups = new Map<string, { subjectKey: string; agentId: string; memories: StoredMemory[] }>();
+      let unaddressable = 0;
       for (const memory of read.memories) {
         // A memory under this namespace without both fields was not written by
-        // this integration and has no pair `read` could answer.
-        if (!memory.user_id || !memory.agent_id) continue;
+        // this integration and has no pair `read` could answer. It is still
+        // there, so a listing that leaves it out is not the whole store.
+        if (!memory.user_id || !memory.agent_id) {
+          unaddressable += 1;
+          continue;
+        }
         const key = JSON.stringify([memory.user_id, memory.agent_id]);
         const group = groups.get(key) ?? { subjectKey: memory.user_id, agentId: memory.agent_id, memories: [] };
         group.memories.push(memory);
@@ -404,7 +447,10 @@ function store(mem0: Mem0Client): MemoryStoreAdapter {
         })
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
       const limited = options.limit === undefined ? documents : documents.slice(0, options.limit);
-      return { documents: limited, complete: read.complete && limited.length === documents.length };
+      return {
+        documents: limited,
+        complete: read.complete && unaddressable === 0 && limited.length === documents.length,
+      };
     },
 
     async read(ref) {
@@ -430,12 +476,14 @@ function store(mem0: Mem0Client): MemoryStoreAdapter {
       // background and cannot say what it removed. Read again until nothing is
       // left, since each delete shifts the pages.
       let removed = 0;
-      for (let round = 0; round < MAX_PAGES_PER_SCOPE; round += 1) {
+      for (let round = 0; round < MAX_FORGET_ROUNDS; round += 1) {
         const page = await mem0.listPage(pairFilters(pair.subjectKey, pair.agentId), 1);
         if (page.memories.length === 0) return removed > 0;
         removed += await deleteAll(mem0, page.memories);
       }
-      throw new Error("Mem0 still held memories under this document after five rounds of deletes; erase it again.");
+      throw new Error(
+        `Mem0 still held memories under this document after ${MAX_FORGET_ROUNDS} rounds of deletes; erase it again.`,
+      );
     },
   };
 }
