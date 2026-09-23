@@ -32,6 +32,8 @@ export type ConformanceCode =
   | "connection_secret_default"
   | "connection_default_invalid"
   | "connection_identity_not_secret"
+  | "connection_required_field_missing"
+  | "connection_connectionless_has_required"
   | "repositories_invalid"
   | "vcs_bot_login_missing"
   | "capability_unknown"
@@ -277,6 +279,7 @@ const manifestSchema = z.object({
         identity: z.boolean().optional(),
       }),
     ),
+    connectionless: z.literal(true).optional(),
   }),
   settings: z
     .array(
@@ -441,6 +444,22 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
       );
     }
   });
+  const required = manifest.connection.fields.filter((field) => field.optional !== true);
+  if (manifest.connection.connectionless === true) {
+    if (required.length > 0) {
+      report(
+        "connection_connectionless_has_required",
+        "connection.connectionless",
+        `The connection says it needs nothing, and ${required.map((field) => `"${field.key}"`).join(", ")} ${required.length === 1 ? "is" : "are"} required. Drop connectionless, or make those fields optional.`,
+      );
+    }
+  } else if (required.length === 0) {
+    report(
+      "connection_required_field_missing",
+      "connection.fields",
+      "No connection field is required, so this integration would read Connected on every deployment with nothing configured. Mark the field it cannot work without as required, or declare connection.connectionless: true if it truly needs nothing.",
+    );
+  }
 }
 
 /**

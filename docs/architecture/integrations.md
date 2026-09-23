@@ -807,8 +807,11 @@ Exactly one source at a time, per integration: the **environment** variables
 your fields name, or values an admin **stored** from the dashboard. They never
 mix. With nothing stored, the environment is the source when every required
 field has its variable set; when some but not all are set, the card reads
-Failing and names the missing variables. A manifest whose fields are all
-optional never reads Connected on its own. Stored secrets are encrypted under
+Failing and names the missing variables. A connection with no required field
+would be complete on every deployment with nothing configured, so conformance
+refuses it: mark the field your integration cannot work without as required,
+or, if it truly needs nothing, say so with `connection: { fields: [...],
+connectionless: true }`, which makes it usable wherever it is enabled. Stored secrets are encrypted under
 the deployment's `INTEGRATION_SECRETS_KEY`; without it, stored values are
 unavailable and environment values still work.
 

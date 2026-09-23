@@ -322,6 +322,35 @@ test("a vcs integration declares where its automation account's login is set", (
   assert.deepEqual(codes(validIntegration().manifest, validIntegration().runtime), []);
 });
 
+test("a connection needs one required field, or says it needs nothing", () => {
+  // Core treats a connection whose every field is optional as complete from
+  // the start: without this, such an integration reads Connected on every
+  // deployment, and a memory provider would replace the built-in store there.
+  const allOptional = validIntegration();
+  for (const field of allOptional.manifest.connection.fields) (field as { optional?: boolean }).optional = true;
+  hasIssue(allOptional.manifest, allOptional.runtime, "connection_required_field_missing", "connection.fields");
+
+  const none = validIntegration();
+  (none.manifest.connection as { fields: unknown[] }).fields = [];
+  hasIssue(none.manifest, none.runtime, "connection_required_field_missing", "connection.fields");
+
+  // Said out loud, it conforms.
+  const declared = validIntegration();
+  (declared.manifest.connection as { fields: unknown[]; connectionless?: true }).fields = [];
+  (declared.manifest.connection as { connectionless?: true }).connectionless = true;
+  assert.ok(!codes(declared.manifest, declared.runtime).some((code) => code.startsWith("connection_")));
+
+  // And it cannot be said beside a field the integration cannot work without.
+  const contradiction = validIntegration();
+  (contradiction.manifest.connection as { connectionless?: true }).connectionless = true;
+  hasIssue(
+    contradiction.manifest,
+    contradiction.runtime,
+    "connection_connectionless_has_required",
+    "connection.connectionless",
+  );
+});
+
 test("identity marks a secret, and only a boolean", () => {
   const plain = validIntegration();
   plain.manifest.connection.fields[0].identity = true;

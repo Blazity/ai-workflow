@@ -60,6 +60,19 @@ export interface IntegrationManifest {
 
 export interface IntegrationConnection {
   readonly fields: readonly ConnectionField[];
+  /**
+   * This integration needs nothing configured to work: it is usable on every
+   * deployment where it is enabled, with or without its optional fields.
+   *
+   * Explicit, because the alternative is silent. Core treats a connection
+   * whose every field is optional as complete from the start, so without this
+   * flag a manifest that forgot to mark a field required would be Connected
+   * on every deployment, and a memory integration like that would replace the
+   * built-in store everywhere. Conformance therefore requires at least one
+   * required field unless this is `true`, and refuses it beside a required
+   * field, which would be a contradiction.
+   */
+  readonly connectionless?: true;
 }
 
 /**
