@@ -42,6 +42,8 @@ GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; s
 - The default branch, saved in the repository profile
 - `GITHUB_WEBHOOK_SECRET` (`openssl rand -hex 32`)
 
+Before emitting, confirm the App subscribes to all five events (App settings, Permissions & events, Subscribe to events): **Pull request**, **Check run**, **Pull request review**, **Pull request review comment**, **Issue comment**. A missing one is a trigger that never fires, and nothing on this side says so except the Health page's GitHub check. Steps: [GITHUB-APP-SETUP.md §5](../../../docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events).
+
 Emit (paste into Vercel → Project Settings → Environment Variables, all three environments):
 
 ```
