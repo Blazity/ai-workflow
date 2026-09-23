@@ -1,8 +1,8 @@
 import type { VcsProviderKind } from "@shared/contracts";
 
-export function ticketSubjectKey(ticketProvider: string, ticketKey: string): string {
-  return `ticket:${ticketProvider.trim().toLowerCase()}:${ticketKey.trim().toUpperCase()}`;
-}
+/** Spelled in `@shared/contracts`, because the dashboard finds a ticket's
+ *  work scope record by it too. */
+export { ticketSubjectKey } from "@shared/contracts";
 
 export function prSubjectKey(
   provider: VcsProviderKind,
@@ -47,8 +47,8 @@ export function scheduleSubjectKey(
   return occurrenceAt === undefined ? base : `${base}:${occurrenceAt.getTime()}`;
 }
 
-/** Spelled in `@shared/contracts`, because the dashboard finds a repository's
- *  memory by it too. */
+/** Spelled in `@shared/contracts` for the same reason: the dashboard finds a
+ *  repository's memory by it. */
 export { repoSubjectKey } from "@shared/contracts";
 
 export function orgSubjectKey(provider: VcsProviderKind, owner: string): string {

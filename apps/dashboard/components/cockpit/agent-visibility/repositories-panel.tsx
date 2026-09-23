@@ -17,6 +17,7 @@ import { offeredNotInRecord } from "@/lib/agent-visibility/edit";
 import { formatClock, plural } from "@/lib/agent-visibility/format";
 import { loadVisibility, type LoadFailure } from "@/lib/agent-visibility/load";
 import type { ClarificationRoundHeader } from "@shared/agent-visibility";
+import { ticketSubjectKey } from "@shared/contracts";
 
 import { integrationsProviding } from "@integrations/registry";
 
@@ -29,8 +30,9 @@ import { RecordEditor } from "./record-editor";
 import { RoundView } from "./round-view";
 
 /**
- * The subject a ticket's record is kept under, as the worker spells it
- * (`ticketSubjectKey` in the worker's `engine/support/subject-key.ts`).
+ * The subject this panel reads a ticket's record under. The spelling is
+ * `ticketSubjectKey` in `@shared/contracts`, the one the worker writes with;
+ * what this adds is the provider segment.
  *
  * The provider segment is the tracker's own id, not the word "jira": the
  * worker writes the record under whichever tracker this deployment connected,
@@ -44,14 +46,14 @@ const TICKET_PROVIDERS = integrationsProviding("issue_tracker").map(
   (integration) => integration.id,
 );
 
-export function ticketSubjectKey(ticketKey: string): string {
+export function panelTicketSubjectKey(ticketKey: string): string {
   const provider = TICKET_PROVIDERS.length === 1 ? TICKET_PROVIDERS[0] : undefined;
   if (provider === undefined) {
     throw new Error(
       "This build ships more than one issue tracker, so the ticket's subject key cannot be derived from the build alone: pass the run's tracker id into this panel.",
     );
   }
-  return `ticket:${provider}:${ticketKey.trim().toUpperCase()}`;
+  return ticketSubjectKey(provider, ticketKey);
 }
 
 function Entries({
@@ -153,7 +155,7 @@ export function RepositoriesPanel({
    *  chip in this header already carries the news. */
   autoOpen?: boolean;
 }) {
-  const subjectKey = ticketSubjectKey(ticketKey);
+  const subjectKey = panelTicketSubjectKey(ticketKey);
   const [toggled, setToggled] = React.useState<boolean | null>(null);
   const [record, setRecord] = React.useState<WorkScopeRead | null>(null);
   const [failure, setFailure] = React.useState<LoadFailure | null>(null);

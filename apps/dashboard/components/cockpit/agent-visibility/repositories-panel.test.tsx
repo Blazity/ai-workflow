@@ -31,7 +31,7 @@ import { installBrowser } from "@/lib/agent-visibility/test-support/browser";
 
 import { IDLE_POLL_MS } from "@/lib/use-live-poll";
 
-import { RepositoriesPanel, ticketSubjectKey } from "./repositories-panel";
+import { RepositoriesPanel, panelTicketSubjectKey } from "./repositories-panel";
 
 // The primitives are transpiled to `React.createElement` here, with no import
 // of their own; the runner has no bundler to provide it.
@@ -188,7 +188,7 @@ async function openRound(root: ReactTestInstance, fragment: string) {
 test("a ticket's record is read under the subject key the worker writes", async (t) => {
   const harness = render(t, { ticketKey: "awp-235" });
   await settle();
-  assert.equal(ticketSubjectKey("awp-235"), "ticket:jira:AWP-235");
+  assert.equal(panelTicketSubjectKey("awp-235"), "ticket:jira:AWP-235");
   assert.ok(
     harness.requests[0]?.includes(`subjectKey=${encodeURIComponent("ticket:jira:AWP-235")}`),
     `asked for ${harness.requests[0]}`,
