@@ -317,12 +317,15 @@ do them and cannot get them wrong:
   answers `unavailable` and nothing is sent; text the redaction cannot process
   is `rejected`. Addresses (the subject key, a notebook's name, the run id, the
   ticket key) are left as they are. A value your engine stored before it
-  became a known secret stays in your engine, where core cannot reach it, but
-  goes no further: core takes known secrets out of every `rendering` you recall
-  before it reaches a prompt or a workspace, and hands `entries` on as you gave
-  them, because a run quotes one back to retract it. (The built-in store also
-  cleans what it holds at its next write into a document; the rule for all of
-  this is `apps/worker/src/memory/known-secrets.ts`.)
+  became a known secret stays in your engine, where core cannot reach it, and
+  goes nowhere else: core takes known secrets out of everything you recall,
+  the `rendering` and every entry, before it reaches a prompt, a workspace or
+  the model that distils. A run that retracts such an entry therefore quotes it
+  cleaned, so an engine that matches `refuted` against raw stored text misses
+  it. The set is read once per step, so a secret added mid-step is taken out
+  from the next step on. (The built-in store also cleans what it holds at its
+  next write into a document; the rule for all of this is
+  `apps/worker/src/memory/known-secrets.ts`.)
 - **Size in a prompt is capped.** One agent prompt carries at most
   `MEMORY_PROMPT_BUDGET_BYTES` of renderings: 16 KiB of facts and 16 KiB of
   lessons, summed over the owner and every repository in the prompt. A

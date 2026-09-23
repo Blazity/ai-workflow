@@ -33,14 +33,14 @@
  *   deployment knows already taken out of its text (the environment's and
  *   those an admin stored in the dashboard, which an integration is never
  *   handed). Text core could not clean is refused before it reaches you. Core
- *   also takes them out of every `rendering` you recall before it reaches a
- *   prompt or a workspace, so a value you stored before it became a known
- *   secret goes no further; `entries` it hands on as you gave them, because
- *   a run quotes one back to retract it. Two silences follow, by design: the
- *   set is read once per step, so a secret added in the middle of a step is
- *   taken out from the next step on; and because `entries` stay as stored, a
- *   value stored before it became a known secret still reaches the model that
- *   distils, which is how a run can name that entry to retract it.
+ *   also takes them out of everything you recall, the `rendering` and every
+ *   entry's `text`, before it reaches a prompt, a workspace or the model that
+ *   distils, so a value you stored before it became a known secret stays in
+ *   your engine and goes nowhere else from there. A run that retracts such an
+ *   entry quotes it cleaned; core cleans the quote again on its way back, so
+ *   `refuted` says how to match it against what you hold.
+ *   One silence, by design: the set is read once per step, so a secret added
+ *   in the middle of a step is taken out from the next step on.
  * - Size in a prompt. Core cuts what it injects to `MEMORY_PROMPT_BUDGET_BYTES`
  *   per scope and a notebook to `MEMORY_NOTEBOOK_MAX_BYTES`, with a marker,
  *   whatever you return.
@@ -284,6 +284,13 @@ export type MemoryObservation =
        * search ranking, which deletes a neighbour, and never by a filter
        * delete, which cannot say what it removed. `removed` counts the deletes
        * the engine confirmed.
+       *
+       * The words are the entry as core handed it, with this deployment's
+       * secrets taken out: an entry you stored before a value in it became a
+       * known secret comes back with `[REDACTED:configured_secret]` in that
+       * place, and so does its quote. Matched against the raw stored text it
+       * misses; treat the marker as standing for one run of non-space
+       * characters when you compare, or that entry is never retracted.
        */
       readonly refuted: readonly string[];
       /**
