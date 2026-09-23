@@ -17,7 +17,11 @@
  * the day this lands; reading the test verdict here would empty their palettes.
  */
 import { investigateSources } from "../blocks/investigate/manifest.js";
-import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
+import {
+  capabilityLabel as sdkCapabilityLabel,
+  type IntegrationBlockManifest,
+  type IntegrationManifest,
+} from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
   IntegrationFailure,
@@ -55,24 +59,22 @@ interface IntegrationBlockRequirement {
 
 /**
  * The deployment, as the resolver takes it: which integrations exist and in
- * what state, which blocks they contribute, who can serve each capability, and
- * which capabilities core still serves out of its own configuration.
+ * what state, which blocks they contribute, and who can serve each capability.
+ *
+ * Every provider of a capability is an integration and is counted once, in
+ * `providers`. Until S12 core also served some capabilities out of its own
+ * configuration and a second list said which; by then that list only ever
+ * repeated a connected integration, so a connected Jira counted twice and
+ * every block that required the issue tracker was refused as ambiguous. It is
+ * gone rather than emptied, so nothing can count a provider a second time.
+ * (Memory's built-in store is a provider core serves by itself, and it has a
+ * rule of its own rather than a place in this list.)
  */
 export interface DeploymentIntegrations {
   readonly byId: ReadonlyMap<string, IntegrationPresence>;
   readonly blocks: ReadonlyMap<string, IntegrationBlockRequirement>;
   /** Capability to the usable integrations that declare it, in manifest order. */
   readonly providers: ReadonlyMap<string, readonly string[]>;
-  /**
-   * Capabilities this deployment serves from core rather than from an
-   * integration.
-   *
-   * Every one of them is a provider the plan moves out in a later stage
-   * (ADR-010, decision 10 and stages S8 to S13). Until then a block that asks
-   * for the capability gets core's own, which is what keeps a deployment
-   * configured through its environment running with nothing to migrate.
-   */
-  readonly builtinCapabilities: ReadonlySet<string>;
   readonly botIdentityProviders: ReadonlySet<string>;
   readonly legacyBotIdentityProviders: ReadonlySet<string>;
 }
@@ -82,7 +84,6 @@ export const NO_INTEGRATIONS: DeploymentIntegrations = {
   byId: new Map(),
   blocks: new Map(),
   providers: new Map(),
-  builtinCapabilities: new Set(),
   botIdentityProviders: new Set(),
   legacyBotIdentityProviders: new Set(),
 };
@@ -91,7 +92,6 @@ export interface DeploymentIntegrationsInput {
   readonly manifests: readonly IntegrationManifest[];
   /** Keyed by integration id, as `readIntegrationStates()` returns it. */
   readonly states: ReadonlyMap<string, IntegrationState>;
-  readonly builtinCapabilities?: Iterable<string>;
 }
 
 export function deploymentIntegrations(
@@ -149,7 +149,6 @@ export function deploymentIntegrations(
     byId,
     blocks,
     providers,
-    builtinCapabilities: new Set(input.builtinCapabilities ?? []),
     botIdentityProviders,
     legacyBotIdentityProviders,
   };
@@ -210,33 +209,52 @@ export function integrationUnusableReason(presence: IntegrationPresence): string
 }
 
 /**
- * Whether a capability has exactly one answer on this deployment, and whether
- * this build can actually hand a block that answer.
- *
- * Nobody serving it, and several serving it with nobody chosen, are both
- * refusals with a name, never a silent pick of the first: a block that posted
- * into one of two connected workspaces because it happened to be first in the
- * registry is the failure an admin cannot explain afterwards.
- *
- * The third case is ours rather than the admin's, and it is why an integration
- * that declares a capability does not yet satisfy one. Execution hands a block
- * whichever adapter core builds from its own configuration
- * (`engine/support/integration-capabilities.ts`), so offering the block because
- * an integration declared the capability would promise one provider in the
- * palette and use another in the run. Stages S8 to S13 replace each built-in
- * with the integration that declared it, and this refusal goes with them.
- */
-/**
- * Capabilities core can hand a block from an integration's own adapter.
+ * Capabilities core can hand a block from an integration's own adapter
+ * (`integrationCapabilityAccess` in `engine/support/integration-capabilities.ts`).
  *
  * It exists because availability and execution have to agree about which
- * provider serves a block. A capability core cannot yet reach through an
- * integration is refused by name, however many integrations declare it; each
- * of stages S9 to S13 adds its capability here in the same change that teaches
- * execution to resolve it. S9 added `messaging`
- * (`engine/support/messaging.ts`).
+ * provider serves a block: a capability declared in `requires` that execution
+ * cannot reach through an integration is refused by name, however many
+ * integrations declare it, rather than offered in the palette and missing in
+ * the run. `messaging` came with S9, `vcs` with S10 and S11, `issue_tracker`
+ * with S12. A capability that joins execution joins this set in the same
+ * change.
  */
-const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging", "vcs"]);
+const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set([
+  "issue_tracker",
+  "messaging",
+  "vcs",
+]);
+
+/**
+ * Who serves a capability that one provider serves at a time, given the
+ * providers usable for it: nobody, exactly one, or several with nobody chosen.
+ *
+ * THE ONE STATEMENT OF THAT RULE. The issue tracker's and messaging's runtimes
+ * ask it when a run reaches them, the palette asks it here
+ * (`capabilityIssue`), and the Integrations page and MCP ask it through the
+ * capability overview, so a deployment cannot be told on one screen that a
+ * provider serves it while its runs are refused as ambiguous. Memory is the
+ * exception, with a rule of its own, because its built-in store answers when
+ * nothing is connected.
+ *
+ * Several is an answer with every name in it, never a silent pick of the
+ * first: a run that posted into one of two connected workspaces because it
+ * happened to be first in the registry is the failure an admin cannot explain
+ * afterwards. Choosing one is disabling the others today; when the
+ * Integrations page can select an active provider (plan decision 9), the
+ * selection is read here and nowhere else.
+ */
+export type ActiveProvider<T> =
+  | { readonly kind: "none" }
+  | { readonly kind: "one"; readonly provider: T }
+  | { readonly kind: "ambiguous"; readonly providers: readonly T[] };
+
+export function activeProviderOf<T>(usable: readonly T[]): ActiveProvider<T> {
+  if (usable.length === 0) return { kind: "none" };
+  if (usable.length > 1) return { kind: "ambiguous", providers: usable };
+  return { kind: "one", provider: usable[0] as T };
+}
 
 /**
  * The same question for a CORE block that needs a capability.
@@ -252,61 +270,52 @@ export function coreCapabilityIssue(
   return capabilityIssue(capability, integrations);
 }
 
+/**
+ * Whether a capability has an answer a block can be handed on this
+ * deployment, or the sentence that says why not.
+ *
+ * Nobody serving it names the provider that would, in the state it is in, so
+ * an admin who can see it on the Integrations page is not sent looking for a
+ * second one. For a capability one provider serves at a time, several usable
+ * is a refusal with every name in it (`activeProviderOf`). Version control is
+ * served by every usable provider at once, per repository, so one is enough
+ * and two are not a choice to make.
+ */
 function capabilityIssue(
   capability: string,
   integrations: DeploymentIntegrations,
 ): string | null {
   const holders = integrations.providers.get(capability) ?? [];
   const label = capabilityLabel(capability);
-  if (capability === "vcs") {
-    if (integrations.builtinCapabilities.has(capability) || holders.length > 0) return null;
+  if (holders.length === 0) {
     const idle = [...integrations.byId.values()].filter(
       (presence) => presence.capabilities.includes(capability) && !presence.usable,
     );
     if (idle.length > 0) {
       const names = idle.map((presence) => presence.name).join(" and ");
-      return `${names} would provide the ${label} capability this block needs, but is not connected. Finish connecting it on the Integrations page.`;
+      return idle.every((presence) => presence.status === "disabled")
+        ? `${names} would provide the ${label} capability this block needs, but is switched off. Enable it on the Integrations page.`
+        : `${names} would provide the ${label} capability this block needs, but is not connected. Finish connecting it on the Integrations page.`;
     }
     return `Nothing on this deployment provides the ${label} capability, which this block needs. Connect an integration that provides it on the Integrations page.`;
   }
-  if (!integrations.builtinCapabilities.has(capability)) {
-    if (holders.length === 0) {
-      // A provider that ships and declares the capability but is not usable is
-      // named, with the state it is in. "Nothing provides messaging" in front
-      // of an admin who can see Slack on the Integrations page is a sentence
-      // that sends them looking for a second provider they do not need.
-      const idle = [...integrations.byId.values()].filter(
-        (presence) => presence.capabilities.includes(capability) && !presence.usable,
-      );
-      if (idle.length > 0) {
-        const names = idle.map((presence) => presence.name).join(" and ");
-        return idle.every((presence) => presence.status === "disabled")
-          ? `${names} would provide the ${label} capability this block needs, but is switched off. Enable it on the Integrations page.`
-          : `${names} would provide the ${label} capability this block needs, but is not connected. Finish connecting it on the Integrations page.`;
-      }
-      return `Nothing on this deployment provides the ${label} capability, which this block needs. Connect an integration that provides it on the Integrations page.`;
-    }
-    if (!INTEGRATION_SERVED_CAPABILITIES.has(capability)) {
-      const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);
-      return `This build cannot yet run a block on the ${label} capability served by an integration (${names.join(", ")}); core still owns that capability. It becomes available when that integration takes the capability over.`;
-    }
-    if (holders.length === 1) return null;
-    const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);
-    return `${names.join(" and ")} both provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
-  }
-  if (holders.length === 0) return null;
   const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);
-  // Selecting the active provider of a capability is the Integrations page's
-  // job and ships with it in S6 (ADR-010). Until then the way to choose is to
-  // disable the ones you do not want, and the sentence says that rather than
-  // sending an admin to a control nobody has built.
-  return `${[...names, "this deployment's built-in provider"].join(" and ")} all provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
+  if (!INTEGRATION_SERVED_CAPABILITIES.has(capability)) {
+    return `This build cannot yet run a block on the ${label} capability served by an integration (${names.join(", ")}); core does not hand a block that capability. It becomes available when execution does.`;
+  }
+  if (capability === VCS) return null;
+  const active = activeProviderOf(names);
+  if (active.kind !== "ambiguous") return null;
+  // Selecting the active provider of a capability is not built yet (plan
+  // decision 9). Until it is, the way to choose is to disable the ones you do
+  // not want, and the sentence says that rather than sending an admin to a
+  // control nobody has built.
+  return `${active.providers.join(" and ")} both provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
 }
 
-/** The capability's id as a person reads it. Names no provider. */
+/** The capability as a sentence reads it, from the SDK's one table of labels. */
 function capabilityLabel(capability: string): string {
-  if (capability === "vcs") return "version control";
-  return capability.replace(/_/g, " ");
+  return (sdkCapabilityLabel(capability) ?? capability.replace(/_/g, " ")).toLowerCase();
 }
 
 const NO_CAPABILITIES: readonly string[] = [];

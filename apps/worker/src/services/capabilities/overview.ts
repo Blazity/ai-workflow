@@ -9,13 +9,10 @@
  * when nothing is connected (ADR-010, decision 21).
  *
  * For every other capability the facts come from the engine's
- * `deploymentIntegrations` (the value the palette and a run reason over), and
- * ONE rule is stated here: two usable providers of a `one` capability serve
- * neither. That rule is also written in each runtime that resolves a
- * single-provider capability (the issue tracker, messaging, the palette's
- * `coreCapabilityIssue`), so this is one more statement of it, not a reading
- * of theirs; a change to it has to be made in all of them until one helper
- * holds it.
+ * `deploymentIntegrations` (the value the palette and a run reason over), read
+ * with the engine's own rule for who serves a single-provider capability
+ * (`activeProviderOf`), the one the issue tracker's and messaging's runtimes
+ * and the palette ask. This module decides nothing of its own.
  */
 import { integrationManifests } from "@integrations/registry";
 import { INTEGRATION_CAPABILITIES, type IntegrationManifest } from "@integrations/sdk";
@@ -26,6 +23,7 @@ import type {
 } from "@shared/contracts";
 
 import {
+  activeProviderOf,
   deploymentIntegrations,
   type DeploymentIntegrations,
 } from "../../engine/definition/integration-availability.js";
@@ -67,16 +65,19 @@ export function capabilityOverview(input: {
 }
 
 /**
- * A capability only an integration can serve. Two usable providers of a `one`
- * capability are a refusal, never a pick of the first: the engine refuses
- * every block that needs it in that state, and the page says the same.
+ * A capability only an integration can serve. Every usable provider of a
+ * `many` capability serves; a `one` capability is served as the engine's rule
+ * says, so two usable providers are a refusal, never a pick of the first, on
+ * the page as in every run.
  */
 function providerServing(
   cardinality: "one" | "many",
   usable: readonly string[],
 ): IntegrationCapabilityServing {
   if (usable.length === 0) return { kind: "none" };
-  if (cardinality === "one" && usable.length > 1) return { kind: "ambiguous", ids: usable };
+  if (cardinality === "many") return { kind: "integrations", ids: usable };
+  const active = activeProviderOf(usable);
+  if (active.kind === "ambiguous") return { kind: "ambiguous", ids: active.providers };
   return { kind: "integrations", ids: usable };
 }
 
@@ -102,15 +103,22 @@ function memoryServing(memory: MemoryAnswer): IntegrationCapabilityServing {
   }
 }
 
-/** The overview for this deployment, read now. */
-export async function readCapabilityOverview(): Promise<IntegrationCapabilitiesResponse> {
-  const states = await readIntegrationStates();
+/**
+ * The overview for this deployment, read now, or over the deployment a caller
+ * already read: `system.capabilities` reads the integrations once for every
+ * field of its answer, and this row set is one of them.
+ */
+export async function readCapabilityOverview(
+  known?: DeploymentIntegrations,
+): Promise<IntegrationCapabilitiesResponse> {
+  const deployment =
+    known ??
+    deploymentIntegrations({
+      manifests: integrationManifests,
+      states: await readIntegrationStates(),
+    });
   const memory = await activeMemory();
   return {
-    capabilities: capabilityOverview({
-      manifests: integrationManifests,
-      deployment: deploymentIntegrations({ manifests: integrationManifests, states }),
-      memory,
-    }),
+    capabilities: capabilityOverview({ manifests: integrationManifests, deployment, memory }),
   };
 }

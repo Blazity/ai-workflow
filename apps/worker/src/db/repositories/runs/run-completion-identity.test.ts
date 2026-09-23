@@ -16,6 +16,8 @@ import { isRunCompletionPending } from "../../../services/mcp/contracts.js";
 vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
 const JIRA = "https://blazity.atlassian.net";
+/** How the tracker these runs were on links a ticket: its answer, which core carries. */
+const LINKS = (key: string) => `${JIRA}/browse/${key}`;
 const subjectKey = "ticket:jira:PROJ-1";
 const ownerToken = "owner-a";
 const runId = "wrun_identity";
@@ -29,7 +31,7 @@ beforeEach(async () => {
 }, 30_000);
 
 async function runDetail(id: string) {
-  const result = await fetchRunDetailFromDb({ db, runId: id, ticketOrigin: JIRA, secrets: [] });
+  const result = await fetchRunDetailFromDb({ db, runId: id, ticketLinks: LINKS, secrets: [] });
   if (result === null) throw new Error(`no run detail row for ${id}`);
   return result.run;
 }

@@ -19,7 +19,6 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../integrations/usable.js", () => ({
-  usableIntegrations: async () => state.integrations,
   resolveUsableIntegrations: async () => ({
     readable: true,
     usable: state.integrations,

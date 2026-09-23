@@ -10,9 +10,25 @@
  * being read here: they are created once per integration per run by a step of
  * their own, and re-deriving them would be the second bucket this design
  * exists to prevent.
+ *
+ * TRACING FOLLOWS ITS PIN, AND NEVER GATES A RUN. A run records the connection
+ * of every tracer it reaches at its start (`integrationsUsedBy` counts agent
+ * sandboxes and workspaces as reaching `agent_tracing`), and each sandbox
+ * compares it here, as every other capability compares its own (plan decision
+ * 9): a tracer reconfigured since the run started is not asked to trace this
+ * sandbox, because its state for the run was made on the old connection and
+ * the rest of the run would land on the new one. What that costs the run is
+ * its tracing and nothing else. Tracing enriches a run rather than serving
+ * it, the way memory does (plan decision 12 names memory as the exception
+ * that goes on without its provider), and a disabled or disconnected tracer
+ * has always meant an untraced run rather than a failed one; a reconfigured
+ * one stopping the run while a disabled one does not would be backwards. So
+ * the run goes on, and the log line for the sandbox names the tracer and why.
  */
 import type { IntegrationRunState } from "@integrations/sdk";
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import type { AgentTracingPlan } from "../../sandbox/agents/types.js";
+import { recordedPinFor } from "./recorded-pins.js";
 
 /** Bounded per sandbox; a provider assembling a setup does no I/O. */
 const TRACING_RESOLVE_TIMEOUT_MS = 30_000;
@@ -30,13 +46,21 @@ export interface AgentTracingRun {
   readonly states: Readonly<Record<string, IntegrationRunState | null>>;
   /** The node and attempt this sandbox serves, when it serves one. */
   readonly invocation?: { readonly nodeId: string; readonly attempt: number };
+  /**
+   * What the run recorded about its integrations at its start. Absent on a
+   * run that recorded none, and on a sandbox configured from a step input
+   * recorded before this field existed: nothing is compared then, as before.
+   */
+  readonly integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 export async function agentTracingPlans(input: {
   readonly harness: string;
   readonly run: AgentTracingRun;
 }): Promise<AgentTracingPlan[]> {
-  const { usableIntegrations } = await import("../../services/integrations/runtime.js");
+  const { checkIntegrationPin, resolveUsableIntegrations } = await import(
+    "../../services/integrations/runtime.js"
+  );
   const { logger } = await import("../../infra/logger.js");
   const { run, harness } = input;
   const where = {
@@ -45,15 +69,33 @@ export async function agentTracingPlans(input: {
     ...(run.invocation ? { nodeId: run.invocation.nodeId, attempt: run.invocation.attempt } : {}),
   };
 
-  const integrations = await usableIntegrations({
+  const resolved = await resolveUsableIntegrations({
     lifetime: AbortSignal.timeout(TRACING_RESOLVE_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("agent_tracing"),
   });
+  if (!resolved.readable) {
+    // Not "no tracing integration": nobody could look. The sandbox goes on
+    // untraced, as it would for any tracer that cannot be reached, and the
+    // line says the settings were the reason rather than the deployment.
+    logger.warn({ ...where, reason: "settings_unreadable" }, "agent_tracing_off");
+    return [];
+  }
+  const integrations = resolved.usable;
 
   const plans: AgentTracingPlan[] = [];
   const declined: string[] = [];
   const failed: string[] = [];
+  const moved: Array<{ integration: string; reason: string }> = [];
   for (const { manifest, runtime, ctx } of integrations) {
+    const recorded = recordedPinFor(run.integrationPins, manifest.id, "every_provider");
+    const state = resolved.states.get(manifest.id);
+    if (recorded.kind === "pinned" && state) {
+      const check = checkIntegrationPin(recorded.pin, state);
+      if (!check.ok) {
+        moved.push({ integration: manifest.id, reason: check.reason });
+        continue;
+      }
+    }
     const factory = runtime.capabilities.agent_tracing;
     if (typeof factory !== "function") continue;
     try {
@@ -85,16 +127,23 @@ export async function agentTracingPlans(input: {
       );
     }
   }
+  if (moved.length > 0) {
+    // Said whether or not another tracer still traces this sandbox: a tracer
+    // that stopped because an admin changed its connection is a thing somebody
+    // did, and the only trace of it is this line.
+    logger.warn({ ...where, moved }, "agent_tracing_pin_moved");
+  }
   if (plans.length === 0) {
     // One line per sandbox that is not traced, and why: nothing traces on this
-    // deployment, or each provider that could declined or failed. Without it an
-    // untraced run and a traced one look the same in the log.
+    // deployment, or each provider that could declined, failed or moved.
+    // Without it an untraced run and a traced one look the same in the log.
     logger.info(
       {
         ...where,
         reason: integrations.length === 0 ? "no_tracing_integration" : "every_provider_declined",
         ...(declined.length > 0 ? { declined } : {}),
         ...(failed.length > 0 ? { failed } : {}),
+        ...(moved.length > 0 ? { moved: moved.map((entry) => entry.integration) } : {}),
       },
       "agent_tracing_off",
     );

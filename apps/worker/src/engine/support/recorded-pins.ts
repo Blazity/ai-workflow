@@ -1,14 +1,16 @@
 /**
  * THE ONE READING OF A RUN'S RECORDED PINS, for the provider a call is about to
  * use. Every runtime that hands a run a provider (version control, messaging,
- * memory, the issue tracker) asks this, so they cannot come to disagree about
- * the same run.
+ * memory, the issue tracker, agent tracing, and the step that creates an
+ * integration's state for the run) asks this, so they cannot come to disagree
+ * about the same run.
  *
  * A run pins the connection each provider it reaches had at its start
  * (`integrationPinsFor`), and a later use compares the pin recorded for that
  * provider against the provider as it is now: reconfigured, disabled or
- * disconnected stops the run there. What this decides is the other case, a
- * provider the run holds no pin for.
+ * disconnected stops the run there (a tracer is the one exception: it stops
+ * tracing the run and the run goes on, `integration-tracing.ts` says why).
+ * What this decides is the other case, a provider the run holds no pin for.
  *
  * - No pins at all (absent or empty): nothing holds the run, so the call
  *   proceeds against the provider as it is configured now.
@@ -24,6 +26,12 @@
  *   absence from it as "moved" stopped the run at its next VCS call, telling a
  *   person the connection changed when nobody touched it.
  *
+ * - Every provider at once (agent tracing), and an integration reached as
+ *   itself (its own blocks, and the state they and its tracer share): not
+ *   pinned either. A tracer the run did not record was connected after the run
+ *   started, holds nothing of the run's, and traces what comes next; there is
+ *   nothing of an older connection for it to be mixed with.
+ *
  * - A capability one provider serves at a time (messaging, memory, the issue
  *   tracker): the run recorded the providers it started with and this one was
  *   not among them, so it arrived after the run started, alone or in place of
@@ -34,7 +42,7 @@
 import type { IntegrationConnectionPin } from "@shared/contracts";
 
 /** How the capability picks its provider, which is what absence means. */
-export type ProviderSelection = "per_repository" | "one_per_deployment";
+export type ProviderSelection = "per_repository" | "every_provider" | "one_per_deployment";
 
 export type RecordedPin =
   | { readonly kind: "pinned"; readonly pin: IntegrationConnectionPin }
@@ -48,6 +56,6 @@ export function recordedPinFor(
 ): RecordedPin {
   const pin = pins?.find((candidate) => candidate.integrationId === integrationId);
   if (pin) return { kind: "pinned", pin };
-  if (!pins || pins.length === 0 || selection === "per_repository") return { kind: "not_pinned" };
+  if (!pins || pins.length === 0 || selection !== "one_per_deployment") return { kind: "not_pinned" };
   return { kind: "arrived_after_start" };
 }

@@ -58,6 +58,13 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),
   resolveConfiguredPullRequestUrl: async (url: URL) => {
+    if (url.host === "settings-unreadable.example") {
+      const { IntegrationSettingsUnreadableError } = await import("../integrations/usable.js");
+      throw new IntegrationSettingsUnreadableError(
+        "so the pull request URL could not be matched to a provider",
+        "connection terminated unexpectedly",
+      );
+    }
     if (url.host === "github.com") {
       const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url.pathname);
       return match
@@ -158,6 +165,20 @@ describe("manual pull request input", () => {
     "https://gitlab.example.com/platform/api/merge_requests/17",
   ])("rejects unsupported provider input %s", async (url) => {
     await expect(parsePullRequestUrl(url)).resolves.toBeNull();
+  });
+
+  it("answers settings that could not be read retryably, never as a provider that is not configured", async () => {
+    // "The pull request provider is not configured" sent a person to the
+    // Integrations page to connect a provider that was connected; a queued
+    // dispatch took it as final and gave up.
+    const refusal = parsePullRequestUrl("https://settings-unreadable.example/acme/api/pull/42");
+
+    await expect(refusal).rejects.toMatchObject({
+      name: "ManualDispatchError",
+      statusCode: 503,
+      code: "integration_unavailable",
+    });
+    await expect(refusal).rejects.toThrow(/integration settings could not be read/);
   });
 
   it("requires created and merged triggers to match current lifecycle state", () => {

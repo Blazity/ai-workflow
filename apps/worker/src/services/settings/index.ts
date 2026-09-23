@@ -17,7 +17,7 @@ export {
   ssoSettings,
 } from "./runtime-settings.js";
 export {
-  issueTrackerBaseUrl,
+  issueTrackerTicketLinks,
   outboundEmailSettings,
   resendWebhookSecret,
   ticketBoardOf,

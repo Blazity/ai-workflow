@@ -127,7 +127,6 @@ const integrationStore = {
       ),
     };
   },
-  usableIntegrations: async () => connected(),
   checkIntegrationPin: () => ({ ok: true }),
 };
 

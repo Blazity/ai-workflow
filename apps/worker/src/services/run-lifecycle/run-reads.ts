@@ -30,9 +30,10 @@ import {
   registryRows,
   resolveRunModels,
 } from "../overview/index.js";
-import { issueTrackerBaseUrl } from "../settings/index.js";
+import { issueTrackerTicketLinks } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
 import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
+import { ticketLinksOf } from "../../engine/support/ticket-url.js";
 
 /** The runs list as the wire carries it, minus the timestamp the route stamps. */
 export type DashboardRunsPage = Omit<RunsResponse, "generatedAt">;
@@ -59,7 +60,7 @@ export async function listDashboardRuns(query: {
       window: parseWindow(query.window),
       q: parseSearch(query.q),
       now: new Date(),
-      ticketOrigin: await issueTrackerBaseUrl(),
+      ticketLinks: await issueTrackerTicketLinks(),
     });
     const models = await resolveRunModels(rows.map((row) => row.id));
     return {
@@ -87,7 +88,7 @@ export async function listWorkflowAggregates(
     const { rows, total } = await connectedWorkflowAgg({
       window: parseWindow(query.window),
       now: new Date(),
-      ticketOrigin: await issueTrackerBaseUrl(),
+      ticketLinks: await issueTrackerTicketLinks(),
       registry: getWorkflowRegistry(settings),
     });
     return { rows, total };
@@ -109,17 +110,17 @@ export async function listWorkflowAggregates(
 export async function listLiveRuns(): Promise<LiveRunsResponse> {
   const adapters = await createAdapters();
   const now = new Date();
-  const ticketOrigin = await issueTrackerBaseUrl();
+  // Only a title lookup and a link, so no tracker titles a row by its subject
+  // key and links nothing, rather than taking the whole live board down with
+  // it. The tracker the adapters resolved is the one both panels link with.
+  const issueTracker = issueTrackerIfConnected(adapters);
   const [running, awaiting] = await Promise.all([
     collectLiveRuns({
       registry: adapters.runRegistry,
-      // Only a title lookup, so no tracker titles a row by its subject key
-      // rather than taking the whole live board down with it.
-      issueTracker: issueTrackerIfConnected(adapters),
-      ticketOrigin,
+      issueTracker,
       resolveModels: resolveRunModels,
     }),
-    collectAwaitingRuns({ ticketOrigin, now }),
+    collectAwaitingRuns({ ticketLinks: ticketLinksOf(issueTracker), now }),
   ]);
 
   const awaitingIds = new Set(awaiting.map((r) => r.id));

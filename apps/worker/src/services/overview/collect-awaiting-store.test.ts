@@ -23,7 +23,8 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { ticketOrigin: JIRA, now: NOW };
+/** How the tracker these runs were on links a ticket: its answer, which core carries. */
+const base = { ticketLinks: (key: string) => `${JIRA}/browse/${key}`, now: NOW };
 
 async function seedRun(over: {
   runId: string;

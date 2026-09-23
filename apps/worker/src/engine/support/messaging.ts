@@ -21,13 +21,14 @@
  * happens.
  */
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
+import { activeProviderOf } from "../definition/integration-availability.js";
 import { withChangeRequestReferences } from "./change-request-references.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { withKnownSecretsRedacted } from "./publication-redaction.js";
 
 const NOTIFICATION_WITHHELD =
   "the secrets to redact this notification with could not be read, so it was not sent";
-import { ticketUrlFor } from "./ticket-url.js";
+import { ticketLinksOf } from "./ticket-url.js";
 import type {
   MessageRetrievalFailure,
   MessageSearchOutcome,
@@ -38,7 +39,6 @@ import type {
   TicketEvent,
 } from "@integrations/sdk";
 
-export { ticketUrlFor };
 
 /** Comfortably under the 300 s a plain function is killed at. */
 const MESSAGING_TIMEOUT_MS = 30_000;
@@ -173,8 +173,8 @@ type ResolvedMessaging =
  * Several usable providers with nobody chosen is a refusal by name, never a
  * silent pick of the first: a run that posted into one of two connected
  * workspaces because it happened to be first in the registry is the failure an
- * admin cannot explain afterwards. The editor refuses the same case with the
- * same shape (`integration-availability.ts`), so the palette and the run agree.
+ * admin cannot explain afterwards. Who serves is `activeProviderOf`, the rule
+ * the editor's palette and the Integrations page read too, so they agree.
  */
 async function activeMessaging(
   pins?: readonly IntegrationConnectionPin[],
@@ -194,10 +194,10 @@ async function activeMessaging(
       retrieval: "unavailable",
     };
   }
-  const usable = resolved.usable;
-  if (usable.length === 0) return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
-  if (usable.length > 1) {
-    const names = usable.map((entry) => entry.manifest.name).join(" and ");
+  const active = activeProviderOf(resolved.usable);
+  if (active.kind === "none") return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
+  if (active.kind === "ambiguous") {
+    const names = active.providers.map((entry) => entry.manifest.name).join(" and ");
     return {
       ok: false,
       reason: `${names} both provide messaging on this deployment and no active provider is selected, so nothing was sent`,
@@ -206,8 +206,7 @@ async function activeMessaging(
       retrieval: "unavailable",
     };
   }
-  const [only] = usable;
-  if (!only) return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
+  const only = active.provider;
   // A run pinned the provider it started with. Following a live change instead
   // would move where a workflow posts, mid-run, with nobody told. A provider
   // the run's pins do not name arrived after it started, which is the silent
@@ -246,21 +245,21 @@ async function activeMessaging(
 }
 
 /**
- * The ticket as the provider needs it. The link is dropped rather than guessed
- * for a subject that is not a tracker key: synthesized identifiers (a webhook
- * delivery, a schedule occurrence, a pull request with no ticket) have no page
- * on the tracker, and `/browse/<that>` is always a 404.
+ * The ticket as the provider needs it, with the link its tracker gives it.
+ *
+ * Asked of whichever integration serves the issue tracker capability, which
+ * also drops the link for a subject that is not one of its tickets (a webhook
+ * delivery, a schedule occurrence, a pull request with no ticket). A
+ * deployment with no tracker sends the message with no link, which is right:
+ * a message about a ticket is still worth sending, and a link to nowhere is
+ * not.
  */
 async function ticketRef(ticketKey: string): Promise<MessagingTicket> {
-  // Where a person opens the ticket, asked of whichever integration serves the
-  // issue tracker capability. A deployment with none answers an empty site and
-  // the message carries no link, which is right: a message about a ticket is
-  // still worth sending, and a link to nowhere is not.
   const { resolveActiveIssueTracker } = await import("./issue-tracker-runtime.js");
   const tracker = await resolveActiveIssueTracker();
   return {
     key: ticketKey,
-    url: tracker.ok ? ticketUrlFor(ticketKey, tracker.wiring.baseUrl) : null,
+    url: ticketLinksOf(tracker.ok ? tracker.adapter : null)(ticketKey),
   };
 }
 

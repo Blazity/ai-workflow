@@ -246,14 +246,21 @@ export function createManualDispatchPrReader(target: {
   };
 }
 
+/**
+ * Which connected provider a pull request URL belongs to, or null when none
+ * recognises it.
+ *
+ * Throws `IntegrationSettingsUnreadableError` when the settings that say which
+ * providers are connected could not be read: "no provider recognises this URL"
+ * would then be a confident answer about something nobody looked at, and the
+ * person dispatching would go and check a URL that is fine.
+ */
 export async function resolveConfiguredPullRequestUrl(
   url: URL,
 ): Promise<{ provider: string; repoPath: string; prNumber: number } | null> {
-  const providerIds = new Set<string>();
-  const { usableIntegrations } = await import("../../services/integrations/runtime.js");
-  for (const entry of await usableIntegrations({
-    filter: (manifest) => manifest.capabilities.includes("vcs"),
-  })) providerIds.add(entry.manifest.id);
+  const providerIds = await usableVcsProviderIds(
+    "so the pull request URL could not be matched to a provider",
+  );
 
   for (const provider of providerIds) {
     const adapter = await resolveIntegrationAdapter({ provider, repoPath: "", baseBranch: "" });
@@ -265,17 +272,23 @@ export async function resolveConfiguredPullRequestUrl(
   return null;
 }
 
+/**
+ * The credentials a sandbox pushes with, one per connected provider it needs.
+ *
+ * Throws `IntegrationSettingsUnreadableError` when the settings could not be
+ * read. An empty list would build a sandbox with no version control
+ * credentials at all, and the run would fail minutes later at its first clone
+ * or push with an error about the provider rather than about the database.
+ */
 export async function buildSandboxProviderConfigs(
   neededProviders?: Iterable<VcsProviderKind>,
   integrationPins?: readonly IntegrationConnectionPin[],
 ): Promise<SandboxProviderConfig[]> {
   const { logger } = await import("../../infra/logger.js");
   const needed = neededProviders ? new Set(neededProviders) : null;
-  const providerIds = new Set<string>();
-  const { usableIntegrations } = await import("../../services/integrations/runtime.js");
-  for (const entry of await usableIntegrations({
-    filter: (manifest) => manifest.capabilities.includes("vcs"),
-  })) providerIds.add(entry.manifest.id);
+  const providerIds = await usableVcsProviderIds(
+    "so no sandbox was given version control credentials",
+  );
 
   const configs: SandboxProviderConfig[] = [];
   for (const provider of providerIds) {
@@ -308,6 +321,18 @@ export async function buildSandboxProviderConfigs(
     }
   }
   return configs;
+}
+
+/** The usable version control providers, or the refusal that says the read failed. */
+async function usableVcsProviderIds(consequence: string): Promise<string[]> {
+  const { IntegrationSettingsUnreadableError, resolveUsableIntegrations } = await import(
+    "../../services/integrations/runtime.js"
+  );
+  const resolved = await resolveUsableIntegrations({
+    filter: (manifest) => manifest.capabilities.includes("vcs"),
+  });
+  if (!resolved.readable) throw new IntegrationSettingsUnreadableError(consequence, resolved.reason);
+  return resolved.usable.map((entry) => entry.manifest.id);
 }
 
 // A few bounded retries with jittered exponential backoff, for the one call

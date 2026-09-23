@@ -65,7 +65,12 @@ vi.mock("../../services/integrations/runtime.js", () => ({
   integrationSecretValues: (options?: unknown) => mocks.integrationSecretValues(options),
   // Nothing is connected in this test, so a restored sandbox is configured
   // with no tracing at all.
-  usableIntegrations: async () => [],
+  resolveUsableIntegrations: async () => ({
+    readable: true,
+    usable: [],
+    states: new Map(),
+    connectionFailures: new Map(),
+  }),
 }));
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   recordConnectedHookClarificationSnapshot: (...args: unknown[]) =>

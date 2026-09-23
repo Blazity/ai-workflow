@@ -51,6 +51,7 @@ export type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 
 export {
   INTEGRATION_CAPABILITIES,
+  capabilityLabel,
   NESTED_ADAPTER_MEMBERS,
   type NestedAdapterRole,
   type IntegrationCapabilityAccess,

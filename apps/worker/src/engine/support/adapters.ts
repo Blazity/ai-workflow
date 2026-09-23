@@ -80,8 +80,6 @@ const vcsWithoutRepository: VCSAdapter = {
   postRunFailureNote: refuseWithoutRepository,
 };
 
-export { coreServesIssueTracker } from "./issue-tracker-runtime.js";
-
 /**
  * ASYNCHRONOUS since S12, and the reason is worth keeping.
  *

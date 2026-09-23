@@ -79,7 +79,7 @@ function ArthurEvals({ data }: IntegrationPageProps) {
       return (
         <Page title="Evals" description={DESCRIPTION}>
           <Notice tone="warning">
-            Our worker did not answer, so the Arthur Engine was not asked anything. Nothing is known
+            Our worker could not answer, so the Arthur Engine was not asked anything. Nothing is known
             about the engine from this: reload in a minute, and if it persists, System health says
             whether the worker is up.
           </Notice>

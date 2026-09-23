@@ -28,7 +28,7 @@ export { readIntegrationStates, secretsKeyMaterial } from "./authoring.js";
 // may still use it. No connection is touched, and nothing is written.
 export { checkIntegrationPin, environmentReaderFrom } from "./resolve.js";
 
-export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
+export { IntegrationSettingsUnreadableError, resolveUsableIntegrations } from "./usable.js";
 export type { IntegrationRedaction } from "./usable.js";
 
 // The secrets core redacts and scans for. One source: see secret-values.ts for
