@@ -1305,8 +1305,14 @@ export class GitLabAdapter implements
         mapped.conclusion !== "cancelled"
       ) {
         try {
-          const log = await this.gl.Jobs.showLog(this.projectId, job.id);
-          entry.logs = String(log);
+          const log: unknown = await this.gl.Jobs.showLog(this.projectId, job.id);
+          // Only text is a log; anything else would reach the agent as
+          // "[object Object]". Without logs it is shown the conclusion.
+          if (typeof log === "string") {
+            entry.logs = log;
+          } else {
+            this.config.log?.warn({ check: job.name, jobId: job.id }, "check_logs_unreadable");
+          }
         } catch {
           // Log fetching is best-effort
         }

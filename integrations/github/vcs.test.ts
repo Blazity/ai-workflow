@@ -56,6 +56,11 @@ const mockOctokit = {
   apps: {
     listReposAccessibleToInstallation: vi.fn(),
   },
+  actions: {
+    listWorkflowRunsForRepo: vi.fn(),
+    listJobsForWorkflowRun: vi.fn(),
+    downloadJobLogsForWorkflowRun: vi.fn(),
+  },
 };
 
 // The whole module is replaced, so every export the adapter and the skill source
@@ -619,6 +624,47 @@ describe("GitHubAdapter", () => {
         repo: "test-repo",
         pull_number: 42,
       });
+    });
+  });
+
+  describe("getCheckRunResults", () => {
+    function failedCheckWithLogs(logs: unknown) {
+      // Answers queued by earlier cases and never consumed would come first.
+      mockOctokit.pulls.get.mockReset();
+      mockOctokit.checks.listForRef.mockReset();
+      mockOctokit.pulls.get.mockResolvedValueOnce({ data: { head: { sha: "head-sha" } } });
+      mockOctokit.checks.listForRef.mockResolvedValueOnce({
+        data: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] },
+      });
+      mockOctokit.actions.listWorkflowRunsForRepo.mockResolvedValueOnce({
+        data: { workflow_runs: [{ id: 3 }] },
+      });
+      mockOctokit.actions.listJobsForWorkflowRun.mockResolvedValueOnce({
+        data: { jobs: [{ id: 5, name: "test" }] },
+      });
+      mockOctokit.actions.downloadJobLogsForWorkflowRun.mockResolvedValueOnce({ data: logs });
+    }
+
+    it("hands the agent a failed job's logs", async () => {
+      failedCheckWithLogs("Error: test failed on line 42");
+
+      await expect(ghAdapter().getCheckRunResults(42)).resolves.toEqual([
+        { name: "test", status: "completed", conclusion: "failure", logs: "Error: test failed on line 42" },
+      ]);
+    });
+
+    it("leaves out logs it could not read rather than handing over the word undefined", async () => {
+      // Octokit reads a log body it could not read as undefined; the agent was
+      // handed the literal text "undefined" as the job's logs.
+      failedCheckWithLogs(undefined);
+
+      await expect(ghAdapter().getCheckRunResults(42)).resolves.toEqual([
+        { name: "test", status: "completed", conclusion: "failure" },
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ check: "test" }),
+        "check_logs_unreadable",
+      );
     });
   });
 

@@ -938,7 +938,17 @@ export class GitHubAdapter
                   ...this.ownerRepo,
                   job_id: matchingJob.id,
                 });
-              entry.logs = String(logData);
+              // Octokit reads a log body it could not read as undefined, and
+              // the agent was handed the word "undefined" as the logs; with
+              // none, it is shown the check's conclusion instead.
+              if (typeof logData === "string") {
+                entry.logs = logData;
+              } else {
+                this.config.log?.warn(
+                  { check: check.name, jobId: matchingJob.id },
+                  "check_logs_unreadable",
+                );
+              }
               break;
             }
           }
