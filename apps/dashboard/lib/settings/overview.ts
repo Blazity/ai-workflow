@@ -212,7 +212,7 @@ export function oneProviderRow(
   }
   if (chosen.length > 1) {
     const names = chosen.map((entry) => entry.label);
-    const listed = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    const listed = `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
     return {
       id,
       label,
