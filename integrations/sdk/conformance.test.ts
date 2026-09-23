@@ -331,6 +331,20 @@ test("a connection needs one required field, or says it needs nothing", () => {
   for (const field of allOptional.manifest.connection.fields) (field as { optional?: boolean }).optional = true;
   hasIssue(allOptional.manifest, allOptional.runtime, "connection_required_field_missing", "connection.fields");
 
+  // A default fills the field, and a value required only when stored is not
+  // asked of the environment, so neither makes the connection need anything.
+  const filled = validIntegration();
+  for (const field of filled.manifest.connection.fields as Array<Record<string, unknown>>) {
+    if (field.secret === true) {
+      field.optional = true;
+      field.requiredWhenStored = true;
+    } else {
+      field.default = "https://example.com";
+      delete field.format;
+    }
+  }
+  hasIssue(filled.manifest, filled.runtime, "connection_required_field_missing", "connection.fields");
+
   const none = validIntegration();
   (none.manifest.connection as { fields: unknown[] }).fields = [];
   hasIssue(none.manifest, none.runtime, "connection_required_field_missing", "connection.fields");

@@ -7,7 +7,7 @@ import {
 } from "@shared/contracts";
 import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
-import { connectionValueProblem, integrationSettingKey } from "./manifest";
+import { connectionFieldRequired, connectionValueProblem, integrationSettingKey } from "./manifest";
 import { VCS_BOT_LOGIN_FIELD, VCS_LEGACY_BOT_LOGIN_FIELD } from "./vcs";
 import { ISSUE_TRACKER_BOARD_FIELDS } from "./issue-tracker";
 
@@ -448,7 +448,12 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
       );
     }
   });
-  const required = manifest.connection.fields.filter((field) => field.optional !== true);
+  // Required by the resolver's own rule, read from the environment: a field
+  // with a default, or one required only in stored values, leaves a
+  // deployment that configured nothing reading Connected all the same.
+  const required = manifest.connection.fields.filter((field) =>
+    connectionFieldRequired(field, "environment"),
+  );
   if (manifest.connection.connectionless === true) {
     if (required.length > 0) {
       report(
@@ -461,7 +466,7 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
     report(
       "connection_required_field_missing",
       "connection.fields",
-      "No connection field is required, so this integration would read Connected on every deployment with nothing configured. Mark the field it cannot work without as required, or declare connection.connectionless: true if it truly needs nothing.",
+      "No connection field is required (not optional, and with no default), so this integration would read Connected on every deployment with nothing configured. Mark the field it cannot work without as required, or declare connection.connectionless: true if it truly needs nothing.",
     );
   }
 }
