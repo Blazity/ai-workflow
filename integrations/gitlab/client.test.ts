@@ -130,6 +130,51 @@ describe("every GitLab call goes through the context's HTTP", () => {
   });
 });
 
+/**
+ * GitLab ends a request it has worked on for 60 s (its Rack timeout), and a
+ * self-managed instance behind a slow proxy takes longer than the context's
+ * 30 s default for a large diff, a job log or a note write. Every GitLab
+ * request is allowed GitLab's own limit and a margin, so an attempt is cut
+ * only when GitLab itself would have given up; the project listing keeps the
+ * tighter deadline the repository selection budget sets.
+ */
+describe("how long GitLab is given to answer", () => {
+  const deadlines = (fetch: ReturnType<typeof vi.fn>) =>
+    fetch.mock.calls.map(([url, init]) => [
+      `${(init as RequestInit | undefined)?.method ?? "GET"} ${decodeURIComponent(new URL(String(url)).pathname)}`,
+      (init as { timeoutMs?: number } | undefined)?.timeoutMs,
+    ]);
+
+  it("allows GitLab's own limit to reads, writes and Gitbeaker's calls alike", async () => {
+    const fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (init?.method === "POST" && url.pathname.endsWith("/merge_requests/7/notes")) {
+        return json(201, { id: 9 });
+      }
+      return gitlab(url, init);
+    });
+    const vcs = runtime.capabilities.vcs(
+      {
+        connection: { token: "glpat-test", host: "https://gitlab.example.com", webhookSecret: "s" },
+        http: { fetch },
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        signal: new AbortController().signal,
+      } as never,
+      { repoPath: "acme/api", baseBranch: "main" },
+    );
+
+    await vcs.getPRHead(7);
+    await vcs.postPRComment(7, "hello");
+    await vcs.listRepositories!();
+
+    expect(deadlines(fetch)).toEqual([
+      ["GET /api/v4/projects/acme/api/merge_requests/7", 75_000],
+      ["POST /api/v4/projects/acme/api/merge_requests/7/notes", 75_000],
+      ["GET /api/v4/projects", 18_000],
+    ]);
+  });
+});
+
 describe("what GitLab answered survives the client", () => {
   // GitLab's REST authentication docs: 401 for a token it does not accept.
   it("keeps a refused token retryable, with GitLab's status on it", async () => {

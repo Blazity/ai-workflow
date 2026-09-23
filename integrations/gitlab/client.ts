@@ -28,6 +28,19 @@ export interface GitLabClient {
   send(path: string, init?: GitLabRequestInit): Promise<Response>;
 }
 
+/**
+ * How long one GitLab request may take. GitLab ends a request it has worked on
+ * for 60 s (its Rack timeout, `GITLAB_RAILS_RACK_TIMEOUT`, which an admin can
+ * raise), so an attempt cut earlier than that gives up on an answer GitLab
+ * would still have sent: a large merge request's diffs, a job log, or a note
+ * that lands after 30 s and then reads as failed although it was posted. 15 s
+ * on top is for the network and a slow proxy in front of a self-managed
+ * instance. The context's 30 s default is sized for an API that answers in
+ * seconds, which GitLab usually does and does not promise. A request that sets
+ * its own `timeoutMs` keeps it.
+ */
+export const GITLAB_ATTEMPT_DEADLINE_MS = 75_000;
+
 /** `ctx.http`'s options, with headers as a plain record; the token is added. */
 export type GitLabRequestInit = Omit<IntegrationRequestInit, "headers"> & {
   headers?: Record<string, string>;
@@ -41,6 +54,7 @@ export function gitLabClient(connection: {
   const host = connection.host.replace(/\/+$/u, "");
   const send = (path: string, init: GitLabRequestInit = {}) =>
     connection.http.fetch(`${host}/api/v4${path}`, {
+      timeoutMs: GITLAB_ATTEMPT_DEADLINE_MS,
       ...init,
       headers: { "PRIVATE-TOKEN": connection.token, ...init.headers },
     });
@@ -105,6 +119,7 @@ async function sendForGitbeaker(
     method,
     headers,
     body,
+    timeoutMs: GITLAB_ATTEMPT_DEADLINE_MS,
     ...(signal ? { signal } : {}),
   });
   if (!response.ok) throw new GitLabRequestError(await describe(response), response);
