@@ -4,7 +4,12 @@
 // authored: the field label, the source badge, the applies-to note, the value
 // as text, and the keys named by a refusal the worker sent back.
 import { settingDefinition } from "@integrations/registry";
-import type { SettingValue, SettingsInFlightRule, SettingsSource } from "@shared/contracts";
+import {
+  SETTING_LIST_ENTRY_RULE,
+  type SettingValue,
+  type SettingsInFlightRule,
+  type SettingsSource,
+} from "@shared/contracts";
 import { formatDateTime } from "../date-time";
 
 /**
@@ -147,7 +152,7 @@ export function displaySettingValue(value: SettingValue): string {
 }
 
 const ISSUE_PATTERN =
-  /([A-Za-z0-9_.]+)\s*\((unknown_key|wrong_type|not_allowed_value|below_minimum|null_not_allowed|above_request_limit)\)/g;
+  /([A-Za-z0-9_.]+)\s*\((unknown_key|wrong_type|not_allowed_value|below_minimum|null_not_allowed|list_entry_invalid|above_request_limit)\)/g;
 
 function issueSentence(key: string, reason: string): string {
   const definition = settingDefinition(key);
@@ -168,6 +173,8 @@ function issueSentence(key: string, reason: string): string {
         : `Must be at least ${definition.minimum}.`;
     case "null_not_allowed":
       return "This setting cannot be left empty.";
+    case "list_entry_invalid":
+      return SETTING_LIST_ENTRY_RULE;
     default:
       return "The MCP result limit must stay at or below the request limit.";
   }

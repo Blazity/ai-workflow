@@ -147,6 +147,20 @@ test("a value below a declared minimum is refused", () => {
   ]);
 });
 
+test("a list entry that is blank or holds a comma is refused, one value per entry is kept", () => {
+  // `["U1,U2"]` would be one id nobody has (everyone locked out of an
+  // allowlist), `[" "]` would read as no entry (everyone let in).
+  for (const entries of [["U1,U2"], [" "], [""], ["U1", "  "], ["U1", "U2,"]]) {
+    assert.deepEqual(
+      validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: entries }, core),
+      [{ key: "PRE_PR_CHECKS_ALLOWED_ENV", reason: "list_entry_invalid" }],
+      JSON.stringify(entries),
+    );
+  }
+  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: ["U1", "U2"] }, core), []);
+  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: [] }, core), []);
+});
+
 test("null clears a key that has no default and is refused for one that has", () => {
   assert.deepEqual(validateSettingsPatch({ V2_MAX_BLOCK_CONCURRENCY: null }, core), []);
   assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: null }, core), [
@@ -243,6 +257,9 @@ test("a stored value shadows a contributed key's variable, and is validated like
   assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U3"] }, find), []);
   assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: "U3" }, find), [
     { key: "SLACK_ALLOWED_USER_IDS", reason: "wrong_type" },
+  ]);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U1,U2"] }, find), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "list_entry_invalid" },
   ]);
   // Core's registry alone does not know it, which is why the lookup is an
   // argument every surface passes rather than a default of core's.

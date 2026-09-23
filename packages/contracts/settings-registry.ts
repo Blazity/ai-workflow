@@ -463,10 +463,32 @@ export interface SettingValidationIssue {
     | "not_allowed_value"
     | "below_minimum"
     | "null_not_allowed"
+    /** An entry of a list that is blank or holds a comma: see
+     *  `SETTING_LIST_ENTRY_RULE`. */
+    | "list_entry_invalid"
     /** A pair the environment schema refuses to boot with. Decided against the
      *  values that would be in force after the write, not against the patch
      *  alone, so it lives with the store rather than in this file. */
     | "above_request_limit";
+}
+
+/**
+ * What a list setting's entries may be, as the sentence every surface that
+ * refuses one says.
+ *
+ * A list is stored as a list, one value per entry, and it is also what a
+ * comma-separated variable splits into (`SLACK_ALLOWED_USER_IDS`). An entry
+ * holding a comma, `["U1,U2"]`, is one id nobody has, so an allowlist of it
+ * locks everyone out; a blank one, `[" "]`, is read as no entry at all, so an
+ * allowlist of only blanks lets everyone in. Neither is what anybody meant, so
+ * a write is refused rather than stored and read one way or the other. A
+ * variable is still split and trimmed as it always was.
+ */
+export const SETTING_LIST_ENTRY_RULE =
+  "Send one value per list entry: an entry may not be blank or contain a comma.";
+
+function isListEntry(entry: string): boolean {
+  return entry.trim() !== "" && !entry.includes(",");
 }
 
 function matchesType(definition: SettingDefinition, value: unknown): boolean {
@@ -521,6 +543,10 @@ export function validateSettingsPatch(
     }
     if (definition.minimum !== undefined && (value as number) < definition.minimum) {
       issues.push({ key, reason: "below_minimum" });
+      continue;
+    }
+    if (definition.type === "string-list" && !(value as string[]).every(isListEntry)) {
+      issues.push({ key, reason: "list_entry_invalid" });
     }
   }
   return issues;

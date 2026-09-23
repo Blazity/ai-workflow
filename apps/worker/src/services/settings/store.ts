@@ -14,6 +14,7 @@
  */
 import { settingDefinition, settingDefinitions } from "@integrations/registry";
 import {
+  SETTING_LIST_ENTRY_RULE,
   validateSettingsPatch,
   type SettingValidationIssue,
   type SettingValue,
@@ -43,10 +44,14 @@ export class SettingsValidationError extends Error {
   readonly issues: SettingValidationIssue[];
 
   constructor(issues: SettingValidationIssue[]) {
+    // The keyed list is what the dashboard maps to its fields; a refusal whose
+    // fix is not obvious from its code carries the sentence that says it, the
+    // same one the dashboard shows, so an MCP caller reads it too.
+    const listEntry = issues.some((issue) => issue.reason === "list_entry_invalid");
     super(
       `Invalid settings: ${issues
         .map((issue) => `${issue.key} (${issue.reason})`)
-        .join(", ")}`,
+        .join(", ")}${listEntry ? `. ${SETTING_LIST_ENTRY_RULE}` : ""}`,
     );
     this.name = "SettingsValidationError";
     this.issues = issues;

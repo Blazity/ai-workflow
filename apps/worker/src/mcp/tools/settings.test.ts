@@ -18,6 +18,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 
 import { settingDefinitions } from "@integrations/registry";
+import { SETTING_LIST_ENTRY_RULE } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization, settings, settingsVersions } from "../../db/schema.js";
@@ -330,6 +331,27 @@ describe("settings.set", () => {
     expect(await db.select().from(settings)).toEqual([
       expect.objectContaining({ key: "SLACK_ALLOWED_USER_IDS", value: ["U01"] }),
     ]);
+  });
+
+  it("refuses a list entry holding two ids with the same sentence the dashboard shows", async () => {
+    const client = await connectedClient({ scopes: WRITE_ONLY });
+
+    const result = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "SLACK_ALLOWED_USER_IDS",
+        value: ["U01,U02"],
+        reason: "pasted from a variable",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorOf(result)).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: expect.stringContaining(SETTING_LIST_ENTRY_RULE),
+    });
+    expect(await db.select().from(settings)).toEqual([]);
   });
 
   it("refuses a value the registry does not accept and writes nothing", async () => {
