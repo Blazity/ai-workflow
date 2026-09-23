@@ -362,6 +362,41 @@ describe("GitHubAdapter", () => {
       expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
     });
 
+    // What `PullRequestHeadChecks` means by red: a completed failure is final
+    // for that check run, so the head is red while other runs are still going,
+    // and only the failure is listed. Core starts a fix from exactly this.
+    it("reports a failure red while another check run is still in progress", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: { head: { sha: "source-head-sha" }, base: { ref: "main" }, state: "open", merged: false },
+      });
+      mockOctokit.paginate.mockResolvedValueOnce([
+        { id: 101, name: "ci / build", app: { slug: "github-actions" }, status: "completed", conclusion: "failure" },
+        { id: 102, name: "lint", app: { slug: "github-actions" }, status: "in_progress", conclusion: null },
+      ]);
+
+      await expect(ghAdapter().getPRHead(42)).resolves.toMatchObject({
+        checks: {
+          state: "red",
+          failed: [
+            { name: "ci / build", conclusion: "failure", handle: { id: 101, owner: "github-actions" } },
+          ],
+        },
+      });
+    });
+
+    it("reports a head running while a check run is in progress and none failed", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: { head: { sha: "source-head-sha" }, base: { ref: "main" }, state: "open", merged: false },
+      });
+      mockOctokit.paginate.mockResolvedValueOnce([
+        { id: 101, name: "ci / build", app: { slug: "github-actions" }, status: "in_progress", conclusion: null },
+      ]);
+
+      await expect(ghAdapter().getPRHead(42)).resolves.toMatchObject({
+        checks: { state: "running", failed: [] },
+      });
+    });
+
     it("distinguishes a merged pull request from a merely closed one", async () => {
       mockOctokit.pulls.get.mockResolvedValueOnce({
         data: {

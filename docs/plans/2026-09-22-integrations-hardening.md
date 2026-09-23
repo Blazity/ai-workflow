@@ -269,6 +269,74 @@ and is not read here; worth doing when the record is).
 SDK beside `INTEGRATION_CAPABILITIES`; the registry re-exports it and the
 editor lowercases it into sentences.
 
+### Round H2: hygiene
+
+Numbered H2.x for the same reason as H1.
+
+#### H2.1. A provider id is an integration id, on every path
+
+**Problem.** The provider rule `[a-z][a-z0-9_-]{2,31}` was written out about
+28 times (contracts, the graph schema, nine trigger manifests, the MCP catalog,
+the research and discovery schemas, the pre-PR checks config, the sandbox
+workspace, memory routing), and it was wider than the id an integration can
+carry (`INTEGRATION_ID`, `[a-z][a-z0-9]{2,31}`). The research schema handed to
+the harness said only `minLength: 1`, so the model was held to less than the
+answer was validated with.
+
+**Decision.** `INTEGRATION_ID` in `packages/contracts/integration-id.ts` is the
+rule, and `repositoryCatalogProviderSchema` is its one zod form. Everything
+that can import a value reads one of the two; a JSON schema handed to a model
+carries `INTEGRATION_ID.source` as `pattern`; the MCP catalog rebuilds it in
+its Zod 3 dialect from `INTEGRATION_ID`. The trigger manifests may import the
+contracts only as types (ADR-002), so they keep a literal copy, and
+`trigger-provider-rule-sync.test.ts` and `trigger-repository-policy-sync.test.ts`
+hold every copy equal to the contract on values at the rule's edges.
+
+The narrower rule applies to stored values as well as new ones, deliberately.
+A rule may refuse only what never worked, and this one refuses nothing any
+deployment stored: `origin/main` accepted exactly `github` and `gitlab` in every
+one of these places (`z.enum` in the contracts, the graph schema, the manifests,
+the MCP catalog, the pre-PR checks config, the sandbox workspace; `(github|gitlab)`
+in memory routing; database checks on the catalog), both pass the narrow rule,
+and the wider rule never reached a deployment because this branch was never
+pushed (`git ls-remote origin` lists no integrations branch on 2026-09-23) and
+demo was ruled out for it. What it refuses, an id with `-` or `_`, could never
+name an integration. A separate reader rule for stored values would have been a
+second rule with nothing to hold.
+
+The probes found one reader that disagreed: the repository key accepted
+`github :acme/api`, because it checked its provider half with the trimming
+schema. A key is compared as the string it is, so the key rule now tests the
+half with `INTEGRATION_ID` directly, as `main`'s enum did.
+
+#### H2.2. A cancel names the claim it holds; a reconcile pass reads its tracker once
+
+**Problem.** `cancelRunDetailed` derived the subject to cancel from the ticket
+key, which resolved the issue tracker again. The reconciler and the stall
+watchdog already held both the claim and the pass's one tracker resolution, so
+every stalled or orphaned claim cost another connection read, and a tracker
+switched mid-pass would have named a subject the claim does not hold. On a
+deployment with no tracker the watchdog's own re-derivation threw, so a dead
+pull request run that carried a ticket key was never settled.
+
+**Decision.** The caller passes the subject its claim holds (`subjectKey` on
+`CancelRunDetailedInput`); only `cancelRun`, which is handed a bare ticket key,
+derives it. The watchdog takes the pass's tracker id and decides whether a
+claim follows its ticket with `ticketSubjectKey`, never asking the deployment.
+
+#### H2.3. Tracing never fails a run, and one function keeps that promise
+
+**Problem.** The SDK and `tracing.ts` promise that tracing never fails a run,
+but a rejected sandbox write or command escaped the install, and the hook merge
+went through each harness's settings writer, which throws on a non-zero exit
+because the commit guard it also writes must fail loudly.
+
+**Decision.** `applyTracingPlans` in `sandbox/agents/tracing.ts` is what both
+harnesses call. It contains every install failure (removing staged copies,
+which may hold the provider's key) and catches the hook registration, leaving
+the sandbox untraced with `agent_tracing_off` in the log. The harness's writer
+keeps throwing for everything that is not tracing.
+
 ## Memory contract (from the S14 gate, before S15)
 
 A reader given only the guide and the SDK tried to plan the Mem0 integration

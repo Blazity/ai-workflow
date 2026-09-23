@@ -85,8 +85,9 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
         await account(ctx);
         return { status: "live", message: "Jira accepts the token." };
       } catch (error) {
-        // Two separate checks on purpose, and the refusal sentence is the one
-        // core's probe used to say. A deployment whose runs flow through
+        // Two separate checks on purpose, and the refusal sentence is core's
+        // old probe's, naming the field as the connection form does (the probe
+        // said "base URL"). A deployment whose runs flow through
         // webhooks can hide a stale project key for weeks, and one blended
         // message made that undiagnosable from the Health screen. A Jira that
         // did not answer is not a refusal: blaming the token for a timeout

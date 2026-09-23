@@ -103,6 +103,10 @@ describe("repo routing document format", () => {
     ["a traversal segment", "- billing -> github:acme/../api"],
     ["an empty segment", "- billing -> github:acme//api"],
     ["a path with a space", "- billing -> github:acme/api extra"],
+    // No integration can carry an id with a separator in it, so a line naming
+    // one routes nowhere; main refused it as well, with `(github|gitlab)`.
+    ["a provider id with a hyphen", "- billing -> git-hub:acme/api"],
+    ["a provider id with an underscore", "- billing -> git_hub:acme/api"],
   ])("skips %s rather than repairing it", (_case, line) => {
     expect(parseRepoRoutingDocument(`# head\n\n${line}\n`)).toEqual([]);
   });

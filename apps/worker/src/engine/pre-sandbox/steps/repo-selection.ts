@@ -75,7 +75,7 @@ import {
 } from "../../support/repository-access.js";
 // Static for the same reason: the example path is read off the manifests, which
 // are plain data, so this import drags in no adapter and no client.
-import { exampleRepositoryPath } from "../../support/repository-path-example.js";
+import { exampleRepositoryPath } from "../../../repository-map/repository-path-example.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
 // This file is NOT in the workflow isolate: the bundles were built and checked, and

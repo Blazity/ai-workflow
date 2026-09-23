@@ -75,6 +75,8 @@ const entry = {
   updatedAt: now - 60 * 60_000,
 };
 const registry = {} as RunRegistryAdapter;
+/** The tracker the reconciler's pass resolved, which `entry`'s subject names. */
+const TRACKER_ID = "jira";
 
 function page(data: unknown[]) {
   return { data, cursor: null, hasMore: false };
@@ -221,6 +223,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry: { ...entry, state: "parking" },
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         now,
       }),
@@ -237,6 +240,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -252,6 +256,7 @@ describe("reconcileStalledRun", () => {
     expect(row.statusReason).toContain("attempt 3");
     expect(row.completedAt).not.toBeNull();
     expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:UP-4765",
       ticketKey: "UP-4765",
       target: { ownerToken: "owner-a", runId: "wrun_stalled" },
       runRegistry: registry,
@@ -276,6 +281,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -284,6 +290,7 @@ describe("reconcileStalledRun", () => {
     ).resolves.toBe(true);
 
     expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:UP-4765",
       ticketKey: "UP-4765",
       target: expect.anything(),
       runRegistry: registry,
@@ -314,6 +321,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -351,6 +359,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -385,6 +394,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -411,6 +421,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -429,6 +440,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         moveTarget: "Backlog",
         now,
@@ -447,6 +459,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -479,6 +492,7 @@ describe("reconcileStalledRun", () => {
         reconcileStalledRun({
           entry,
           runRegistry: registry,
+          trackerId: TRACKER_ID,
           db,
           issueTracker,
           moveTarget: "Backlog",
@@ -488,6 +502,7 @@ describe("reconcileStalledRun", () => {
 
       expect((await runRow()).status).toBe("failed");
       expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+        subjectKey: entry.subjectKey,
         ticketKey: entry.ticketKey,
         target: expect.anything(),
         runRegistry: registry,
@@ -515,6 +530,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         now,
@@ -553,6 +569,34 @@ describe("reconcileStalledRun", () => {
     expect(mocks.cancelRunDetailed).not.toHaveBeenCalled();
   });
 
+  it("settles a pull request run that carries a ticket key when the pass has no tracker", async () => {
+    // A workflow-owned pull request run keeps its ticket key. On a deployment
+    // whose tracker is disconnected the reconciler has no board, and asking
+    // the deployment for the ticket's subject threw, so the dead run was never
+    // settled. The watchdog takes the tracker from the pass, and none means the
+    // claim does not follow a ticket.
+    const prEntry = { ...entry, subjectKey: "pr:github:acme/app#9", kind: "pr_trigger" as const };
+    await db
+      .update(workflowRuns)
+      .set({ subjectKey: prEntry.subjectKey })
+      .where(eq(workflowRuns.runId, entry.runId));
+    const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+    vi.mocked(runtime.ticketSubject).mockClear();
+
+    await expect(
+      reconcileStalledRun({ entry: prEntry, runRegistry: registry, db, now }),
+    ).resolves.toBe(true);
+
+    expect(mocks.cancelSubjectRunDetailed).toHaveBeenCalledWith(
+      "pr:github:acme/app#9",
+      { ownerToken: "owner-a", runId: "wrun_stalled" },
+      registry,
+      undefined,
+      expect.stringContaining("Run engine stalled"),
+    );
+    expect(runtime.ticketSubject).not.toHaveBeenCalled();
+  });
+
   it("leaves a run alone while its newest step is inside the ceiling", async () => {
     mocks.listSteps.mockResolvedValue(
       page([step({ createdAt: new Date(now - 5 * 60_000) })]),
@@ -562,6 +606,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         now,
       }),
@@ -576,7 +621,7 @@ describe("reconcileStalledRun", () => {
     mocks.hostedStatus = "cancelled";
 
     await expect(
-      reconcileStalledRun({ entry, runRegistry: registry, db, now }),
+      reconcileStalledRun({ entry, runRegistry: registry, trackerId: TRACKER_ID, db, now }),
     ).resolves.toBe(false);
 
     expect(mocks.listSteps).not.toHaveBeenCalled();
@@ -587,7 +632,7 @@ describe("reconcileStalledRun", () => {
     mocks.statusError = new Error("workflow api 503");
 
     await expect(
-      reconcileStalledRun({ entry, runRegistry: registry, db, now }),
+      reconcileStalledRun({ entry, runRegistry: registry, trackerId: TRACKER_ID, db, now }),
     ).resolves.toBe(false);
 
     expect(warned()).toContain("stall_watchdog_run_status_unreachable");
@@ -598,7 +643,7 @@ describe("reconcileStalledRun", () => {
     mocks.listSteps.mockRejectedValue(new Error("steps api 503"));
 
     await expect(
-      reconcileStalledRun({ entry, runRegistry: registry, db, now }),
+      reconcileStalledRun({ entry, runRegistry: registry, trackerId: TRACKER_ID, db, now }),
     ).resolves.toBe(false);
 
     expect(warned()).toContain("stall_watchdog_steps_unreachable");
@@ -612,6 +657,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -633,6 +679,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -645,6 +692,7 @@ describe("reconcileStalledRun", () => {
       reconcileStalledRun({
         entry,
         runRegistry: registry,
+        trackerId: TRACKER_ID,
         db,
         issueTracker,
         moveTarget: "Backlog",
@@ -664,7 +712,7 @@ describe("reconcileStalledRun", () => {
       .set({ status: "success" })
       .where(eq(workflowRuns.runId, entry.runId));
 
-    await reconcileStalledRun({ entry, runRegistry: registry, db, now });
+    await reconcileStalledRun({ entry, runRegistry: registry, trackerId: TRACKER_ID, db, now });
 
     expect((await runRow()).status).toBe("success");
     expect(mocks.cancelRunDetailed).not.toHaveBeenCalled();

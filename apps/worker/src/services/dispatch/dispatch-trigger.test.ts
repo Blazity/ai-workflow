@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PullRequestUnreadableError } from "@integrations/sdk";
-import type { PrTriggerPayload } from "@shared/contracts";
+import {
+  PullRequestUnreadableError,
+  type PullRequestFailedCheck,
+  type PullRequestHead,
+  type PullRequestHeadChecks,
+} from "@integrations/sdk";
 import type { Db } from "../../db/client.js";
 import {
   prAutofixAttempts,
@@ -146,6 +150,29 @@ vi.mock("../../db/repositories/definitions.js", () => ({
 
 let db: Db;
 let registry: PostgresRunRegistry;
+
+/**
+ * What the provider reports about the pull request right now, declared by each
+ * case rather than read back from the event it is judging. A double built from
+ * the event agreed with every event by construction, so no case could observe
+ * a check that was re-run, one running again, or a head that went green. The
+ * default is an open pull request at `event()`'s head with its checks green; a
+ * case about failed checks says what the provider reports failing.
+ */
+let providerReports: PullRequestHead;
+
+function openPullRequest(
+  checks: PullRequestHeadChecks = { state: "green", failed: [] },
+): PullRequestHead {
+  return { headSha: "abc123", headRef: "feature/owned", baseRef: "main", state: "open", checks };
+}
+
+/** The provider reporting these checks failed on the head. Each check is built
+ *  by the caller, never taken from the event, the way a provider re-reading its
+ *  own API mints its own handles. */
+function providerReportsFailed(...failed: PullRequestFailedCheck[]): void {
+  providerReports = openPullRequest({ state: "red", failed });
+}
 /** The bridge, read out of the test database rather than invented: an empty
  *  catalog nobody activated passes every repository, which is what every case
  *  below that is not about the catalog assumes. */
@@ -169,6 +196,7 @@ beforeEach(async () => {
     createdByLabel: "Test",
   });
   registry = new PostgresRunRegistry(db);
+  providerReports = openPullRequest();
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
   mockCancelSubjectRun.mockReset().mockResolvedValue(true);
   mockGetEnabled.mockReset();
@@ -262,19 +290,9 @@ function deps(overrides: Record<string, unknown> = {}) {
     repositoryCatalog,
     ...(!("getCurrentHead" in overrides) && !("getCurrentPullRequest" in overrides)
       ? {
-          // The provider still reports every check the event names as failed,
-          // each read back as a fresh object, the way a provider re-reading a
-          // check from its API mints a new handle. The provider's own
-          // comparison decides whether the two name the same check.
-          getCurrentPullRequest: vi.fn(async (pr: PrTriggerPayload) => ({
-            headSha: pr.headSha,
-            headRef: pr.headRef,
-            baseRef: pr.baseRef,
-            state: "open" as const,
-            checks: pr.failedChecks
-              ? { state: "red" as const, failed: structuredClone(pr.failedChecks) }
-              : { state: "green" as const, failed: [] },
-          })),
+          // What the case declared (`providerReports`), read afresh on every
+          // call. How two handles compare is the provider's own code.
+          getCurrentPullRequest: vi.fn(async () => structuredClone(providerReports)),
         }
       : {}),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
@@ -861,6 +879,11 @@ describe("provider trigger dispatch", () => {
       },
     });
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    providerReportsFailed({
+      name: "ci / build",
+      conclusion: "failure",
+      handle: { id: 101, owner: "ci" } as never,
+    });
     const failedCheck = (producer: string, deliveryId: string) =>
       event({
         delivery: { provider: "github", producer, deliveryId },
@@ -1186,6 +1209,12 @@ describe("pull request auto-fix cap", () => {
     // run under an id it already holds, which would read as a cap refusal.
     let starts = 0;
     mockStart.mockImplementation(async () => ({ runId: `run-${++starts}` }));
+    // GitLab still reports the pipeline every delivery below names as failed.
+    providerReportsFailed({
+      name: "pipeline",
+      conclusion: "failed",
+      handle: { kind: "aggregate", id: 31 } as never,
+    });
   });
 
   function checksEvent(deliveryId: string): TriggerEvent {
@@ -1633,6 +1662,89 @@ describe("pull request auto-fix cap", () => {
  * own, which is how a comparison that answered "same" for everything stayed
  * invisible to them.
  */
+/**
+ * A failed check starts a fix only while the provider still reports that same
+ * check failed. The delivery says what failed when it was sent; by the time it
+ * is dispatched the check may have been re-run (a new check run, a new handle),
+ * be running again, or have gone green, and a fix started from the stale
+ * delivery works on a failure that no longer exists. Handles are compared by
+ * GitHub's own identity (`integrations/github/handles.ts`), reached through the
+ * registry the way production reaches it.
+ */
+describe("binding a failed check to what the provider reports now", () => {
+  const build = { name: "ci / build", conclusion: "failure" } as const;
+  const lint = { name: "lint", conclusion: "failure" } as const;
+
+  function failedChecks(...checks: Array<{ name: string; conclusion: string; id: number }>) {
+    return event({
+      delivery: { provider: "github", producer: "github-actions", deliveryId: "check-1" },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        failedChecks: checks.map(({ id, name, conclusion }) => ({
+          name,
+          conclusion,
+          handle: { id, owner: "github-actions" } as never,
+        })),
+      },
+    });
+  }
+
+  /** A check the provider reports, with a handle it minted itself. */
+  function reported(check: { name: string; conclusion: string }, id: number): PullRequestFailedCheck {
+    return { ...check, handle: { id, owner: "github-actions" } as never };
+  }
+
+  beforeEach(() => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }, "trigger_pr_checks_failed"));
+  });
+
+  it("starts a fix for only the delivered checks the provider still reports failed", async () => {
+    // Lint was re-run and passed after the delivery; build still fails.
+    providerReportsFailed(reported(build, 101));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(failedChecks({ ...build, id: 101 }, { ...lint, id: 202 }), deps()),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+    expect(mockStart.mock.calls[0]?.[1]?.[0]?.pr.failedChecks).toEqual([
+      { ...build, handle: { id: 101, owner: "github-actions" } },
+    ]);
+  });
+
+  it("drops a failure whose check was re-run and failed again as a new check run", async () => {
+    // Same name, same conclusion, a different check run: the re-run's own
+    // failure arrives as its own delivery, and this one names a run that is gone.
+    providerReportsFailed(reported(build, 102));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(failedChecks({ ...build, id: 101 }), deps()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("drops a failure while its check is running again", async () => {
+    providerReports = openPullRequest({ state: "running", failed: [] });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(failedChecks({ ...build, id: 101 }), deps()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("drops a failure once the provider reports the head green", async () => {
+    providerReports = openPullRequest({ state: "green", failed: [] });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(failedChecks({ ...build, id: 101 }), deps()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("binding a failed pipeline through the production version control path", () => {
   const sourceHead = "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f";
 

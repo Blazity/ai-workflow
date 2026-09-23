@@ -56,18 +56,18 @@ vi.mock("@integrations/registry", async (importOriginal) => {
 
 const { exampleRepositoryPath } = await import("./repository-path-example.js");
 const { validateRepositoryExpansionRequests } = await import(
-  "../repository-discovery/runner.js"
+  "../engine/repository-discovery/runner.js"
 );
 const { formatAnswerAlsoNamedComment, formatAnswerNotRecordedComment } = await import(
-  "./clarification-comment-format.js"
+  "../engine/support/clarification-comment-format.js"
 );
 const { validateRepositoryDiscoveryResult } = await import(
-  "../repository-discovery/protocol.js"
+  "../engine/repository-discovery/protocol.js"
 );
 const { selectRepositoriesFromMetadata } = await import(
-  "../pre-sandbox/steps/repo-selection.js"
+  "../engine/pre-sandbox/steps/repo-selection.js"
 );
-const { assembleResearchPlanContext } = await import("../../sandbox/context.js");
+const { assembleResearchPlanContext } = await import("../sandbox/context.js");
 
 function catalogEntry(repoPath: string) {
   return {

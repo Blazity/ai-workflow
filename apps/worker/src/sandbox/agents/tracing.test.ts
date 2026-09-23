@@ -228,6 +228,60 @@ describe("applying a tracing provider's setup to a sandbox", () => {
     expect(move.trimEnd().endsWith("exit $moved")).toBe(true);
   });
 
+  it("leaves a provider out when the sandbox refuses a write, and removes what it staged", async () => {
+    // The sandbox API rejecting a call is not an exit code, and before this it
+    // escaped: the run failed on a tracer it was only meant to be watched by.
+    const commands: string[] = [];
+    let writes = 0;
+    const refusing = {
+      runCommand: async (_bin: string, args: string[]) => {
+        commands.push(args.join(" "));
+        return { exitCode: 0 };
+      },
+      writeFiles: async () => {
+        writes += 1;
+        // The tracer lands; the hook file, the one holding the key, does not.
+        if (writes === 2) throw new Error("sandbox file API unavailable");
+      },
+    };
+
+    const ready = await installTracingPlans(
+      refusing as never,
+      [{ integrationId: "acmetrace", setup: setup() }],
+      "claude",
+    );
+
+    expect(ready).toEqual([]);
+    expect(logged.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: "acmetrace", error: "sandbox file API unavailable" }),
+      "agent_tracing_files_failed",
+    );
+    expect(commands.at(-1)).toContain(
+      "rm -f /tmp/aiw-tracing-acmetrace-0 /tmp/aiw-tracing-acmetrace-hook.env",
+    );
+  });
+
+  it("leaves a provider out when the sandbox cannot start its package install", async () => {
+    const refusing = {
+      runCommand: async () => {
+        throw new Error("sandbox stopped");
+      },
+      writeFiles: async () => {},
+    };
+
+    const ready = await installTracingPlans(
+      refusing as never,
+      [{ integrationId: "acmetrace", setup: setup() }],
+      "codex",
+    );
+
+    expect(ready).toEqual([]);
+    expect(logged.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: "acmetrace" }),
+      "agent_tracing_packages_failed",
+    );
+  });
+
   it("leaves a provider whose install failed out, and says the sandbox is untraced", async () => {
     const failing = {
       runCommand: async () => ({ exitCode: 1 }),

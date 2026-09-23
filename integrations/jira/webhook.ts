@@ -23,9 +23,12 @@ type JiraContext = IntegrationContext<typeof manifest>;
  * issue tracker.
  *
  * Until S12 this file's ancestor did all of it: 792 lines that verified an
- * HMAC and then dispatched, resumed and cancelled runs directly. The behaviour
- * that mattered is pinned by recorded deliveries in
+ * HMAC and then dispatched, resumed and cancelled runs directly. What the
+ * route answers now is pinned by recorded Jira payloads in
  * `apps/worker/src/routes/webhooks/jira-ticket-webhook.characterisation.test.ts`.
+ * That suite was written with the rewrite rather than committed before it, so
+ * it holds this code's behaviour, not a proof that the ancestor behaved the
+ * same ("S12 evidence" in `docs/plans/2026-09-18-integrations.md`).
  */
 export const webhook: IntegrationWebhook<typeof manifest> = {
   receive: async (request, ctx) => {

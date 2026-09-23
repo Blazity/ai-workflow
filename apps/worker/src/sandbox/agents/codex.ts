@@ -28,9 +28,8 @@ import {
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
 import {
-  installTracingPlans,
+  applyTracingPlans,
   tracingEnvironmentLines,
-  tracingHookCommands,
   type HarnessHookEvents,
 } from "./tracing.js";
 
@@ -186,12 +185,16 @@ export class CodexAgentAdapter implements AgentAdapter {
     ]);
     await requireProviderSetup(exclude, this.cliSpec, "Codex workspace exclusion setup");
 
-    // 7) Whatever the connected tracing integrations asked for.
-    if (opts.tracing && opts.tracing.length > 0) {
-      const ready = await installTracingPlans(sandbox, opts.tracing, this.kind, opts.runtime);
-      const hooks = tracingHookCommands(ready, CODEX_HOOK_EVENTS);
-      if (hooks.length > 0) await this.mergeHooks(sandbox, { hooks }, opts.runtime);
-    }
+    // 7) Whatever the connected tracing integrations asked for, and never a
+    //    failed run when it cannot be applied.
+    await applyTracingPlans({
+      sandbox,
+      plans: opts.tracing ?? [],
+      harness: this.kind,
+      events: CODEX_HOOK_EVENTS,
+      registerHooks: (hooks) => this.mergeHooks(sandbox, { hooks }, opts.runtime),
+      runtime: opts.runtime,
+    });
   }
 
   async setCommitGuard(

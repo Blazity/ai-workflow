@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repositoryCatalogProviderSchema } from "@shared/contracts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 
 export const WORKSPACE_MANIFEST_PATH = "/vercel/sandbox/aiw-repos.json";
@@ -6,7 +7,7 @@ export const WORKSPACE_ROOT_DIR = "/vercel/sandbox";
 export const WORKSPACE_REPOS_DIR = "/vercel/sandbox/repos";
 
 const workspaceRepoBaseShape = {
-  provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+  provider: repositoryCatalogProviderSchema,
   repoPath: z.string().min(1),
   slug: z.string().min(1),
   localPath: z.string().min(1),

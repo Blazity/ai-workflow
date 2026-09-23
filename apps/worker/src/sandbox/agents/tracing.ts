@@ -104,9 +104,49 @@ export function tracingHookCommands(
 }
 
 /**
+ * Everything the connected tracing providers asked for, applied to a sandbox:
+ * the packages and files, then the hooks, registered through `registerHooks`,
+ * which is the harness's own settings writer.
+ *
+ * THE ONE PLACE "TRACING NEVER FAILS A RUN" IS KEPT, which is why each harness
+ * calls this rather than the pieces below. The harness's settings writer
+ * throws on a non-zero exit, as it must for the commit guard it also writes,
+ * so a tracing hook that could not be merged would otherwise fail the run it
+ * was only meant to watch. Here it leaves the sandbox untraced and says so.
+ */
+export async function applyTracingPlans(input: {
+  sandbox: RunnableSandbox;
+  plans: readonly AgentTracingPlan[];
+  harness: string;
+  events: HarnessHookEvents;
+  registerHooks: (hooks: Array<readonly [string, string]>) => Promise<void>;
+  runtime?: AgentRuntimePaths;
+}): Promise<void> {
+  if (input.plans.length === 0) return;
+  const ready = await installTracingPlans(input.sandbox, input.plans, input.harness, input.runtime);
+  const hooks = tracingHookCommands(ready, input.events);
+  if (hooks.length === 0) return;
+  try {
+    await input.registerHooks(hooks);
+  } catch (error) {
+    logger.warn(
+      {
+        harness: input.harness,
+        integrations: ready.map((plan) => plan.integrationId),
+        reason: "hooks_failed",
+        error: errorMessage(error),
+      },
+      "agent_tracing_off",
+    );
+  }
+}
+
+/**
  * Install the packages and write the files. Returns the plans that are ready,
  * so a provider whose install failed contributes no hooks either: a hook
  * calling a script that is not there fails on every tool call an agent makes.
+ * Never throws: a provider whose install failed, however it failed, is left
+ * out and the line logged for it says why.
  */
 export async function installTracingPlans(
   sandbox: RunnableSandbox,
@@ -133,10 +173,41 @@ export async function installTracingPlans(
   return ready;
 }
 
+/** A file written to /tmp on its way into the provider's directory. */
+type StagedFile = { path: string; target: string; mode: "600" | "700" };
+
+/**
+ * One provider's install, contained. The sandbox API can reject rather than
+ * answer with an exit code (a write that did not land, a command the sandbox
+ * could not start), and that is the same untraced run as a non-zero exit, not
+ * a failed one. The staging copies are removed on that path too, because one
+ * of them may hold the provider's key.
+ */
 async function installOne(
   sandbox: RunnableSandbox,
   plan: AgentTracingPlan,
   runtime?: AgentRuntimePaths,
+): Promise<boolean> {
+  const staged: StagedFile[] = [];
+  const progress = { step: "packages" as "packages" | "files" };
+  try {
+    return await stageAndInstall(sandbox, plan, runtime, staged, progress);
+  } catch (error) {
+    logger.warn(
+      { integration: plan.integrationId, error: errorMessage(error) },
+      progress.step === "packages" ? "agent_tracing_packages_failed" : "agent_tracing_files_failed",
+    );
+    await discardStaged(sandbox, staged, runtime);
+    return false;
+  }
+}
+
+async function stageAndInstall(
+  sandbox: RunnableSandbox,
+  plan: AgentTracingPlan,
+  runtime: AgentRuntimePaths | undefined,
+  staged: StagedFile[],
+  progress: { step: "packages" | "files" },
 ): Promise<boolean> {
   const python = (plan.setup.packages ?? [])
     .filter((entry) => entry.ecosystem === "python")
@@ -155,6 +226,7 @@ async function installOne(
     }
   }
 
+  progress.step = "files";
   // Every path judged before anything is written, so a refusal on the third
   // file cannot leave the first two staged in /tmp.
   const files = plan.setup.files ?? [];
@@ -168,12 +240,10 @@ async function installOne(
   }
 
   const directory = quotedTracingDirectory(plan.integrationId);
-  const staged: Array<{ path: string; target: string; mode: "600" | "700" }> = [];
+  // Each copy is recorded before it is written, so a write that failed halfway
+  // is still removed by the caller's cleanup.
   for (const [index, file] of files.entries()) {
     const staging = `/tmp/aiw-tracing-${plan.integrationId}-${index}`;
-    await sandbox.writeFiles([
-      { path: staging, content: Buffer.from(file.contentBase64, "base64") },
-    ]);
     // The provider chose this name; quoted, so a space or a `$(...)` in it is
     // a file name and nothing else.
     staged.push({
@@ -181,14 +251,17 @@ async function installOne(
       target: `${directory}/${shellQuote(file.path)}`,
       mode: file.executable ? "700" : "600",
     });
+    await sandbox.writeFiles([
+      { path: staging, content: Buffer.from(file.contentBase64, "base64") },
+    ]);
   }
   const hookEnvironment = exportLines(plan.integrationId, plan.setup.hookEnvironment);
   if (hookEnvironment.length > 0) {
     const staging = `/tmp/aiw-tracing-${plan.integrationId}-${HOOK_ENV_FILE}`;
+    staged.push({ path: staging, target: `${directory}/${HOOK_ENV_FILE}`, mode: "600" });
     await sandbox.writeFiles([
       { path: staging, content: Buffer.from(`${hookEnvironment.join("\n")}\n`) },
     ]);
-    staged.push({ path: staging, target: `${directory}/${HOOK_ENV_FILE}`, mode: "600" });
   }
   if (staged.length === 0) return true;
 
@@ -206,16 +279,38 @@ async function installOne(
   // otherwise leave it world-readable in /tmp for the rest of the sandbox's
   // life. `rm -f` after a successful `mv` is a no-op, so the exit code the
   // caller reads is still the moves' own.
-  const discardStaged = `rm -f ${staged.map(({ path }) => path).join(" ")}`;
   const move = await sandbox.runCommand("bash", [
     "-c",
-    withRuntimeHome(runtime, `{ ${script}; }; moved=$?; ${discardStaged}; exit $moved`),
+    withRuntimeHome(runtime, `{ ${script}; }; moved=$?; ${removeStagedCommand(staged)}; exit $moved`),
   ]);
   if (move.exitCode !== 0) {
     logger.warn({ integration: plan.integrationId }, "agent_tracing_files_failed");
     return false;
   }
   return true;
+}
+
+function removeStagedCommand(staged: readonly StagedFile[]): string {
+  return `rm -f ${staged.map(({ path }) => path).join(" ")}`;
+}
+
+/** Best effort: the sandbox that just refused a call may refuse this one too,
+ *  and the run goes on either way. */
+async function discardStaged(
+  sandbox: RunnableSandbox,
+  staged: readonly StagedFile[],
+  runtime: AgentRuntimePaths | undefined,
+): Promise<void> {
+  if (staged.length === 0) return;
+  try {
+    await sandbox.runCommand("bash", ["-c", withRuntimeHome(runtime, removeStagedCommand(staged))]);
+  } catch {
+    // Nothing more to do from here; the failure that brought us here is logged.
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** A provider writes inside its own directory, and only there. */

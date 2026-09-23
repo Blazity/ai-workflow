@@ -1,7 +1,7 @@
 import type { WorkScopeAskReason } from "@shared/contracts";
 import type { UnrecordedAnswerCommentPath } from "../work-scope/context.js";
 import { scrubForPublication } from "./publication-scrub.js";
-import { exampleRepositoryPath } from "./repository-path-example.js";
+import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 
 /**
  * Pure text builders for the Jira comments that carry clarification questions

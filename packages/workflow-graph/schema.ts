@@ -16,6 +16,7 @@ import type {
 import {
   isStorableWorkflowBlockType,
   isHarnessProfileReference,
+  repositoryCatalogProviderSchema,
   isSafeWorkflowInputName,
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
@@ -36,7 +37,8 @@ const bindingInputName = z.custom<string>(
   { message: "Input name contains an empty or unsafe path segment." },
 );
 
-const vcsProviders = z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/);
+// A provider is an integration id, by the catalog's one rule.
+const vcsProviders = repositoryCatalogProviderSchema;
 export const vcsProviderSelection = z.array(vcsProviders);
 
 const executionBudgetsSchema = z
