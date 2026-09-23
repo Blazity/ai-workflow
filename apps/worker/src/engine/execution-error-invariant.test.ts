@@ -204,16 +204,17 @@ describe("execution error invariant: one construction path", () => {
 
 describe("execution error invariant: every surface shows the same message", () => {
   // The failure the ticket was filed on: an agent phase whose CLI exited 1 on an
-  // exhausted OpenAI account, with the provider's own sentence in the captured
-  // stdout tail.
-  const built = executionError("The CLI exited with code 1.", {
+  // exhausted OpenAI account. The provider's own sentence arrives in the
+  // structured provider error, out of the Codex error event (AIW-312); the
+  // agent's stdout stream is quoted but never classified.
+  const built = executionError("Codex emitted a provider error event.", {
     category: "provider",
     message: "The current agent phase could not be completed.",
     phase: "planning",
     evidence: {
-      failureKind: "cli_exit",
+      failureKind: "provider_error",
       exitCode: 1,
-      stdoutTail:
+      providerError:
         "stream disconnected before completion: You have no credits remaining. " +
         "Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.",
     },

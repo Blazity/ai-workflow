@@ -808,14 +808,17 @@ async function reconcileClaims(input: {
     input.aiColumnTickets === null ? null : new Set(input.aiColumnTickets),
     adapters.runRegistry,
     tracker.ok ? tracker : undefined,
-    async (ticketKey, reason) => {
+    async (ticketKey, reason, stopAnnouncement) => {
+      // The sentence the ticket's comment opens with, when this pass recorded
+      // a person's stop; the plain reason otherwise.
       const detail =
-        reason === "inflight_claim"
-          ? "claim was cleared after the ticket left AI"
-          : "workflow run was cancelled after the ticket left AI";
+        stopAnnouncement ??
+        (reason === "inflight_claim"
+          ? "claim was cleared after the ticket left AI."
+          : "workflow run was cancelled after the ticket left AI.");
       await adapters.messaging.notifyForTicket(ticketKey, {
         kind: "canceled",
-        reason: `${detail}.`,
+        reason: detail,
       });
     },
     input.onSubjectReleased,

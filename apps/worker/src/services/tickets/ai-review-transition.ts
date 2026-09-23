@@ -1,4 +1,5 @@
 import type { Db } from "../../db/types.js";
+import { prematureReviewReason } from "../../engine/support/ticket-left-column.js";
 import {
   hasConnectedDurableRunPublication,
   hasDurableRunPublication,
@@ -15,7 +16,8 @@ import {
  * rather than being written here.
  */
 export function prematureAiReviewCancellationReason(trackerName: string): string {
-  return `${trackerName} AI Review transition before durable PR publication evidence`;
+  // Composed beside its reader (runs.diagnose), so the two cannot drift apart.
+  return prematureReviewReason(trackerName);
 }
 
 export type AiReviewRunDecision = "retain" | "cancel" | "lookup_failed";
