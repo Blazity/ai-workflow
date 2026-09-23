@@ -1401,7 +1401,9 @@ describe("repository scripts failure comment", () => {
     const body = lines.slice(index, index + 70).join("\n");
     expect(body).toContain("recordRunFailureReasonStep(workflowRunId, reason)");
     expect(body).toContain(
-      "postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner)",
+      // A pull request run's comment names the pull request and the workflow
+      // around the same enriched text.
+      "postFailureReasonCommentStep(ticket.identifier, ticketFailureComment(comment), transitionOwner)",
     );
     // Exactly one comment call in the whole exit.
     expect(body.match(/postFailureReasonCommentStep\(/g)).toHaveLength(1);

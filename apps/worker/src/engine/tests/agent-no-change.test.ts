@@ -795,6 +795,35 @@ describe("retired workflow plan replay", () => {
   });
 });
 
+describe("a pull request run that stops before its work", () => {
+  // Red when: a pull request run refused before any work (a disconnected
+  // integration, a retired definition) parks its linked ticket, or says
+  // nothing on the pull request.
+  it("notes the failure on the pull request and leaves the ticket where it is", async () => {
+    const order: string[] = [];
+    const notes: string[] = [];
+    await runRetiredWorkflowFailureExit(RETIRED_SCHEMA_MESSAGE, {
+      ticketKey: "AWP-269",
+      cleanupClarifications: vi.fn(async () => {}),
+      markRunFailed: vi.fn(async () => {}),
+      recordFailureReason: vi.fn(async () => {}),
+      logFailure: vi.fn(async () => { order.push("failure_log"); }),
+      commentFailure: vi.fn(async () => { order.push("jira_comment"); }),
+      moveTicket: vi.fn(async () => { order.push("ticket_move"); }),
+      notifyTicket: vi.fn(async () => { order.push("ticket_notify"); }),
+      pullRequest: {
+        note: vi.fn(async (reason: string) => {
+          order.push("pr_note");
+          notes.push(reason);
+        }),
+      },
+    });
+
+    expect(order).toEqual(["failure_log", "pr_note", "jira_comment", "ticket_notify"]);
+    expect(notes).toEqual([RETIRED_SCHEMA_MESSAGE]);
+  });
+});
+
 describe("runLedgerEvidenceSecondPass", () => {
   const quote = "if (value === null) return fallback;";
   const branchFile = [
@@ -971,6 +1000,26 @@ describe("postReviewLedgerFailureNoteStep", () => {
     expect(postedBody()).not.toContain("pushed");
   });
 
+  // Red when: the note a failed autofix posts does not say which workflow
+  // failed, so a reviewer cannot tell it from a review run's.
+  it("names the workflow the run ran", async () => {
+    await postReviewLedgerFailureNoteStep({
+      pr,
+      runId: "wrun_1",
+      reason: "the checks stayed red",
+      unsettledAliases: [],
+      variant: "pre_feed",
+      workItems: [],
+      pushedHead: null,
+      answeredCount: 0,
+      workflowName: "Autofix PR checks v3",
+    });
+
+    expect(postedBody()).toContain(
+      'AI Workflow run `wrun_1` of the "Autofix PR checks v3" workflow failed on this pull request: the checks stayed red.',
+    );
+  });
+
   it("says what it pushed before dying, so the note never implies an untouched branch", async () => {
     await postReviewLedgerFailureNoteStep({
       pr,
@@ -1008,8 +1057,14 @@ describe("postReviewLedgerFailureNoteOnFailureExit flag gate", () => {
   ).split("\n");
 
   it("still checks REVIEW_LEDGER_ENABLED before posting a failure note on a failed trigger_pr_review run", () => {
-    const index = agentLines.findIndex((line) =>
-      line.includes("postReviewLedgerFailureNoteStep({"),
+    // The ledger's own call, inside the failure-exit closure: the plain
+    // failure note every pull request run posts calls the same step earlier.
+    const closure = agentLines.findIndex((line) =>
+      line.includes("const postReviewLedgerFailureNoteOnFailureExit"),
+    );
+    expect(closure, "postReviewLedgerFailureNoteOnFailureExit is gone from agent.ts").toBeGreaterThan(-1);
+    const index = agentLines.findIndex((line, at) =>
+      at > closure && line.includes("postReviewLedgerFailureNoteStep({"),
     );
     expect(index, "postReviewLedgerFailureNoteStep is no longer called in agent.ts").toBeGreaterThan(-1);
 

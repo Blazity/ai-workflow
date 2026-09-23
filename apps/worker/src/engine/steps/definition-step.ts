@@ -54,6 +54,14 @@ export interface LoadedWorkflowPlan {
   /** Set when an integration the graph uses cannot run at all right now. The
    *  run fails before any work, naming it, and records the reason as a code. */
   integrationBlocker?: RunIntegrationBlocker;
+  /**
+   * The definition's name as a person knows it, for the sentences a run
+   * writes about itself (a failure note on a pull request, a ticket comment).
+   * Absent on a plan replayed from before it existed, on the built-in default,
+   * and when the name could not be read: those sentences then name the
+   * definition by its id and version.
+   */
+  definitionName?: string;
 }
 
 interface ZodLikeError extends Error {
@@ -96,8 +104,19 @@ export async function loadWorkflowDefinitionFor(
   const {
     getConnectedDeployedWorkflowDefinitionVersion,
     getConnectedWorkflowDefinition,
+    getConnectedWorkflowDefinitionName,
     getConnectedWorkflowDefinitionVersion,
   } = await import("../../db/repositories/definitions/connected.js");
+  // Best effort: a name that cannot be read costs a sentence its name, never
+  // the run its plan.
+  const nameOf = async (id: number | null): Promise<string | undefined> => {
+    if (id === null) return undefined;
+    try {
+      return (await getConnectedWorkflowDefinitionName(id))?.name;
+    } catch {
+      return undefined;
+    }
+  };
   const { getConnectedEnabledWorkflowDefinitionForTrigger } =
     await import("../definition-trigger-routing.js");
   const { validateWorkflowDefinitionForRunLoad } =
@@ -166,6 +185,7 @@ export async function loadWorkflowDefinitionFor(
     const normalized = toRuntimeShape(def);
     const integrations = known ?? (await integrationsNow());
     const blocker = runIntegrationBlocker(def.nodes, integrations);
+    const definitionName = planVersion === null ? undefined : await nameOf(id);
     return {
       definition: def,
       version: planVersion,
@@ -177,6 +197,7 @@ export async function loadWorkflowDefinitionFor(
       ...(blocker ? { integrationBlocker: blocker } : {}),
       ...(def.budgets ? { budgets: def.budgets } : {}),
       ...(def.repositoryScope ? { repositoryScope: def.repositoryScope } : {}),
+      ...(definitionName ? { definitionName } : {}),
     };
   };
 
