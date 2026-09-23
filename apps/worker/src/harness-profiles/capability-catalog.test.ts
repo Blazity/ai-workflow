@@ -415,7 +415,9 @@ describe("Harness capability catalog", () => {
       ...CATALOG,
       provider: "claude",
       packageName: "@anthropic-ai/claude-code",
-      models: aliases.map((id) => ({ ...CATALOG.models[0]!, id, name: id })),
+      models: aliases.map((id) =>
+        Object.assign(structuredClone(CATALOG.models[0]!), { id, name: id }),
+      ),
     };
     const response = {
       ...claudeCatalog,
