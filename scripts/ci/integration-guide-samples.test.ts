@@ -120,10 +120,13 @@ test("the guide's samples compile, and the ones that form an integration pass co
   }
 
   // Compiling a test proves it type-checks, not that what it teaches is true:
-  // the guide's own test has to pass against the guide's own webhook. Its
-  // fixture is a delivery the provider signed, which a fictional provider
-  // cannot hand over, so it is signed here the way the guide says the provider
-  // signs: HMAC-SHA256 over `<timestamp>.<raw body>`, sent as the hex digest.
+  // every test the guide shows has to pass against the guide's own code.
+  const sampleTests = [...files.keys()].filter((file) => file.endsWith(".test.ts"));
+  assert.ok(sampleTests.includes("memory.test.ts"), "the guide's memory adapter test is gone");
+  // The webhook test's fixture is a delivery the provider signed, which a
+  // fictional provider cannot hand over, so it is signed here the way the
+  // guide says the provider signs: HMAC-SHA256 over `<timestamp>.<raw body>`,
+  // sent as the hex digest.
   if (files.has("webhook.test.ts")) {
     const secret = "guide-sample-secret";
     const timestamp = "1758000000";
@@ -134,16 +137,26 @@ test("the guide's samples compile, and the ones that form an integration pass co
       join(directory, "test-fixtures/signed-delivery.json"),
       `${JSON.stringify({ secret, timestamp, signature, rawBody }, null, 2)}\n`,
     );
-    // Without this suite's own runner context, which would take the child's
-    // report instead of letting it print one.
-    const { NODE_TEST_CONTEXT: _, ...env } = process.env;
-    const run = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--test", "--test-reporter=spec", join(directory, "webhook.test.ts")],
-      { cwd: root, encoding: "utf8", env },
-    );
-    assert.equal(run.status, 0, `the guide's webhook.test.ts fails against the guide's webhook.ts:\n${run.stdout}${run.stderr}`);
-    assert.match(run.stdout, /^ℹ pass [1-9]/mu, "the guide's webhook.test.ts ran no test");
-    assert.match(run.stdout, /^ℹ fail 0$/mu);
   }
+  // Without this suite's own runner context, which would take the child's
+  // report instead of letting it print one.
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env;
+  const run = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--test",
+      "--test-reporter=spec",
+      ...sampleTests.map((file) => join(directory, file)),
+    ],
+    { cwd: root, encoding: "utf8", env },
+  );
+  assert.equal(
+    run.status,
+    0,
+    `a test the guide shows fails against the guide's own code (${sampleTests.join(", ")}):\n${run.stdout}${run.stderr}`,
+  );
+  assert.match(run.stdout, /^ℹ pass [1-9]/mu, "the guide's tests ran no test");
+  assert.match(run.stdout, /^ℹ fail 0$/mu);
 });

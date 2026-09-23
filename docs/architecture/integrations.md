@@ -45,13 +45,31 @@ payload carries its source (see "Recorded payloads").
 What skipping this costs: an adapter written from memory passes every test
 you wrote from the same memory, and fails its first real call. A fixture
 copied from a page that changed since proves the old behaviour. Providers do
-move: on 2026-09-22 Mem0's documentation carried a migration from its v2 to
-its v3 platform API, and it answers an add with `PENDING` and an event id to
-poll, not with the stored memory.
+move: in September 2026 one hosted memory engine's documentation carried a
+migration to a new API version whose add only appends, and answers with a
+pending status and an event id to poll rather than with the stored memory.
+
+Two things the documentation will not settle for you:
+
+- **Which revision you read.** `ctx7` answers from current documentation and
+  cites a file on the provider's default branch, with no commit. Record the
+  file, its URL and the day you read it, and where the documentation lives in
+  a public repository, the commit that file had that day (its history on the
+  repository's host shows it). That is the pinned revision the provenance
+  table and a recorded payload ask for.
+- **Which of two pages is right.** Providers contradict themselves: a path with
+  and without a trailing `s`, one field named two ways on two pages. Settle it
+  with one live call from your own machine to the provider, with a test
+  account's key, and keep the answer as a recorded payload. Ask whoever
+  requested the integration for that test key; never use a production key,
+  and never one of this product's deployments.
 
 The same holds for our own stack. Before you rely on how the Workflow DevKit,
 zod (both majors, see "zod 3 in tests, zod 4 in production"), Next.js or your
-test runner behaves, read the version this repository pins.
+test runner behaves, read the version this repository pins: `zod`, `zod4`,
+`typescript`, `tsx`, `vitest` and `react` in the `catalog:` of
+`pnpm-workspace.yaml`, the Workflow DevKit (`workflow`) in
+`apps/worker/package.json`, and Next.js in `apps/dashboard/package.json`.
 
 ## From nothing to a connected integration
 
@@ -100,16 +118,32 @@ from the repository root.
    writes your fields into `connection-shape.snapshot.json`. That test fails
    whenever a shipped integration's connection fields change (see "What the
    run pin does to you"); for a new integration the change is only the
-   addition.
+   addition. It reads the generated registry and the committed snapshot and
+   nothing else: no database, no network, safe on any machine.
 5. **Check it.** `pnpm --filter @integrations/<id> run typecheck` and
    `pnpm --filter @integrations/registry run test` (the conformance suite).
    Both pass before you have edited anything. From here on, run them after
    every change.
 6. **Make it yours:** the manifest, then the worker, then the tests, using
-   the sections below. Delete what you do not need: the block, the page, or
-   both.
-7. **Prove it on a deployment** you are allowed to change (see "Testing
-   without our production credentials").
+   the sections below. The scaffold sets the block's `glyph` to your name's
+   initial; choose its `color` and `softColor` too. Delete what you do not
+   need, and what goes with it:
+   - **No page:** delete `dashboard.tsx`, set `pages: []`, remove the
+     `./dashboard` entry from `exports` in `package.json`, the
+     `@integrations/host-ui`, `react` and `@types/react` dependencies, and the
+     page's line in the README. The generator refuses a `dashboard.tsx` with
+     no page declared, and a page with no `dashboard.tsx`; it does not read
+     `package.json`, but the unused-code gate (`pnpm run gate:unused`) fails
+     on a dependency nothing imports.
+   - **No block:** `blocks: []` in the manifest and `blocks: {}` in
+     `worker.ts` (the typecheck holds the two together), the block's tests and
+     its line in the README.
+   - **No webhook:** leave `webhook` out of `worker.ts`; the route answers
+     404 for you. A memory integration normally has none.
+7. **Prove it** with its own tests and conformance, locally (see "Your own
+   tests"). The live proof comes after the merge, on production, by an
+   operator through the Connection form ("Proving it works"): there is no
+   deployment you may change before then.
 8. **Open the pull request** with the checklist at the end of this page.
 
 What a person sees once it is deployed: the Integrations page lists a card
@@ -185,7 +219,7 @@ context and returns the port's adapter.
 | `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. |
 | `vcs` | `VCSAdapter` (`vcs.ts`) | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host and whether paths nest). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
-| `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | `apps/worker/src/memory/builtin/adapter.ts`, and "Memory" below. |
+| `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | "Memory" below, which states every rule an engine needs. The built-in store (`apps/worker/src/memory/builtin/adapter.ts`) is the one implementation today, for reference. |
 | `agent_tracing` | `AgentTracingAdapter` (`agent-tracing.ts`) | many | Arthur | `integrations/arthur`: a description of files, packages, environment and hooks that core applies to every agent sandbox. `otelFixtureRuntime` in `integrations/sdk/fixture-runtime.ts` is a second, minimal provider. |
 | `agent_tools` | reserved | many | nobody | Declaring it is a type error and a conformance failure until a later plan designs it. |
 
@@ -219,10 +253,15 @@ connection, and only while exactly one tracker is connected, in two places:
 
 **A block uses a capability by requiring it**, not by serving it. List it in
 the block's `requires.capabilities` and the editor offers the block only
-while some integration serves it; the executor's `ctx.capabilities` then has
-exactly those keys (`integrations/_fixtures/demo/worker.ts` requires
+while the capability is served here; the executor's `ctx.capabilities` then
+has exactly those keys (`integrations/_fixtures/demo/worker.ts` requires
 `messaging`). `memory` and `agent_tracing` have no key there: core applies
-them around a run, and a block may name them only to be offered or not.
+them around a run, so naming one only decides whether the block is offered,
+by the rule a run is served by. `memory` is offered whenever runs here
+remember: with no memory integration switched on (the built-in store serves)
+and with one switched on and working; not while that one is Failing, and not
+while two are switched on. `agent_tracing` is offered while at least one
+tracing integration is usable.
 
 **Ports speak the product's language, never a provider's.** When your port
 needs a fact core does not give you, the fix is a new provider-neutral field
@@ -236,42 +275,209 @@ listed in ADR-010, "Debt the moved ports carry", with who removes each.
 ### Memory
 
 Memory is the one capability core serves by itself. A deployment that
-connects nothing uses the built-in store, which is a core module rather than
-a package because it needs core's database. Connecting a memory integration
-**replaces** that store; disabling the integration returns the deployment to
-the built-in store, which was not touched in between. Two things never fall
-back to the built-in store, because either would split a deployment's memory
-across two stores with nobody told: settings that cannot be read, and a
-memory integration that is enabled but Failing (a refused key, say). Runs
-then go on without memory and say which provider failed. Two enabled memory
-integrations are refused the same way until an admin disables all but one.
+connects nothing uses the built-in store, a core module rather than a package
+because it needs core's database. Everything the author of a memory engine
+needs is in this section and in the port's comments
+(`integrations/sdk/memory.ts`, read them whole). The built-in store
+(`apps/worker/src/memory/builtin/adapter.ts`) is the one implementation today:
+useful to read, not required.
 
-The port (`integrations/sdk/memory.ts`) was designed against the built-in
-store and the published APIs of Mem0 and Zep. Read its comments whole; the
-rules that bite:
+**Who serves.** Connecting a memory integration **replaces** the built-in
+store; disabling the integration returns the deployment to the built-in
+store, which was not touched in between. Two things never fall back to the
+built-in store, because either would split a deployment's memory across two
+stores with nobody told: settings that cannot be read, and a memory
+integration that is enabled but Failing (a refused key, say). Runs then go on
+without memory and say which provider failed. Two enabled memory integrations
+are refused the same way until an admin disables all but one. The editor asks
+the same rule (`memoryProviderChoice` in
+`apps/worker/src/engine/definition/integration-availability.ts`), so a block
+that requires `memory` is offered exactly where runs remember.
+
+**Switching is not migrating.** Nothing is copied when an admin connects an
+engine: the first runs after it find nothing, the repository seed writes
+again (with repository memory on, below), and the next run of a ticket in
+flight starts without the notebook it had. Disconnecting
+sends nothing to the engine and deletes nothing there; reconnecting the same
+project brings its memory back as it was. Your README says all of this, and
+your manifest's `description` says the first part in one line, because the
+card shows it to the admin before they press Connect.
+
+#### What core does for every provider
+
+Four things are core's, done once for every provider, so your adapter does not
+do them and cannot get them wrong:
+
+- **Secrets are out of the text before you see it.** Every observation reaches
+  `observe` with every secret this deployment knows taken out of `learned`,
+  `refuted` and a document's `text`: the environment's, and those an admin
+  stored in the dashboard, which no integration is ever handed
+  (`withoutKnownSecrets` in `apps/worker/src/engine/support/memory-runtime.ts`,
+  reading `knownSecretValues()`). When that set cannot be read, the write
+  answers `unavailable` and nothing is sent; text the redaction cannot process
+  is `rejected`. Addresses (the subject key, a notebook's name, the run id, the
+  ticket key) are left as they are.
+- **Size in a prompt is capped.** One agent prompt carries at most
+  `MEMORY_PROMPT_BUDGET_BYTES` of renderings: 16 KiB of facts and 16 KiB of
+  lessons, summed over the owner and every repository in the prompt. A
+  rendering that does not fit what is left is cut at a line end and ends with
+  a marker line the model reads; the renderings after it are left out, and
+  both are logged (`repo_memory_injection_budget_exceeded`). A notebook is a
+  file in the agent's workspace, not a prompt section, and is capped at
+  `MEMORY_NOTEBOOK_MAX_BYTES` (256 KiB) the same way. So your rendering does not
+  have to be small. It has to be ordered, because core cuts from the end: put
+  first what must survive (entries that arrived `derived`, then what a recent
+  run confirmed).
+- **Time is budgeted per step.** Core resolves the provider once per step and
+  may make many calls through it. They share `MEMORY_CALL_BUDGET_MS`, 60
+  seconds of time spent waiting on your provider in that step; time the step
+  spends elsewhere (a model call between a read and a write) is not charged,
+  and calls made side by side are charged once. When it runs out, core aborts
+  `ctx.signal`, and the call in flight and every later one in that step answer
+  `unavailable` at once. Core races your call against the budget, so even an
+  adapter that ignores its signal is bounded; still turn an aborted request
+  into `unavailable`, never a throw.
+- **Core never retries.** A `recall` or `observe` that answered, with any code,
+  is not repeated: the next step or the next run asks again. So the only repeat
+  a write can suffer is one your adapter makes.
+
+#### Where a run calls memory, and where you see it
+
+Six places. A minimal workflow reaches the first and the fourth: a ticket
+trigger and one agent block that works on a repository (an implementation,
+planning or review agent) prepares a workspace, which hydrates the notebook,
+and tears it down, which persists it. The other three run only while the
+**repository memory** setting is on (`ENABLE_REPO_MEMORY` on the Settings page,
+off by default); promotion to an owner's facts also needs
+`ENABLE_ORG_MEMORY_PROMOTION`. N below is the number of repositories.
+
+| When | What it calls | Subject and scope | Logged as | Seen by a person |
+|---|---|---|---|---|
+| A workspace is prepared, once per run (`hydrateWorkspaceMemoryStep`, `apps/worker/src/engine/steps/memory-steps.ts`) | `recall`; an `observe` of a `document` only when nothing is held and the checkout carries an old committed notebook | `ticket:<tracker>:<KEY>` (or a pull request's key), `notebook` | `memory_document_hydrated_from_store`, `memory_document_seeded_from_repo`; `memory_provider_unavailable` and `memory_document_seed_refused`, both with `provider`, `code` and `detail`; `memory_document_hydrate_failed` | a refusal is a `memory_unavailable` observation (`where: "hydrate"`) on the block attempt: the Metadata tab of the run's trace (`/trace/<runId>`), `runs.trace` over MCP |
+| Right after it, repository memory on (`seedRepoMemoryStep`, `repo-seed-steps.ts`) | per repository: `recall` of facts; an `observe` of `items` marked `derived` and `onlyIfEmpty` when nothing is held; an `observe` with only `refuted` to retract a script the repository no longer has | `repo:<provider>:<path>`, `facts` | `repo_memory_seeded`, `repo_memory_seed_refused`, `repo_memory_prune_refused`, `memory_provider_unavailable` | `memory_unavailable` (`where: "seed"`), as above |
+| Every agent invocation, repository memory on (`loadRepoMemorySourcesStep`, `repo-memory-steps.ts`) | `recall` of each owner's facts, then each repository's facts and lessons: up to 1 + 2N calls | `org:<provider>:<owner>` facts; `repo:...` facts and lessons | `repo_memory_injected` (documents, bytes, dropped, truncated), `repo_memory_injection_budget_exceeded`, `memory_provider_unavailable` (`provider`, how many refused), `repo_memory_load_deadline_exceeded` | the memory sections of what the agent was sent: `runs.briefing` over MCP and the node's last briefing in the editor; a refusal as `memory_unavailable` (`where: "prompt"`) |
+| Teardown, whatever the outcome, failed and cancelled runs included (`persistWorkspaceMemoryStep`) | `observe` of the agent's notebook `document` | as the first row | `memory_document_persisted`; `memory_provider_unavailable` (`provider`, `code`, `detail`); `memory_capture_unavailable` with the run id | **logs only** |
+| After a run that succeeded and published, repository memory on (`distillRepoMemoryStep`) | `recall` of the notebook and of each write-scoped repository's facts and lessons; an `observe` of `items` (`learned`, `refuted`) per repository and scope; with promotion on, facts again and an `observe` on the owner: up to 1 + 3N calls | notebook, `repo:...`, `org:...` | `repo_memory_distilled` on every path, with an `outcome`; `repo_memory_write_refused`; `memory_provider_unavailable`; `memory_distill_unavailable` with the run id | **logs only** |
+| The memory screen (`/memory`) and the `memory.list`, `memory.get` and `memory.forget` MCP tools | `store.list`, `store.read`, `store.forget` | the pairs your `list` returned | | the screen shows your listing and, when you cannot answer, your sentence; `complete: false` adds a notice that the list may be partial |
+
+Which provider answered is on those log lines (`provider`) and nowhere else: no
+run field records it yet, and the persist and distill outcomes reach no screen.
+Read them in the worker's runtime logs by the run id.
+
+#### The rules that bite
 
 - **Observations in, rendering out.** Core says what a run learned about a
   subject (`observe`) and asks what is known (`recall`). Your engine decides
-  what to keep, merge and forget, and renders what it knows in `rendering`,
-  which core puts into a prompt as is.
+  what to keep, merge and forget, and renders what it knows in `rendering`.
 - **`recall` and `observe` never throw.** A failure is an answer
-  (`{ ok: false, code, detail }`), because memory must not be able to change
-  a run's outcome. A throw is caught by core and recorded as `unavailable`,
-  but that is a bug in your adapter, not a contract.
-- **Your failure codes are three**: `unavailable` (could not be reached, worth
-  retrying), `contended`, `rejected` (retrying will not help). The other four
-  are core's.
+  (`{ ok: false, code, detail }`), because memory must not be able to change a
+  run's outcome. A throw is caught by core and recorded as `unavailable`, but
+  that is a bug in your adapter, not a contract.
+- **Each scope receives one kind of observation.** `facts` and `lessons`
+  receive `items`; a `notebook` receives a `document`. Core never sends the
+  other combination, and you may refuse it as `rejected`.
+- **Items are already distilled: store them as written.** Core's own model
+  wrote each `learned` item as one line of at most 200 characters, against what
+  you already hold, and a `derived` item is what a repository's manifest says.
+  One stored memory per item, verbatim, is the recommended default, and the
+  only right one for `derived`. Passing items through your engine's own
+  extraction model is your decision, and your README says why: it costs a
+  model call per observation, may reword or drop an item (so a later `refuted`
+  quoting the original no longer matches), and applies whatever instructions
+  the engine project carries.
+- **Forget what `refuted` names, even when your engine only adds.** Ignoring it
+  leaves a fact and its refutation side by side, and the next run trusts
+  whichever it reads first. Against an engine that only adds: list what the
+  subject and scope hold, and delete by id each memory whose text matches a
+  refuted entry, by the comparison you dedup with. Never by a similarity score
+  or a search ranking, which deletes a neighbour, and never by a delete that
+  takes a filter, which cannot say what it removed. `removed` counts the
+  deletes the engine confirmed. Do not store a `learned` entry that restates
+  one you hold.
+- **A notebook is replaced, not appended.** The next recall returns exactly the
+  last text stored, not joined to the one before it. Against an engine that
+  only adds, that is an add of the whole text and a delete of the previous
+  version. Prefer a write that is done when it answers: the same run reads the
+  notebook back seconds later to distil it.
 - **`stored` is acceptance, not read-after-write.** An engine that accepts a
   write and merges it later answers `stored: true`. `removed`, `dropped` and
   `remaining` are only logged, and only when one of the first two is above
   zero, so an engine that cannot know them yet answers zeros.
+- **"Held nothing" is an answer; an unreadable body is not.** An HTML error
+  page, an empty 200 or JSON without the field you read is `ok: false,
+  unavailable`. Answering `held: false` for it makes the seed write into a store
+  that is already full, and makes a run take an old committed file for the
+  ticket's notebook.
 - **`onlyIfEmpty` is yours to honour**: a deterministic seed may create a
   subject's memory and never edit what a run wrote. Check `held` first.
-- **`subject.key` is an address, not text.** Store it and compare it; never
-  parse or rewrite it, or everything already stored is orphaned.
+- **`subject.key` and a notebook's `name` are addresses, not text.** Store
+  them and compare them exactly; never parse or rewrite them, or everything
+  already stored is orphaned, and never hand one to a call that reads it as a
+  pattern: a key containing `*` sent to an engine that deletes by filter
+  deletes every subject.
+- **`runId` is provenance, never a partition.** Keep it as metadata if at all.
+  Filing memories under an engine's run or session field puts each run's
+  knowledge where the next run never looks.
+- **Isolation follows the connection.** Subject keys are the same on every
+  deployment, so deployments whose connections point at one engine project
+  share one memory per subject, as deployments that share a database share
+  the built-in store. That is intended, and the recommendation is one engine
+  project per connection. Sharing a project with another application is never
+  intended: write a namespace of your own (the engine's application or agent
+  field, or a metadata key) on every write and require it on every read, list
+  and delete, so a chatbot's memories in the same project never reach a
+  prompt, the memory screen or an erasure.
 - **`store` is optional** and has the opposite rule: its three methods may
-  throw. An engine that cannot list what it holds leaves it out, and the
-  memory screen says so instead of showing an empty list.
+  throw. An engine that cannot list what it holds leaves it out, and the memory
+  screen and the three MCP tools say so instead of showing an empty list; a
+  person's request to see or erase what one ticket left then has to be carried
+  out in the engine's own console. Your README says that.
+
+#### Failures, timeouts and retries
+
+- **`unavailable`** for anything that may go better later: the engine could not
+  be reached, answered 408, 429 or 5xx, or did not answer in time. Say "rate
+  limited" in the detail for a 429. **`rejected`** for what will fail the same
+  way again: a 4xx about the request, text the engine refuses.
+- **A write whose fate you cannot tell** (a timeout after the request was sent,
+  a reset mid-answer) is `unavailable`. Core will not send it again; resending
+  it yourself can store it twice against an engine with no idempotency key. So
+  never pass `retries` on an add unless the engine documents it as idempotent.
+- **A read your engine spells as a POST** (a search, a filtered listing) is
+  still a read, and may pass `retries`: core sees only the method and retries
+  GET, HEAD and OPTIONS by itself.
+- **Bound each request below the step's budget.** An attempt defaults to 30
+  seconds (`INTEGRATION_HTTP_DEFAULTS.timeoutMs`), so one slow page could spend
+  half of `MEMORY_CALL_BUDGET_MS`. Pass `timeoutMs` of about 10 seconds on
+  memory calls, and read only as many pages as the prompt budget can carry.
+- **A provider SDK is bound by the same rules** (see "What the context gives
+  you"): handed `ctx.http.fetch` and `ctx.signal`, or not used.
+
+#### The admin half
+
+`list`, `read` and `forget` address a document by a pair: `subjectKey` is the
+key you were given, `docPath` is whatever string you chose for one document.
+Core never builds a pair: `read` and `forget` receive exactly the pairs your
+own `list` returned, carried by a person or an MCP client. So they arrive as
+input and can be anything: match both exactly, refuse a pattern (`*`, an empty
+string) instead of handing it to the engine, and answer null or false for any
+pair your `list` could not have produced. `forget` answers true only once what
+was stored is gone, so delete by id where the engine deletes in the background
+by filter.
+
+For an engine that stores single memories rather than documents, map one
+document to each subject and scope: `docPath` is the scope's word (`facts`,
+`lessons`) or `notebook/<name>`; `content` is what `recall` would render;
+`bytes` its UTF-8 length; `createdAt` the oldest memory's time and `updatedAt`
+the newest's; `sourceRunId` the newest memory's run id, or empty; `forget`
+deletes every memory under the pair. `list({ ticketKey })` lists what
+observations carrying that ticket left (store `ticketKey` where you can filter
+on it); an engine that refuses a listing without an entity filter lists under
+your namespace, never under a wildcard. Newest first, and `complete: false`
+whenever you stopped before the end. One exception you will meet: the
+repository page (`/repositories/<id>`) still reads the pairs
+`repo:<provider>:<path>` with `facts` and `lessons` directly rather than from
+your listing, so those two `docPath`s are the ones it can show.
 
 This is the shape, compiled and checked with everything else on this page:
 
@@ -317,7 +523,8 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
       const url = new URL(`/v1/projects/${ctx.connection.projectId}/search`, ctx.connection.baseUrl);
       url.searchParams.set("subject", request.subject.key);
       url.searchParams.set("scope", scopeName(request.scope));
-      const response = await ctx.http.fetch(url, { headers });
+      // Well below the step's memory budget, so one slow answer cannot spend it.
+      const response = await ctx.http.fetch(url, { headers, timeoutMs: 10_000 });
       if (!response.ok) {
         return { ok: false, code: failureOf(response.status), detail: `Hippo answered ${response.status}` };
       }
@@ -351,6 +558,10 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
           if (!current.ok) return current;
           if (current.held) return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
         }
+        // Hippo reconciles on its side (its documentation says so): it forgets
+        // what `refuted` names and replaces a notebook, so the observation goes
+        // as it is. An engine that only adds needs the adapter to list and
+        // delete by id first ("Forget what `refuted` names", above).
         const url = new URL(`/v1/projects/${ctx.connection.projectId}/memories`, ctx.connection.baseUrl);
         const response = await ctx.http.fetch(url, {
           method: "POST",
@@ -358,7 +569,8 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
           body: JSON.stringify({
             subject: request.subject.key,
             scope: scopeName(request.scope),
-            run: request.runId,
+            // Provenance only: stored beside the memory, never a partition.
+            metadata: { runId: request.runId, ticketKey: request.ticketKey },
             observation,
           }),
         });
@@ -380,22 +592,13 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
 
 Hippo is invented; its paths and status codes are placeholders for the ones
 your engine's documentation gives you. What is not a placeholder is the
-shape: every path out of both methods is an answer.
+shape: every path out of both methods is an answer. Its test is under "Your
+own tests".
 
-Two facts about how core calls a memory adapter, because they decide how you
-write one. Core resolves the provider once per step and may make many calls
-through it (reading memory into one prompt is up to `1 + 2N` recalls). Each
-request is bounded by its own attempt timeout, and all of them together by a
-budget of 60 seconds of time spent waiting on your provider in that step
-(`MEMORY_CALL_BUDGET_MS` in `apps/worker/src/engine/support/memory-runtime.ts`).
-Time the step spends elsewhere, on a model call between a read and a write,
-is not charged. When the budget runs out core aborts `ctx.signal`, the call
-in flight and every later one in that step answer `unavailable` at once, and
-your adapter must turn an aborted request into `unavailable` too, never a
-throw. And a run is not
-yet held to the memory provider it started with: the comparison exists and no
-call site passes it a pin, so a run in flight when an admin connects you may
-read from the built-in store and write to you.
+A run is not yet held to the memory provider it started with: the comparison
+exists and no call site passes it a pin (`memory-runtime.ts`), so a run in
+flight when an admin connects you may read from the built-in store and write
+to you. That is why the proof below starts with a drain.
 
 ## One connection
 
@@ -408,7 +611,7 @@ import { defineIntegration } from "@integrations/sdk";
 export const manifest = defineIntegration({
   id: "hippo",
   name: "Hippo",
-  description: "Keeps what each run learned in Hippo, and gives it back to the next run.",
+  description: "Keeps what each run learned in Hippo instead of the built-in memory, which stays as it was: nothing is copied either way.",
   docsUrl: "https://hippo.example/docs",
   connection: {
     fields: [
@@ -425,7 +628,7 @@ export const manifest = defineIntegration({
       {
         key: "projectId",
         label: "Project",
-        description: "The Hippo project this deployment writes into. It names the account.",
+        description: "The Hippo project this deployment writes into. The connection test checks that the key reaches it.",
         env: "HIPPO_PROJECT_ID",
         secret: false,
       },
@@ -488,6 +691,15 @@ What each field property does, and what it costs to get wrong:
   workspace it is. It has a cost: rotating that secret also stops runs in
   flight. Prefer a non-secret field that names the account, as `projectId`
   does above and Jira's site URL does, and leave the token unmarked.
+  Such a field means something only if the connection test checks that the
+  key really reaches it (Hippo's test reads the project with the key). Where
+  the provider decides the account from the key alone and has no call that
+  checks a claimed one, declare no account field: have the test ask the
+  provider which account the key belongs to and name it in its message.
+  Memory has no run pin today (see "What the run pin does to you"), so
+  `identity` changes nothing for a memory integration now; leave it off and
+  keep to a checked non-secret field, because the pin is planned and the
+  connection shape is permanent once shipped.
 - **`optional`** and **`default`**: absent means required. `default` is used
   when the source leaves the field unset; a secret has none.
 - **`format`**: `text`, `multiline` (a PEM key), `url`, or `integer`, which
@@ -521,8 +733,15 @@ their next use.
 **Writes are refused on a deployment that does not own its database.**
 Preview deployments, and the demo deployment, read production's database, so
 a toggle there would change production. Every write on the Connection tab is
-refused there with 403, naming both environments. On such a deployment the
-environment is the only lever: set the variables and redeploy.
+refused there with 403, naming both environments and ending "Use the
+production deployment". For an integration that has shipped, that is where an
+admin connects it. For one that has not merged yet, it is not an instruction:
+no deployment here owns a database of its own, so do not set your variables on
+a preview or on the demo either, and never deploy an unmerged branch there,
+because the worker's build runs its migrations against production's database.
+A Disable or stored values on production reach the demo and every preview
+too, because the rows are shared. How an integration is proven instead is
+under "Proving it works".
 
 ### The connection test
 
@@ -531,22 +750,41 @@ whenever an admin presses Test. It answers one question, and the difference
 between its two failure paths is the difference between a failed button and
 a stopped deployment:
 
-- return `{ ok: false, reason }` **only when the provider said the credential
-  is wrong** (a 401, a 403, an unknown project). Core records the connection
-  as Failing, and every run that needs it stops until somebody fixes it;
-- **throw** for everything else: a timeout, a 5xx, a body that is not your
-  provider's. Core records "could not be reached" and leaves a working
+- return `{ ok: false, reason }` **only for a verdict about the values**: a
+  status the provider documents as a credential or configuration problem (401
+  and 403 are the usual ones; 404 for a project the key cannot see). Core
+  records the connection as Failing, and every run that needs it stops until
+  somebody fixes it;
+- **throw** for everything else: a timeout, a 429, a 5xx, a body that is not
+  your provider's. Core records "could not be reached" and leaves a working
   connection as it was.
 
-Arthur's (`integrations/arthur/worker.ts`) throws for a 5xx and refuses a 401
-or a 403, but it also refuses every other 4xx, a 429 included, which is a
-provider asking you to wait. This one draws the line where it belongs:
+You do not draw that line yourself: `refusedOrThrow(responseOrError, reason)`
+from the SDK returns the refusal for a failure that is one and throws for
+every other, by one rule for every integration
+(`integrations/sdk/provider-failure.ts`: a 4xx refuses except 408, 425, 429
+and a 403 that carries rate-limit headers). Where your provider documents a
+status differently, a bare 403 that means a quota for instance, read that
+status yourself first and hand the rest to `refusedOrThrow`.
+
+**A pass names what the values reached.** Return `{ ok: true, message }` with
+the account, workspace or project the key reached, as the provider names it.
+The admin reads it before any run uses the values, and it is the only place a
+valid key for the wrong project shows. When the provider cannot tell, say so
+in the message.
 
 ```ts file=worker.ts
-import { defineIntegrationRuntime, type IntegrationRuntimeDefinition } from "@integrations/sdk";
+import {
+  defineIntegrationRuntime,
+  refusedOrThrow,
+  z,
+  type IntegrationRuntimeDefinition,
+} from "@integrations/sdk";
 import { manifest } from "./manifest";
 import { hippoMemory } from "./memory";
 import { webhook } from "./webhook";
+
+const projectAnswer = z.object({ name: z.string() });
 
 const definition: IntegrationRuntimeDefinition<typeof manifest> = {
   testConnection: async (ctx) => {
@@ -554,16 +792,20 @@ const definition: IntegrationRuntimeDefinition<typeof manifest> = {
       new URL(`/v1/projects/${ctx.connection.projectId}`, ctx.connection.baseUrl),
       { headers: { authorization: `Bearer ${ctx.connection.apiKey}` }, retries: 0 },
     );
-    if (response.ok) return { ok: true };
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, reason: "Hippo refused the API key for this project." };
+    if (!response.ok) {
+      // Hippo answers 401 and 403 for a key it refuses and 404 for a project
+      // this key cannot see; a 429, a 5xx or a timeout says nothing about
+      // either, and throws, which leaves a working connection as it was.
+      return refusedOrThrow(
+        response,
+        `Hippo refused this API key for project ${ctx.connection.projectId} (${response.status}).`,
+      );
     }
-    if (response.status === 404) {
-      return { ok: false, reason: `Hippo has no project ${ctx.connection.projectId} for this key.` };
+    const project = projectAnswer.safeParse(await response.json().catch(() => null));
+    if (!project.success) {
+      throw new Error(`${ctx.connection.baseUrl} did not answer the way the Hippo API does.`);
     }
-    // Nothing here is about the credential. A throw leaves a working
-    // connection as it was; a refusal would stop every run that uses it.
-    throw new Error(`Hippo answered ${response.status}.`);
+    return { ok: true, message: `Connected to the Hippo project ${project.data.name}.` };
   },
   capabilities: {
     memory: hippoMemory,
@@ -600,8 +842,11 @@ widens to `string`.
   timeout; a read (GET, HEAD, OPTIONS) is retried twice after a network error,
   a 429 or a 5xx, honouring `Retry-After` up to 30 seconds; nothing else is
   retried unless you pass `retries`, because repeating a write after an
-  ambiguous 5xx reports a conflict for work that landed. A non-2xx response is
-  returned, not thrown. It is bound to `ctx.signal`, and a `signal` you pass
+  ambiguous 5xx reports a conflict for work that landed. The three numbers are
+  `timeoutMs`, `retries` and `maxRetryAfterMs` in `INTEGRATION_HTTP_DEFAULTS`
+  (`integrations/sdk/context.ts`). Core sees only the method, so a read your
+  provider spells as a POST (a search, a filtered listing) is sent once unless
+  you pass `retries`, and it may. A non-2xx response is returned, not thrown. It is bound to `ctx.signal`, and a `signal` you pass
   in its options is honoured alongside it, across retries and the waits
   between them. A thrown error keeps its `name` (`TimeoutError`,
   `AbortError`) and has this connection's secrets taken out of its message.
@@ -610,9 +855,14 @@ widens to `string`.
   are redacted.
 - **`ctx.signal`**: the context's lifetime, set by whatever core is doing
   when it calls you. It is not tied to a run being cancelled. Work with a
-  deadline of its own gets that deadline: a block has 240 seconds, a
-  connection test 20, a page reader 20, a webhook request 120, `beginRun` 60,
-  a health probe about 4. A capability adapter core holds for a stretch of
+  deadline of its own gets that deadline: a block has 240 seconds
+  (`INTEGRATION_BLOCK_TIMEOUT_MS`, `apps/worker/src/engine/steps/integration-block-step.ts`),
+  a connection test 20 (`TEST_TIMEOUT_MS`, `services/integrations/authoring.ts`),
+  a page reader 20 (`PAGE_READ_TIMEOUT_MS`, `services/integrations/page-data.ts`),
+  a webhook request 120 (`WEBHOOK_TIMEOUT_MS`, `routes/webhooks/[id].post.ts`),
+  `beginRun` 60 (`RUN_STATE_TIMEOUT_MS`, `engine/steps/integration-run-state-step.ts`),
+  a health probe 4 (`PROBE_TIMEOUT_MS`, `services/system/collect.ts`); the
+  last five are under `apps/worker/src`. A capability adapter core holds for a stretch of
   work (a poll pass, a run's downloads) gets a lifetime that does not abort on
   its own, so each of your requests is bounded by its attempt timeout
   instead; memory is the exception, aborted once your provider has used up
@@ -621,6 +871,17 @@ widens to `string`.
 - **`ctx.webhookUrl`**: where this deployment receives your deliveries, for a
   health check that compares it with what the provider holds. Absent when
   the deployment does not know its public URL.
+
+**A provider SDK gets the context, or is not used.** Add it to your package's
+`dependencies` (`pnpm --filter @integrations/<id> add <package>`) and hand it
+`ctx.http.fetch` and `ctx.signal`: redaction, the attempt timeout, read
+retries and the memory budget hold only for requests that go through them.
+Read how the SDK behaves before you add it. Many fall back to `process.env`
+for a key their constructor was not given, send telemetry unless an
+environment variable says otherwise, and carry a timeout of their own: switch
+each of those off in code, because a fallback to `process.env` bypasses the
+connection an admin chose. Where an SDK cannot be given a fetch, a signal or
+a telemetry switch, call the provider through `ctx.http` instead.
 
 Most of GitHub's and GitLab's calls go through their own provider SDKs
 (Octokit, gitbeaker) rather than `ctx.http`, so none of the above applies to
@@ -666,8 +927,8 @@ provider still points here. Declare at least one in `manifest.health` and
 give each a probe of the same id under `health` in `worker.ts`.
 
 - Core adds a `connection` row to your section and runs your probes only
-  while the integration is usable, each bounded at about four seconds, in
-  parallel. Ask once; do not retry inside a probe.
+  while the integration is usable, each bounded at four seconds
+  (`PROBE_TIMEOUT_MS`), in parallel. Ask once; do not retry inside a probe.
 - A probe returns `live`, `degraded` or `down` with a message. A throw is a
   `down` row carrying your error's message, redacted and cut to 300
   characters. Anything else, including nothing, is `down` as well: a health
@@ -743,7 +1004,7 @@ What core does around it, and what that asks of you:
   yours, through `ctx.http`. `FatalError` from the SDK changes nothing inside
   a block; it matters in a capability adapter, which core calls from its own
   steps, where any other error may be retried.
-- **One block is one step, bounded at 240 seconds.** Waiting for a person,
+- **One block is one step, bounded at 240 seconds** (`INTEGRATION_BLOCK_TIMEOUT_MS`). Waiting for a person,
   looping and sleeping belong to core and are reached through a capability.
   A block that hangs is stopped and says so.
 - **`ctx.run`** carries `runId`, `nodeId`, `attempt` (higher when the graph
@@ -776,6 +1037,14 @@ decision: what a ticket moving or a pull request event means for a run.
 | `trigger_events` | Pull request events, normalized | GitHub, GitLab |
 | `ticket_events` | Ticket events, normalized, or `ignored` with a reason | Jira |
 | `refused` | Bad or stale signature (401), missing configuration (503) | All of them |
+
+Declare a webhook only when your provider calls you back about something core
+acts on: a memory integration normally has none, and Hippo's below exists to
+show the shape. A webhook also cannot start a workflow from events of the
+provider's own kind (an incident, a support request): the five answers below
+are everything core acts on. Point such a provider at core's generic trigger
+instead (`trigger_webhook`, which gives each deployed workflow its own
+`POST /webhooks/custom/<endpointId>`; SETUP.md, "Webhook trigger").
 
 Your `reason` on a refusal goes back to the sender as the status message
 (`apps/worker/src/routes/webhooks/[id].post.ts`), so keep it to what you would
@@ -892,7 +1161,10 @@ page is a real one.
 - **Import the manifest with `import type`** in `dashboard.tsx`, so its zod
   schemas never reach the browser, and declare the pages with
   `defineIntegrationDashboard<typeof manifest>({ pages })`: a declared page
-  without a component, or a component nobody declared, is a compile error.
+  without a component, a component nobody declared, and any component at all
+  for a manifest that declares no page are compile errors
+  (`integrations/host-ui/contract.test.ts`). A manifest with no page has no
+  `dashboard.tsx`; the generator refuses one.
 
 ## MCP
 
@@ -980,6 +1252,102 @@ test("says the deployment was never given a secret, rather than that the sender 
 });
 ```
 
+A memory adapter is tested the same way: a context whose `http.fetch` answers
+from the provider's recorded bodies, and one case for each rule a run depends
+on (what it renders, what an unreadable answer is, that it answers rather than
+throws, that a seed never edits what a run wrote):
+
+```ts file=memory.test.ts
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { IntegrationContext, MemoryObserveRequest } from "@integrations/sdk";
+import type { manifest } from "./manifest";
+import { hippoMemory } from "./memory";
+
+/**
+ * Hippo's answer to a search, as its documentation shows it. A real package
+ * keeps this in `test-fixtures/` with its `.source.txt` beside it (see
+ * "Recorded payloads"); it is inline here because Hippo is invented.
+ */
+const SEARCH_ANSWER = { memories: [{ text: "Run tests with: pnpm test" }, { text: "Uses pnpm 9" }] };
+const SUBJECT = { key: "repo:github:acme/api", label: "acme/api" };
+const LEARNED: MemoryObserveRequest = {
+  subject: SUBJECT,
+  scope: { kind: "facts" },
+  runId: "run_1",
+  ticketKey: null,
+  observation: { kind: "items", learned: ["Uses pnpm 9"], refuted: [] },
+};
+
+/** Hippo, as `respond` answers each request; every request is kept. */
+function hippo(respond: (request: Request) => Promise<Response>) {
+  const requests: Request[] = [];
+  const ctx: IntegrationContext<typeof manifest> = {
+    connection: {
+      baseUrl: "https://api.hippo.example",
+      projectId: "p_1",
+      apiKey: "not-a-real-key",
+      webhookSecret: undefined,
+    },
+    http: {
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        return respond(request);
+      },
+    },
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+    signal: new AbortController().signal,
+  };
+  return { memory: hippoMemory(ctx), requests };
+}
+
+test("renders what Hippo holds, leaving out what the caller already has", async () => {
+  const { memory } = hippo(async () => Response.json(SEARCH_ANSWER));
+
+  const answer = await memory.recall({ subject: SUBJECT, scope: { kind: "facts" }, exclude: ["Uses pnpm 9"] });
+
+  assert.deepEqual(answer, {
+    ok: true,
+    held: true,
+    entries: [{ text: "Run tests with: pnpm test" }],
+    rendering: "- Run tests with: pnpm test",
+  });
+});
+
+test("reads an answer it cannot parse as unavailable, never as holding nothing", async () => {
+  const { memory } = hippo(async () => new Response("<html>Bad gateway</html>", { status: 200 }));
+
+  const answer = await memory.recall({ subject: SUBJECT, scope: { kind: "facts" } });
+
+  assert.equal(answer.ok === false && answer.code, "unavailable");
+});
+
+test("answers rather than throws when the request is aborted", async () => {
+  const { memory } = hippo(async () => {
+    throw new DOMException("This operation was aborted", "AbortError");
+  });
+
+  const read = await memory.recall({ subject: SUBJECT, scope: { kind: "facts" } });
+  const write = await memory.observe(LEARNED);
+
+  assert.equal(read.ok === false && read.code, "unavailable");
+  assert.equal(write.ok === false && write.code, "unavailable");
+});
+
+test("a seed writes nothing where something is already held", async () => {
+  const { memory, requests } = hippo(async () => Response.json(SEARCH_ANSWER));
+
+  const write = await memory.observe({
+    ...LEARNED,
+    observation: { kind: "items", learned: ["Uses pnpm 9"], refuted: [], derived: true, onlyIfEmpty: true },
+  });
+
+  assert.deepEqual(write, { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 });
+  assert.deepEqual(requests.map((request) => request.method), ["GET"]);
+});
+```
+
 The scaffold ships the runner and a first test (`worker.test.ts`): a `test`
 script, `node --import tsx --test "!(node_modules)/**/*.test.{ts,tsx}" "*.test.{ts,tsx}"`,
 and `test:zod4`, the same files under the zod production loads through
@@ -1025,24 +1393,76 @@ block parameter schemas under both; the schemas in your worker code that read
 a provider's answers are checked only by your own `test:zod4`. Always write
 `z` from `@integrations/sdk`, never your own `zod` dependency.
 
-### On a deployment
+### Proving it works
 
-Prove a connection on a deployment you are allowed to change, never against
-production and never with production's credentials. Do not start a worker
-locally to do it: on our machines `DATABASE_URL` points at production, and the
-worker's build runs migrations against whatever it points at. On a preview
-or on the demo deployment, writes on the Connection tab are refused (see
-"Where the values come from"), so set your provider's variables on that
-deployment and redeploy. The integration then reads Connected (environment),
-its card and pages appear, the health page runs your probes, and a workflow
-can use your blocks. Removing the variables and redeploying is how you
-disconnect it there. `integrations/_fixtures/demo` is a provider with no
-network at all, registered only in a registry a developer generates locally
-with `INTEGRATION_FIXTURES=1 pnpm run gen:integrations`. No deployment and no
-CI job sets that flag, the committed registry is the one generated without it,
-and `gen:integrations --check` compares against that whatever the flag says;
-tests that need the fixture ask the generator for it directly. Copy its
-approach for a network-free double of your own.
+No deployment here is yours to try an integration on before it merges.
+Previews and the demo deployment read production's database, and the
+worker's build runs its migrations against whatever database it is given, so
+deploying an unmerged branch to either changes production without the review
+a merge gets. For the same reason, do not start a worker locally: on our
+machines `DATABASE_URL` points at production. So the proof comes in two
+halves:
+
+1. **Before the merge, locally**: your package's tests against recorded
+   payloads, conformance, the typecheck, and for a question the documentation
+   leaves open, a live call from your own machine to the provider with a test
+   account's key (see "Before you write a line"). `integrations/_fixtures/demo`
+   is a provider with no network at all, registered only in a registry a
+   developer generates locally with `INTEGRATION_FIXTURES=1 pnpm run
+   gen:integrations`. No deployment and no CI job sets that flag, the
+   committed registry is the one generated without it, and
+   `gen:integrations --check` compares against that whatever the flag says;
+   tests that need the fixture ask the generator for it directly. Copy its
+   approach for a network-free double of your own.
+2. **After the merge, on production**, by an operator, through the Connection
+   form with stored values, which need no redeploy: Save runs your connection
+   test, its message names the account, and the
+   integration reads Connected; its card, pages and health rows appear, and a
+   workflow can use its blocks. Disable, from the same form, is how it is
+   switched off again.
+
+For a memory integration, the operator's half is this:
+
+1. **Drain first.** No run is running or waiting (the Runs page, or
+   `runs.stats` over MCP): a run in flight when you connect may read from the
+   built-in store and write to yours.
+2. **Connect** through the form, and check that Test names the project meant.
+3. **Turn on repository memory** on the Settings page if it is off, and run a
+   ticket through a workflow with one agent block on one repository.
+4. **In the worker's logs for that run**, by its id:
+   `memory_document_persisted` at teardown, `repo_memory_seeded`,
+   `repo_memory_injected` and `repo_memory_distilled` with an `outcome` other
+   than `memory_unavailable`, and no `memory_provider_unavailable`, whose
+   `provider` field would name who refused.
+5. **In the engine's own console**: memories under the ticket's subject key and
+   under `repo:<provider>:<path>`, carrying your namespace. The memory screen
+   (`/memory`) lists the same documents by your `docPath`s.
+6. **Run the same ticket again**: the notebook the first run wrote is back in
+   the agent's workspace (`memory_document_hydrated_from_store`), and the seed
+   adds nothing.
+7. **Disable the integration**: the next run uses the built-in store, and the
+   memory screen shows the built-in documents as they were before step 2.
+
+## What an integration cannot do
+
+Some things look possible from the context and are not, and each has a pattern
+that works:
+
+- **No install flow, and nothing written back.** There is no OAuth install or
+  callback route, and an integration has no database: it reads its connection
+  values and writes none. A refresh token that the provider rotates on every
+  use therefore breaks at the second refresh (`invalid_grant`), although the
+  card said Connected. Use a long-lived token, or a credential that mints
+  short-lived tokens on demand without storing anything, as GitHub's App
+  private key does (`integrations/github/auth.ts`).
+- **No workflow started by a provider's own events.** `webhook.receive` answers
+  one of five things, and none of them starts a workflow from an incident, an
+  alert or a support request. Core's generic trigger does (`trigger_webhook`,
+  SETUP.md "Webhook trigger"): point the provider there.
+- **No MCP tools, and no memory of its own.** Integrations contribute no MCP
+  tools (see "MCP"). A block cannot read or write memory either: `memory` has
+  no key on the context, because which subject a run may write to is core's
+  decision.
 
 ## Things you may not do, and what happens if you do
 
@@ -1063,6 +1483,11 @@ approach for a network-free double of your own.
 | Import another integration, `@shared/*` or anything in `apps/` | The boundaries gate and conformance refuse it. The SDK re-exports what you need from `@shared/contracts`. |
 | Return a secret from a page reader, or put one in a message | A reader's value reaches the browser. Messages and logs are redacted against your declared secrets, values are not. |
 | Leave a fetch in a page or a probe unbounded | A page is what the cockpit waits on, and a probe that hangs is cut off as down. |
+| Deploy an unmerged branch to the demo or a preview, or set your variables there | Its build runs your branch's migrations against production's database, and a connection there is production's connection. You find out when production changes. |
+| Answer `held: false` for a memory answer you could not read | The seed writes into a store that is already full, and a run takes an old committed file for the ticket's notebook. Nothing fails; memory is quietly wrong. |
+| Resend a memory write that may have landed | An engine without idempotency keys stores it twice. Core never resends; answer `unavailable` instead. |
+| Hand a subject key or a notebook name to an engine call that reads it as a pattern, or leave your namespace off a read or a delete | A key containing `*` deletes every subject; another application's memories reach a prompt, the memory screen and an erasure. |
+| Let a provider SDK read `process.env`, keep its own timeout or send telemetry | It bypasses the connection an admin chose, the redaction and the memory budget, silently. |
 
 ## Before you open a pull request
 
@@ -1078,9 +1503,17 @@ pnpm run verify:changed -- --worktree
 
 - The package's README says what it connects, which values an admin needs and
   where to find them, what connecting unlocks, and which provider pages you
-  read and when.
+  read and when. A memory integration's README also says: that connecting
+  copies nothing and disconnecting deletes nothing; that deployments sharing
+  its connection share memory, and one engine project per connection keeps
+  them apart; which namespace it writes; whether items go through the
+  engine's own extraction, and why; and, when it has no `store`, that the
+  memory screen cannot list or erase what it holds.
 - `changelog/unreleased/<slug>.md` carries one bullet saying what a person can
-  do now (`changelog/README.md` has the tone rule).
+  do now and where (a page, a block, an MCP tool). Never a defect, an
+  incident, a ticket key, a commit, a pull request number or a person, and
+  never the words fix, bug, broken or finally; `changelog/README.md` has the
+  whole rule and its examples.
 - The pull request says which provider documentation the adapter was written
   against, and, for a change to an integration that has shipped, which
   connection shapes and block types moved.

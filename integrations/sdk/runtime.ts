@@ -219,6 +219,14 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  *
  * Either way, values being saved do not become active: only a pass does that.
  *
+ * `message` on a pass NAMES WHAT THE VALUES REACHED when the provider can
+ * tell: the account, workspace, site or project (`Connected to acme-prod in
+ * Acme`). The admin reads it before any run uses the values, and it is the
+ * only place they notice a valid key for the wrong project, which no refusal
+ * will ever report. When the key alone decides the account, ask the provider
+ * which one it is (a whoami or ping call) rather than echoing a field back.
+ * When the provider cannot tell, say that instead of saying nothing.
+ *
  * Core redacts the connection's secrets from `reason`, `message` and a thrown
  * message before anyone sees them.
  */
