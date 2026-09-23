@@ -3613,6 +3613,70 @@ describe("loadRepoMemorySourcesStep", () => {
     );
   });
 
+  it("leaves out a small document behind a cut, even when the cut left room for it", async () => {
+    // A cut spends the kind. Lines of 1.5 KiB make the line-end cut keep about
+    // 1.2 KiB of the facts budget unused, far more than the small document
+    // behind it needs; injecting that one anyway would let a later document
+    // jump the queue the manifest ordered.
+    const long = `# facts\n${Array.from(
+      { length: 20 },
+      (_, index) => `- ${String.fromCharCode(97 + index).repeat(1500)}\n`,
+    ).join("")}`;
+    await storeDocument(REPO_SUBJECT_KEY, "facts", long);
+    await storeDocument(
+      repoSubjectKey("github", OTHER_REPO_PATH),
+      "facts",
+      "# facts\n- Built with vite\n",
+    );
+
+    const sources = await loadSources({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+
+    expect(sources.map((source) => source.repository)).toEqual([REPO_PATH]);
+    const cut = sources[0]?.content ?? "";
+    expect(cut.endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    // The premise: the cut really did leave room the small document fits in.
+    expect(MEMORY_PROMPT_BUDGET_BYTES.facts - Buffer.byteLength(cut, "utf8")).toBeGreaterThan(1024);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 1,
+        repositories: [`github:${OTHER_REPO_PATH}`],
+        truncated: [`github:${REPO_PATH}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("names a repository whose own copy of an entry was cut off the org document", async () => {
+    // An entry cut off the org document never reached the prompt, so it must
+    // not count as already there for the repository that holds its own copy.
+    // Counted as there, the repository document would look fully shadowed and
+    // vanish from the warning; the budget the cut spent leaves it out either
+    // way, and the warning is where a person learns that.
+    const entries = Array.from({ length: 200 }, (_, index) =>
+      `org entry ${index} `.padEnd(150, "w"),
+    );
+    await storeOrgFacts("github", OWNER, entries);
+    await storeRepoDocument("facts", [entries[199]!]);
+
+    const sources = await loadSources({ repositories });
+
+    expect(sources.map((source) => source.scope ?? "repository")).toEqual(["org"]);
+    expect(sources[0]?.content).not.toContain(entries[199]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 1,
+        repositories: [`github:${REPO_PATH}`],
+        truncated: [`org:github:${OWNER}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
   it("names a cut org document by its scope in the warning", async () => {
     const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
     await storeDocument(orgSubjectKey("github", OWNER), "facts", big);

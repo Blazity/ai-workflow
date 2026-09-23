@@ -1893,7 +1893,9 @@ export async function loadRepoMemorySourcesStep(
       for (const item of items) {
         if (repoMemoryComparisonKey(item.text).length === 0) continue;
         // An entry cut off the end never reached the prompt, so it must not
-        // keep a repository's own copy of it out either.
+        // count as already there: a repository holding its own copy would look
+        // fully shadowed and vanish from the budget warning, when what really
+        // happened is that the cut spent the budget it needed.
         if (injected !== rendering && !injected.includes(item.text)) continue;
         texts.push(item.text);
       }
