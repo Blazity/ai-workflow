@@ -99,18 +99,20 @@ function runCompletionPending(run: RunDetail): boolean {
 async function loadSanitizedRun(
   services: McpToolDependencies["services"],
   runId: string,
+  /** The set this call resolved (executeMcpRead hands it to the operation). */
+  secrets: readonly string[],
 ): Promise<{ run: RunDetail; steps: RunStep[]; failureCode: RunFailureCode | null }> {
   // No model fallback passed any more: AIW-253 made the run's model attribution
   // come from the live harness manifest instead of an env-derived guess, and
   // fetchRunDetailFromDb dropped the option. Passing one here would have been
   // silently ignored at runtime while claiming to influence the answer.
-  const loaded = await services.fetchRunDetail(runId, await issueTrackerBaseUrl());
+  const loaded = await services.fetchRunDetail(runId, await issueTrackerBaseUrl(), secrets);
   if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
   // The code is not sanitized with the prose because it is not prose: it is a
   // member of a closed set this build owns, so there is nothing in it to redact
   // and nothing an untrusted ticket could have written into it.
   return {
-    ...sanitizeRunDetailForResponse({ run: loaded.run, steps: loaded.steps }),
+    ...sanitizeRunDetailForResponse({ run: loaded.run, steps: loaded.steps, secrets }),
     failureCode: loaded.failureCode,
   };
 }
@@ -467,8 +469,8 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         deps,
         toolName: "runs.get",
         targetRefs: [input.runId],
-        operation: async () => {
-          const { run } = await loadSanitizedRun(deps.services, input.runId);
+        operation: async (_signal, secrets) => {
+          const { run } = await loadSanitizedRun(deps.services, input.runId, secrets);
           const summary = toRunSummary(run);
           return {
             ...summary,
@@ -492,13 +494,13 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         deps,
         toolName: "runs.trace",
         targetRefs: [input.runId],
-        operation: async () => {
+        operation: async (_signal, secrets) => {
           // Resolved first, and only for its existence and status: without this
           // a typo in runId answered with a successful "not_captured" page,
           // while runs.get, runs.result and runs.diagnose all answer NOT_FOUND
           // for the same id, so a caller was told the run exists but has no
           // trace. getRunReplay cannot tell those apart on its own.
-          const { run } = await loadSanitizedRun(deps.services, input.runId);
+          const { run } = await loadSanitizedRun(deps.services, input.runId, secrets);
           let replay;
           try {
             replay = await deps.services.getRunReplay({
@@ -566,8 +568,8 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         deps,
         toolName: "runs.result",
         targetRefs: [input.runId],
-        operation: async () => {
-          const { run, failureCode } = await loadSanitizedRun(deps.services, input.runId);
+        operation: async (_signal, secrets) => {
+          const { run, failureCode } = await loadSanitizedRun(deps.services, input.runId, secrets);
           const terminal = isTerminalRunStatus(run.status);
           const completionPending = runCompletionPending(run);
           // "awaiting" is terminal for polling, which contracts.ts freezes so an
@@ -641,10 +643,11 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         deps,
         toolName: "runs.diagnose",
         targetRefs: [input.runId],
-        operation: async () => {
+        operation: async (_signal, secrets) => {
           const { run, steps, failureCode } = await loadSanitizedRun(
             deps.services,
             input.runId,
+            secrets,
           );
           const diagnoseInput: DiagnoseRunInput = {
             status: run.status,
@@ -703,7 +706,7 @@ export function registerRunLogsTool(server: McpServer, deps: McpToolDependencies
         deps,
         toolName: "runs.logs",
         targetRefs: [input.runId],
-        operation: async () => {
+        operation: async (_signal, secrets) => {
           // fetchRunDetailFromDb, NOT loadSanitizedRun: this tool's whole purpose
           // is the un-clamped record, and fetchRunDetailFromDb builds run.error /
           // statusReason verbatim from the durable row (the clamp lives only in
@@ -712,6 +715,7 @@ export function registerRunLogsTool(server: McpServer, deps: McpToolDependencies
           const loaded = await deps.services.fetchRunDetail(
             input.runId,
             await issueTrackerBaseUrl(),
+            secrets,
           );
           if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
           return input.attemptId === undefined

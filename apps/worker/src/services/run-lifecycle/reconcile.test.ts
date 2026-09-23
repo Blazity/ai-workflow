@@ -9,6 +9,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
+import type { ConnectedIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
 import { defaultSettingsSnapshot } from "@shared/contracts";
 
 const reviewSettings = {
@@ -157,6 +158,17 @@ function registry(
   };
 }
 
+/** The tracker resolution a poll tick hands the reconciler, around a double. */
+function connected(adapter: IssueTrackerAdapter, wiring: Partial<ConnectedIssueTracker["wiring"]> = {}): ConnectedIssueTracker {
+  return {
+    ok: true,
+    id: "jira",
+    name: "Jira",
+    adapter,
+    wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example", ...wiring },
+  };
+}
+
 function issueTracker(
   status = "AI",
   identifier = "PROJ-1",
@@ -278,6 +290,112 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).not.toHaveBeenCalled();
   });
 
+  // No board: no tracker connected, its settings unreadable, or the column read
+  // failed. The poller used to skip this whole function then, so no claim of
+  // any kind was released on such a deployment. Now it runs, and the one thing
+  // it cannot decide without a board is anything about a ticket's column.
+  describe("without a board", () => {
+    const failedLongAgo: FailedTicketMeta = {
+      runId: "run-failed",
+      error: "boom",
+      failedAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+    };
+
+    it("retains a ticket claim the orphan path would cancel with one", async () => {
+      const onCancelled = vi.fn();
+      const { reconcileRuns } = await import("./reconcile.js");
+      mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+
+      // The control: with a board that no longer lists the ticket, it goes.
+      const withBoard = registry([entry()]);
+      expect(
+        await reconcileRuns(new Set(), withBoard, connected(issueTracker("Done")), onCancelled),
+      ).toEqual({ cancelled: 1, cleaned: 0 });
+
+      mockCancelRunDetailed.mockClear();
+      onCancelled.mockClear();
+      const withoutBoard = registry([entry(), entry({ kind: "manual_ticket", subjectKey: "ticket:jira:PROJ-2", ticketKey: "PROJ-2" })]);
+      expect(
+        await reconcileRuns(null, withoutBoard, connected(issueTracker("Done")), onCancelled),
+      ).toEqual({ cancelled: 0, cleaned: 0 });
+      expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+      expect(withoutBoard.release).not.toHaveBeenCalled();
+      expect(onCancelled).not.toHaveBeenCalled();
+    });
+
+    it("retains ticket claims when the tick hands it no tracker, whatever the column says", async () => {
+      const runRegistry = registry([entry()]);
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      expect(await reconcileRuns(new Set(), runRegistry)).toEqual({ cancelled: 0, cleaned: 0 });
+      expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+    });
+
+    it("works from the tick's one tracker resolution and never resolves another", async () => {
+      // A tracker switched or reconnected between two reads would pair one
+      // tracker's adapter with another's board: the subject key below is only
+      // this pass's if the board's tracker id is the one the tick handed in.
+      const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+      vi.mocked(runtime.resolveActiveIssueTracker).mockClear();
+      vi.mocked(runtime.issueTrackerWiring).mockClear();
+      const onCancelled = vi.fn();
+      const runRegistry = registry([entry({ subjectKey: "ticket:linear:PROJ-1" })]);
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      const linear = { ...connected(issueTracker("Done")), id: "linear", name: "Linear" };
+      expect(await reconcileRuns(new Set(), runRegistry, linear, onCancelled)).toEqual({
+        cancelled: 1,
+        cleaned: 0,
+      });
+      expect(runtime.resolveActiveIssueTracker).not.toHaveBeenCalled();
+      expect(runtime.issueTrackerWiring).not.toHaveBeenCalled();
+    });
+
+    it("still releases a stale reservation and a finished pull request run", async () => {
+      const reserved = entry({
+        state: "reserved",
+        runId: null,
+        updatedAt: Date.now() - 10 * 60_000,
+      });
+      const pr = entry({
+        subjectKey: "pr:github:acme/app#7",
+        ticketKey: null,
+        kind: "pr_trigger",
+        ownerToken: "owner-pr",
+        runId: "run-pr",
+      });
+      const runRegistry = registry([reserved, pr]);
+      mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+      const onReleased = vi.fn().mockResolvedValue(undefined);
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      expect(
+        await reconcileRuns(null, runRegistry, undefined, undefined, onReleased),
+      ).toEqual({ cancelled: 0, cleaned: 2 });
+      expect(runRegistry.releaseReservation).toHaveBeenCalledWith(
+        reserved.subjectKey,
+        reserved.ownerToken,
+      );
+      expect(runRegistry.release).toHaveBeenCalledWith(pr.subjectKey, pr.ownerToken, pr.runId);
+      expect(onReleased).toHaveBeenCalledWith(reserved.subjectKey);
+      expect(onReleased).toHaveBeenCalledWith(pr.subjectKey);
+    });
+
+    it("leaves failed marks alone, which only a board can tell apart", async () => {
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      // The control: with a board that does not list the ticket, its old mark
+      // is cleared.
+      const withBoard = registry([], [{ ticketKey: "PROJ-9", meta: failedLongAgo }]);
+      await reconcileRuns(new Set(), withBoard, connected(issueTracker()));
+      expect(withBoard.clearFailedMark).toHaveBeenCalledWith("PROJ-9");
+
+      const withoutBoard = registry([], [{ ticketKey: "PROJ-9", meta: failedLongAgo }]);
+      await reconcileRuns(null, withoutBoard);
+      expect(withoutBoard.clearFailedMark).not.toHaveBeenCalled();
+    });
+  });
+
   it("owner-releases a terminal synthetic PR run and drains its pending event", async () => {
     const bound = entry({
       subjectKey: "pr:github:acme/app#7",
@@ -372,7 +490,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const tracker = issueTracker();
     const { reconcileRuns } = await import("./reconcile.js");
 
-    expect(await reconcileRuns(new Set(), runRegistry, tracker)).toEqual({
+    expect(await reconcileRuns(new Set(), runRegistry, connected(tracker))).toEqual({
       cancelled: 0,
       cleaned: 0,
     });
@@ -403,7 +521,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         onTicketCancelled,
         onReleased,
       ),
@@ -437,7 +555,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         reconcileRuns(
           new Set(["PROJ-1"]),
           runRegistry,
-          tracker,
+          connected(tracker),
           undefined,
           onReleased,
           undefined,
@@ -473,7 +591,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         onReleased,
         undefined,
@@ -505,7 +623,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     await expect(
-      reconcileRuns(new Set(), runRegistry, tracker),
+      reconcileRuns(new Set(), runRegistry, connected(tracker)),
     ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
     expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(manual, "bound");
     expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
@@ -524,7 +642,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     await expect(
-      reconcileRuns(new Set(), runRegistry, tracker, undefined, undefined, undefined, mockDb),
+      reconcileRuns(new Set(), runRegistry, connected(tracker), undefined, undefined, undefined, mockDb),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
     expect(tracker.moveTicket).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
@@ -546,7 +664,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         undefined,
@@ -566,7 +684,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, connected(tracker)),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
@@ -581,7 +699,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, connected(tracker)),
     ).toEqual({ cancelled: 0, cleaned: 0 });
   });
 
@@ -595,7 +713,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Done"),
+        connected(issueTracker("Done")),
         undefined,
         undefined,
         new Set([parked.subjectKey]),
@@ -620,7 +738,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         onReleased,
         new Set(),
@@ -647,7 +765,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         onReleased,
         new Set(),
@@ -675,7 +793,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         new Set(),
@@ -702,7 +820,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Done"),
+        connected(issueTracker("Done")),
         undefined,
         undefined,
         new Set(),
@@ -730,7 +848,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Backlog"),
+        connected(issueTracker("Backlog")),
         undefined,
         onReleased,
         new Set(),
@@ -765,7 +883,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Backlog"),
+        connected(issueTracker("Backlog")),
         undefined,
         undefined,
         new Set(),
@@ -797,7 +915,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Done"),
+        connected(issueTracker("Done")),
         undefined,
         undefined,
         new Set([parking.subjectKey]),
@@ -835,7 +953,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         onCancelled,
         onReleased,
         new Set([parked.subjectKey]),
@@ -875,7 +993,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         new Set([parked.subjectKey]),
@@ -911,7 +1029,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         onCancelled,
         undefined,
         new Set([parked.subjectKey]),
@@ -957,7 +1075,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const result = reconcileRuns(
       new Set(),
       runRegistry,
-      tracker,
+      connected(tracker),
       undefined,
       undefined,
       new Set(parked.map((item) => item.subjectKey)),
@@ -990,7 +1108,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         new Set([parked.subjectKey]),
@@ -1009,7 +1127,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, tracker),
+      await reconcileRuns(new Set(), runRegistry, connected(tracker)),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
       ticketKey: "PROJ-1",
@@ -1031,7 +1149,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, connected(tracker)),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(warn).toHaveBeenCalledWith(
       { subjectKey: closing.subjectKey, ticketKey: "PROJ-1", runId: "run-1", tornDown: true },
@@ -1052,7 +1170,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         onReleased,
         undefined,
@@ -1078,7 +1196,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockReconcileStalledRun.mockResolvedValueOnce(true);
     const { reconcileRuns } = await import("./reconcile.js");
 
-    await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), undefined, undefined, undefined, mockDb);
+    await reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done")), undefined, undefined, undefined, mockDb);
 
     expect(mockReconcileStalledRun).toHaveBeenCalledWith(
       expect.objectContaining({ moveTarget: "Backlog" }),
@@ -1091,7 +1209,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
     const { reconcileRuns } = await import("./reconcile.js");
 
-    await reconcileRuns(new Set(["PROJ-1"]), runRegistry, issueTracker("AI"));
+    await reconcileRuns(new Set(["PROJ-1"]), runRegistry, connected(issueTracker("AI")));
 
     expect(mockReconcileStalledRun).not.toHaveBeenCalled();
   });
@@ -1108,7 +1226,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         onReleased,
         new Set([closing.subjectKey]),
@@ -1136,7 +1254,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
+      await reconcileRuns(new Set(), runRegistry, connected(tracker), undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
       ticketKey: "PROJ-1",
@@ -1191,7 +1309,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         undefined,
@@ -1253,7 +1371,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         undefined,
@@ -1302,7 +1420,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         undefined,
         undefined,
@@ -1374,7 +1492,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         undefined,
         onReleased,
       ),
@@ -1403,7 +1521,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
+      await reconcileRuns(new Set(), runRegistry, connected(tracker), undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
       ticketKey: "PROJ-1",
@@ -1424,7 +1542,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     await expect(
-      reconcileRuns(new Set(), runRegistry, issueTracker("Done")),
+      reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done"))),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
       ticketKey: "PROJ-1",
@@ -1450,7 +1568,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1479,10 +1597,10 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Weryfikacja", "PROJ-1", {
+        connected(issueTracker("Weryfikacja", "PROJ-1", {
           trackerStatusId: "11418",
           reviewDestination: { id: "11418", name: "Weryfikacja" },
-        }),
+        })),
         undefined,
         undefined,
         undefined,
@@ -1503,7 +1621,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1535,7 +1653,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1566,7 +1684,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1602,7 +1720,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1628,7 +1746,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1656,7 +1774,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1687,7 +1805,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1719,7 +1837,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1769,7 +1887,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1801,7 +1919,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1827,10 +1945,10 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Gotowe", "PROJ-1", {
+        connected(issueTracker("Gotowe", "PROJ-1", {
           trackerStatusId: "10002",
           reviewDestination: { id: "11418", name: "Weryfikacja" },
-        }),
+        })),
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledOnce();
@@ -1851,7 +1969,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Review"),
+        connected(issueTracker("Review")),
         undefined,
         undefined,
         undefined,
@@ -1877,7 +1995,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), onCancelled),
+      await reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done")), onCancelled),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(onCancelled).not.toHaveBeenCalled();
   });
@@ -1890,7 +2008,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), onCancelled),
+      await reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done")), onCancelled),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
   });
@@ -1913,7 +2031,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(["PROJ-1"]),
         runRegistry,
-        tracker,
+        connected(tracker),
         onCancelled,
         undefined,
         new Set([closing.subjectKey]),
@@ -1952,7 +2070,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(
         new Set(),
         runRegistry,
-        issueTracker("Done"),
+        connected(issueTracker("Done")),
         onCancelled,
         onReleased,
       ),

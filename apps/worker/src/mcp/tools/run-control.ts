@@ -6,6 +6,7 @@ import type {
 import type { HookClarificationRow } from "../../services/mcp/tool-services.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
+import { issueTrackerIfConnected, requireIssueTracker } from "../issue-tracker-access.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
@@ -301,6 +302,14 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             );
           }
 
+          // A question asked on a ticket is answered on it (read, moved back to
+          // AI, commented on), so without a usable tracker it is refused here,
+          // before any effect and with the key given back. A question with no
+          // ticket touches no tracker and is answered either way.
+          const issueTracker = row.ticketKey
+            ? requireIssueTracker(deps.adapters).adapter
+            : issueTrackerIfConnected(deps.adapters);
+
           const outcome = await deps.services.answerClarificationAndResume({
             row,
             rawAnswer: input.answer,
@@ -323,7 +332,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
               clientId: deps.actor.clientId,
               userId: deps.actor.userId,
             },
-            issueTracker: deps.adapters.issueTracker,
+            ...(issueTracker ? { issueTracker } : {}),
           });
           if (outcome.kind !== "answered") throwForOutcome(outcome);
 
@@ -363,7 +372,9 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             // person reading why their run stopped sees which client stopped it.
             actorLabel: `MCP ${deps.actor.clientId}`,
             runRegistry: deps.adapters.runRegistry,
-            issueTracker: deps.adapters.issueTracker,
+            // Optional: a cancel stops the run whether or not there is a board,
+            // and moves its ticket back only when there is one to move it on.
+            issueTracker: issueTrackerIfConnected(deps.adapters),
           });
 
           switch (result.outcome) {

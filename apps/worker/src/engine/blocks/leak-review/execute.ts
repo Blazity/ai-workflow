@@ -1,6 +1,6 @@
 import type { JsonValue } from "@shared/contracts";
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
-import { configuredReplaySecrets } from "../../../run-observability/configured-secrets.js";
+import { RetryableError } from "workflow";
 import { redactConfiguredSecretsInText } from "../../../run-observability/sanitizer.js";
 import {
   workspaceRepositoryAccess,
@@ -314,8 +314,12 @@ function describeSecretHits(hits: readonly SecretHit[]): string {
  * cleared every known secret shape, and replay sanitization redacts configured
  * secrets again downstream.
  */
-function sanitizeModelText(value: string, maxChars: number): string {
-  let text = redactConfiguredSecretsInText(value, configuredReplaySecrets());
+function sanitizeModelText(
+  value: string,
+  maxChars: number,
+  secrets: readonly string[],
+): string {
+  let text = redactConfiguredSecretsInText(value, secrets);
   for (const pattern of SECRET_MASK_PATTERNS) {
     text = text.replace(pattern, (match) => maskSecretValue(match));
   }
@@ -324,7 +328,7 @@ function sanitizeModelText(value: string, maxChars: number): string {
   return text.length > maxChars ? text.slice(0, maxChars) : text;
 }
 
-function normalizeLlmFindings(raw: unknown): LeakReviewFinding[] {
+function normalizeLlmFindings(raw: unknown, secrets: readonly string[]): LeakReviewFinding[] {
   if (raw === null || typeof raw !== "object") return [];
   const findings = (raw as { findings?: unknown }).findings;
   if (!Array.isArray(findings)) return [];
@@ -341,24 +345,29 @@ function normalizeLlmFindings(raw: unknown): LeakReviewFinding[] {
         file: sanitizeModelText(
           typeof record.file === "string" ? record.file : "",
           MAX_FILE_CHARS,
+          secrets,
         ),
         excerpt: sanitizeModelText(
           typeof record.excerpt === "string" ? record.excerpt : "",
           MAX_EXCERPT_CHARS,
+          secrets,
         ),
         reason: sanitizeModelText(
           typeof record.reason === "string" ? record.reason : "",
           MAX_REASON_CHARS,
+          secrets,
         ),
       },
     ];
   });
 }
 
-function normalizeLlmSummary(raw: unknown): string {
+function normalizeLlmSummary(raw: unknown, secrets: readonly string[]): string {
   if (raw === null || typeof raw !== "object") return "";
   const summary = (raw as { summary?: unknown }).summary;
-  return typeof summary === "string" ? sanitizeModelText(summary, MAX_SUMMARY_CHARS) : "";
+  return typeof summary === "string"
+    ? sanitizeModelText(summary, MAX_SUMMARY_CHARS, secrets)
+    : "";
 }
 
 async function readGitOutput(
@@ -383,6 +392,11 @@ async function readGitOutput(
  * the tail of a huge diff, or in a repository the cap already excluded from the
  * LLM material, still fails the run.
  */
+/** The sentence the collect step retries with, and the block recognises once
+ *  the retries are spent (the runtime prefixes it with the step's own). */
+const LEAK_REVIEW_SETTINGS_UNREADABLE =
+  "Leak review could not run: this deployment's integration settings could not be read, so the secrets to scan for are not known.";
+
 async function blockLeakReviewCollectStep(input: {
   sandboxId: string;
   repositories: LeakReviewRepository[];
@@ -396,7 +410,25 @@ async function blockLeakReviewCollectStep(input: {
     ...getSandboxCredentials(),
   });
 
-  const secrets = scannableConfiguredSecrets(configuredReplaySecrets());
+  // Every secret the deployment knows, a token an admin stored in the
+  // dashboard included: this scan is the backstop that stops an agent from
+  // publishing one, and the environment alone never holds a stored one.
+  // Nothing is published unscanned, so a set that cannot be read is retried,
+  // spaced, within this step's retries (a blink passes on the next attempt),
+  // and after the last one fails the block with a sentence that says so.
+  const { IntegrationSecretsUnreadableError, knownSecretValues } = await import(
+    "../../../services/integrations/runtime.js"
+  );
+  let known: string[];
+  try {
+    known = await knownSecretValues();
+  } catch (error) {
+    if (error instanceof IntegrationSecretsUnreadableError) {
+      throw new RetryableError(LEAK_REVIEW_SETTINGS_UNREADABLE, { retryAfter: "5s" });
+    }
+    throw error;
+  }
+  const secrets = scannableConfiguredSecrets(known);
   const sections: string[] = [];
   const diffStats: string[] = [];
   const scanned: string[] = [];
@@ -497,7 +529,9 @@ async function blockLeakReviewCollectStep(input: {
     unchanged,
   };
 }
-blockLeakReviewCollectStep.maxRetries = 0;
+// Two, for the settings read above: every git read here is idempotent, so a
+// retry of any of them costs time and nothing else.
+blockLeakReviewCollectStep.maxRetries = 2;
 
 /**
  * Report-only LLM pass. Provider failures are logged inside the step (pino is a
@@ -530,7 +564,13 @@ async function blockLeakReviewLlmScanStep(input: {
     () => import("../../agent-visibility/capture.js"),
   );
   const startedAt = Date.now();
+  // Resolved before the model is asked, so a set that cannot be read skips this
+  // report-only layer (it must never fail a run) instead of paying for an
+  // answer that could not be cleaned before it is kept.
+  let secrets: readonly string[] = [];
   try {
+    const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+    secrets = await knownSecretValues();
     const result = await generateStructured({
       model: input.model,
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
@@ -541,8 +581,8 @@ async function blockLeakReviewLlmScanStep(input: {
     });
     return {
       ok: true,
-      findings: normalizeLlmFindings(result.object),
-      summary: normalizeLlmSummary(result.object),
+      findings: normalizeLlmFindings(result.object, secrets),
+      summary: normalizeLlmSummary(result.object, secrets),
       usage: result.usage,
       durationMs: Date.now() - startedAt,
     };
@@ -553,7 +593,7 @@ async function blockLeakReviewLlmScanStep(input: {
     // secrets, mask known secret-shaped runs, and bound it before it reaches a
     // log sink.
     const message = err instanceof Error ? err.message : String(err);
-    let redacted = redactConfiguredSecretsInText(message, configuredReplaySecrets());
+    let redacted = redactConfiguredSecretsInText(message, secrets);
     for (const pattern of SECRET_MASK_PATTERNS) {
       redacted = redacted.replace(pattern, (match) => maskSecretValue(match));
     }
@@ -671,9 +711,18 @@ export const execute: BlockExecuteFn = async (
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return executionError(err instanceof Error ? err.message : String(err), {
-      category: "sandbox",
-    });
+    const detail = err instanceof Error ? err.message : String(err);
+    if (detail.includes(LEAK_REVIEW_SETTINGS_UNREADABLE)) {
+      // Not the workspace's failure, and not a leak: the deployment could not
+      // say which secrets to scan for, so nothing was published. The fixed
+      // sentence is the cause, not the runtime's "failed after N retries"
+      // wrapping of it, which is the same fact in worse words.
+      return executionError(LEAK_REVIEW_SETTINGS_UNREADABLE, {
+        category: "engine",
+        message: "Nothing was published. Retry the run once the deployment's settings can be read.",
+      });
+    }
+    return executionError(detail, { category: "sandbox" });
   }
 
   if (collected.hits.length > 0) {

@@ -24,6 +24,7 @@ import { createTestDb } from "../../db/test-db.js";
 import { organization, workflowRuns } from "../../db/schema.js";
 import type { Db } from "../../db/client.js";
 import { depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerTicketTools } from "./tickets.js";
 import type { McpRunSummary } from "../contracts.js";
 
@@ -133,9 +134,7 @@ function errorPayload(result: Awaited<ReturnType<Client["callTool"]>>): {
 describe("tickets.get", () => {
   it("returns the ticket's fields", async () => {
     const fetchTicket = vi.fn().mockResolvedValue(ticketContent());
-    const client = await connectedClient({
-      issueTracker: fakeIssueTracker({ fetchTicket }),
-    } as Adapters);
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
       name: "tickets.get",
@@ -160,9 +159,7 @@ describe("tickets.get", () => {
     const fetchTicket = vi.fn().mockResolvedValue(
       ticketContent({ description: hostile, title: hostile }),
     );
-    const client = await connectedClient({
-      issueTracker: fakeIssueTracker({ fetchTicket }),
-    } as Adapters);
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
       name: "tickets.get",
@@ -184,9 +181,7 @@ describe("tickets.get", () => {
     const fetchTicket = vi
       .fn()
       .mockRejectedValue(new IssueTrackerNotFoundError("ticket", "PROJ-404"));
-    const client = await connectedClient({
-      issueTracker: fakeIssueTracker({ fetchTicket }),
-    } as Adapters);
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
       name: "tickets.get",
@@ -211,9 +206,7 @@ describe("tickets.get", () => {
         ],
       }),
     );
-    const client = await connectedClient({
-      issueTracker: fakeIssueTracker({ fetchTicket }),
-    } as Adapters);
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
       name: "tickets.get",
@@ -237,9 +230,7 @@ describe("tickets.get", () => {
         ],
       }),
     );
-    const client = await connectedClient({
-      issueTracker: fakeIssueTracker({ fetchTicket }),
-    } as Adapters);
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
       name: "tickets.get",
@@ -256,9 +247,32 @@ describe("tickets.get", () => {
   });
 });
 
+describe("tickets.get without a usable issue tracker", () => {
+  // A deployment may have no tracker since S12. The tool read a getter that
+  // throws a plain error then, which reached the agent as INTERNAL_ERROR and
+  // told it nothing. It is an answer about the deployment, said as one.
+  it("says no tracker is connected, as an answer about the deployment", async () => {
+    const client = await connectedClient(adaptersFor("not_connected"));
+
+    const result = await client.callTool({ name: "tickets.get", arguments: { ticketKey: "PROJ-1" } });
+
+    expect(errorPayload(result)).toMatchObject({ code: "VALIDATION_FAILED", retryable: false });
+    expect(errorPayload(result).message).toContain("Integrations page");
+  });
+
+  it("says the settings could not be read, retryable, without the database's words", async () => {
+    const client = await connectedClient(adaptersFor("unreadable"));
+
+    const result = await client.callTool({ name: "tickets.get", arguments: { ticketKey: "PROJ-1" } });
+
+    expect(errorPayload(result)).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", retryable: true });
+    expect(errorPayload(result).message).not.toContain("neon");
+  });
+});
+
 describe("tickets.list_runs", () => {
   async function listRuns(args: { ticketKey: string; limit?: number }) {
-    const client = await connectedClient({} as Adapters);
+    const client = await connectedClient(adaptersFor("not_connected"));
     return client.callTool({ name: "tickets.list_runs", arguments: args });
   }
 

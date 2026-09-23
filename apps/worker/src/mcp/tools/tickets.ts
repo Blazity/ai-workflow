@@ -8,6 +8,7 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
+import { requireIssueTracker } from "../issue-tracker-access.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 const DEFAULT_COMMENTS_LIMIT = 20;
@@ -52,9 +53,10 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
         toolName: "tickets.get",
         targetRefs: [input.ticketKey],
         operation: async (): Promise<TicketGetData> => {
+          const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           let ticket;
           try {
-            ticket = await deps.adapters.issueTracker.fetchTicket(input.ticketKey);
+            ticket = await issueTracker.fetchTicket(input.ticketKey);
           } catch (error) {
             // Only the specific "no such ticket" case gets a public code; any
             // other adapter failure (auth, network, malformed response) falls

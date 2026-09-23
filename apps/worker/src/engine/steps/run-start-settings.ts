@@ -26,6 +26,7 @@
  * precedent for a step reading a db repository directly is
  * `loadPrePrCheckConfigStep` in `engine/blocks/pre-pr-checks.ts`.
  */
+import type { IssueTrackerRefusal } from "../support/issue-tracker-runtime.js";
 import {
   defaultSettingsSnapshot,
   resolveSettingsSnapshot,
@@ -217,7 +218,16 @@ export async function loadRunStartSettingsStep(input: {
   // run can be about a pull request rather than a ticket, so this read must
   // not stop the run start. What it could not read is recorded as absent, and
   // the callers that need a ticket refuse with their own sentence.
-  const tracker = await readTrackerWiring();
+  const tracker = await readTrackerWiring((reason, refusal) =>
+    // Frozen for the whole run: every ticket link is then empty and every
+    // move falls back to a bare column name, so the run's start says why.
+    // Nothing connected is a legitimate state; the other refusals are not,
+    // and look the same everywhere else.
+    (refusal === "not_connected" ? logger.info.bind(logger) : logger.warn.bind(logger))(
+      { subjectKey, reason, refusal },
+      "run_start_tracker_wiring_absent",
+    ),
+  );
 
   return {
     version: 1,
@@ -281,12 +291,21 @@ export function runStartTracker(stored: RunStartSettings): RunStartTracker {
   return stored.tracker ?? { baseUrl: "" };
 }
 
-async function readTrackerWiring(): Promise<RunStartTracker | undefined> {
+async function readTrackerWiring(
+  absent: (reason: string, refusal: IssueTrackerRefusal) => void,
+): Promise<RunStartTracker | undefined> {
   const { resolveActiveIssueTracker } = await import(
     "../support/issue-tracker-runtime.js"
   );
-  const resolved = await resolveActiveIssueTracker().catch(() => null);
-  if (!resolved?.ok) return undefined;
+  const resolved = await resolveActiveIssueTracker().catch((error: unknown) => ({
+    ok: false as const,
+    refusal: "unreadable" as const,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  if (!resolved.ok) {
+    absent(resolved.reason, resolved.refusal);
+    return undefined;
+  }
   const { baseUrl, backlogTransitionId, aiTransitionId, aiReviewTransitionId } =
     resolved.wiring;
   return {

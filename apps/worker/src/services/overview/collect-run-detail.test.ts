@@ -70,6 +70,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "claude-opus-4-8",
       runId: "run_a",
+      secrets: [],
     });
 
     expect(run.status).toBe("success");
@@ -99,6 +100,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "m",
       runId: "run_b",
+      secrets: [],
     });
 
     expect(run.status).toBe("running");
@@ -117,6 +119,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "m",
       runId: "run_c",
+      secrets: [],
     });
 
     expect(run.status).toBe("failed");
@@ -155,6 +158,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "m",
       runId: "run_diag",
+      secrets: [],
     });
 
     expect(run.error).toEqual({
@@ -194,6 +198,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "m",
       runId: "run_legacy",
+      secrets: [],
     });
 
     expect(run.error).toEqual({ message: "legacy run failed" });
@@ -220,6 +225,7 @@ describe("collectRunDetail", () => {
       world: source,
       model: "m",
       runId: "run_sdk_diag",
+      secrets: [],
     });
 
     expect(run.error).toEqual({
@@ -240,7 +246,7 @@ describe("captureRunStepsBestEffort", () => {
         completedAt: new Date("2026-06-02T11:00:15.000Z"),
       }),
     ]);
-    const steps = await captureRunStepsBestEffort(source, "run_a");
+    const steps = await captureRunStepsBestEffort(source, "run_a", []);
     expect(steps?.map((s) => s.name)).toEqual(["provisionSandbox"]);
   });
 
@@ -249,6 +255,6 @@ describe("captureRunStepsBestEffort", () => {
       runs: { get: vi.fn().mockRejectedValue(new Error("expired")) },
       steps: { list: vi.fn().mockResolvedValue({ data: [] }) },
     };
-    expect(await captureRunStepsBestEffort(source, "run_a")).toBeNull();
+    expect(await captureRunStepsBestEffort(source, "run_a", [])).toBeNull();
   });
 });

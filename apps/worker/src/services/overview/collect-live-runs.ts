@@ -4,7 +4,9 @@ import type { Run } from "@shared/contracts";
 
 export interface CollectLiveRunsOptions {
   registry: RunRegistryAdapter;
-  issueTracker: IssueTrackerAdapter;
+  /** Absent on a deployment with no usable tracker: every row is then titled
+   *  by its ticket or subject key, as it is when a lookup fails. */
+  issueTracker?: IssueTrackerAdapter;
   ticketOrigin: string;
   /** Attributed models for the in-flight run ids (fetchRunModels). The registry
    * knows nothing about models, and these rows override the store's on the runs
@@ -44,7 +46,7 @@ export async function collectLiveRuns(
   return Promise.all(
     liveEntries.map(async ({ subjectKey, ticketKey, runId, state }): Promise<Run> => {
       let ticketTitle = ticketKey ?? subjectKey;
-      if (ticketKey) {
+      if (ticketKey && issueTracker) {
         try {
           const ticket = await issueTracker.fetchTicket(ticketKey);
           if (ticket.title) ticketTitle = ticket.title;

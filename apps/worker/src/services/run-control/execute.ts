@@ -273,18 +273,23 @@ function run(ticketKey: string, runId: string, deps: RunControlDeps): RunControl
 export async function runControlDeps(): Promise<RunControlDeps> {
   const { createAdapters } = await import("../../engine/support/adapters.js");
   const { cancelRun } = await import("../run-lifecycle/index.js");
-  const { issueTrackerBaseUrl, loadSettingsSnapshot, ticketBoardSettings } = await import(
-    "../settings/index.js"
-  );
-  const { runRegistry, issueTracker } = await createAdapters();
-  const board = await ticketBoardSettings(await loadSettingsSnapshot());
+  const { loadSettingsSnapshot, ticketBoardOf } = await import("../settings/index.js");
+  const adapters = await createAdapters();
+  // One resolution for the tracker, its board and its link. With none, the
+  // commands still list and cancel runs; a cancel just has no ticket to move
+  // back and no tracker to link to, which `RunControlDeps` already allows.
+  const tracker = adapters.issueTrackerResolution;
+  if (!tracker.ok) {
+    return { registry: adapters.runRegistry, cancelRun, trackerBaseUrl: "" };
+  }
+  const board = await ticketBoardOf(tracker, await loadSettingsSnapshot());
   return {
-    registry: runRegistry,
-    issueTracker,
+    registry: adapters.runRegistry,
+    issueTracker: tracker.adapter,
     cancelRun,
     backlog: board.backlogTransitionId
       ? { name: board.backlogColumn, transitionId: board.backlogTransitionId }
       : board.backlogColumn,
-    trackerBaseUrl: await issueTrackerBaseUrl(),
+    trackerBaseUrl: tracker.wiring.baseUrl,
   };
 }

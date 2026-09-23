@@ -17,6 +17,9 @@
  * A suite that is ABOUT the resolution must not use this.
  */
 import { vi } from "vitest";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import type { Adapters } from "../engine/support/adapters.js";
+import type { ResolvedIssueTracker } from "../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../engine/support/subject-key.js";
 
 export interface ConnectedIssueTrackerDouble {
@@ -101,7 +104,7 @@ export function noIssueTrackerConnected(
   return {
     resolveActiveIssueTracker: vi.fn(async () => ({
       ok: false as const,
-      unreadable: false,
+      refusal: "not_connected" as const,
       reason,
     })),
     coreServesIssueTracker: vi.fn(async () => false),
@@ -113,4 +116,53 @@ export function noIssueTrackerConnected(
     ticketSubjects: vi.fn(refuse),
     trackerMoveTarget: vi.fn(refuse),
   };
+}
+
+/** The refusals `adaptersFor` can stand in for, each in the real sentence. */
+const REFUSALS = {
+  not_connected: {
+    ok: false,
+    refusal: "not_connected",
+    reason:
+      "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.",
+  },
+  ambiguous: {
+    ok: false,
+    refusal: "ambiguous",
+    reason:
+      "Jira and Linear both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.",
+  },
+  unreadable: {
+    ok: false,
+    refusal: "unreadable",
+    reason:
+      "This deployment's integration settings could not be read (neon: connection reset), so its issue tracker was not used.",
+  },
+} as const satisfies Record<string, ResolvedIssueTracker>;
+
+/**
+ * Adapters as `createAdapters` builds them, for a suite that hands adapters to
+ * its subject directly (the MCP tools, through `depsFor`).
+ *
+ * `tracker` is the deployment's answer: an adapter when one is connected, or
+ * the refusal by name (`"not_connected"`, `"ambiguous"`, `"unreadable"`),
+ * carried in `issueTrackerResolution` exactly as the real function carries it.
+ * The rest is whatever the suite's subject uses; a suite that passes none gets
+ * none.
+ */
+export function adaptersFor(
+  tracker: IssueTrackerAdapter | keyof typeof REFUSALS,
+  rest: Partial<Record<"vcs" | "messaging" | "runRegistry", unknown>> = {},
+): Adapters {
+  const issueTrackerResolution: ResolvedIssueTracker =
+    typeof tracker === "string"
+      ? REFUSALS[tracker]
+      : {
+          ok: true,
+          id: "jira",
+          name: "Jira",
+          adapter: tracker,
+          wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example" },
+        };
+  return { ...rest, issueTrackerResolution } as Adapters;
 }

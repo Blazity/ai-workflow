@@ -41,7 +41,7 @@ import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } 
 import { formatExecutionErrorForUser, WorkflowExecutionError } from "./helpers/execution-error.js";
 import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "@shared/workflow-graph";
 import { buildV2ReplayGraphSnapshot, createV2RunObservationHooks, type V2RunObservationHooks } from "../run-observability/runtime-hooks.js";
-import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../run-observability/configured-secrets.js";
 import { emitAgentInvocationObservations, emitRepositoryWorkflowObservation, emitTimedOutAgentInvocationObservations } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./steps/memory-steps.js";
 import { distillRepoMemoryStep, loadRepoMemorySourcesStep } from "./steps/repo-memory-steps.js";
@@ -987,9 +987,13 @@ async function agentWorkflowBody(
   {
     const replayCaptureStartedAt = await readRunBudgetClockStep();
     const definition = plan.definition;
+    // Every replay value below is redacted twice: here with the environment's
+    // secrets, which is all workflow scope can see, and again by the capture
+    // step that writes it with every secret the deployment knows, including a
+    // connection stored in the dashboard (telemetry.ts, knownSecretValues).
     const replayGraph = sanitizeReplayGraphSnapshot(
       buildV2ReplayGraphSnapshot(definition),
-      configuredReplaySecrets(),
+      environmentSecretValues(),
     );
     const capture = replayGraph
       ? await captureV2RunObservationStartStep({
@@ -1002,7 +1006,7 @@ async function agentWorkflowBody(
             {
               harnesses: harnessManifests,
             },
-            { secrets: configuredReplaySecrets() },
+            { secrets: environmentSecretValues() },
           ),
         })
       : null;
@@ -1049,7 +1053,7 @@ async function agentWorkflowBody(
             observations.push({
               kind: observation.kind,
               envelope: sanitizeReplayValue(observation.value, {
-                secrets: configuredReplaySecrets(),
+                secrets: environmentSecretValues(),
                 retain:
                   observation.kind === "log" ? "tail" : "head",
               }),
@@ -1082,7 +1086,7 @@ async function agentWorkflowBody(
             const outcome =
               sanitizeReplayAttemptOutcome(
                 finish.outcome,
-                configuredReplaySecrets(),
+                environmentSecretValues(),
               ) ?? {
                 kind: finish.outcome.kind,
                 status: "unavailable",

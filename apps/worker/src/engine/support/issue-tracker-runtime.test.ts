@@ -14,8 +14,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 
 const resolveUsableIntegrations = vi.fn();
+/** Every secret the deployment knows, as the source hands it over. */
+const knownSecretValues = vi.fn(async (): Promise<string[]> => []);
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  knownSecretValues,
   // The pin comparison itself is the real one. A mocked check would prove that
   // this module calls something, not that a tracker reconfigured mid-run is
   // refused.
@@ -42,6 +45,7 @@ const {
   trackerMoveTarget,
 } = await import("./issue-tracker-runtime.js");
 const { createAdapters } = await import("./adapters.js");
+const { issueTrackerIfConnected, issueTrackerOrThrow } = await import("./connected-issue-tracker.js");
 
 const NO_PROVIDER =
   "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
@@ -150,7 +154,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "not_connected",
       reason: NO_PROVIDER,
     });
   });
@@ -162,7 +166,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "ambiguous",
       reason:
         "Tracker One and Tracker Two both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.",
     });
@@ -179,7 +183,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(resolved).toEqual({
       ok: false,
-      unreadable: true,
+      refusal: "unreadable",
       reason:
         "This deployment's integration settings could not be read (database unavailable), so its issue tracker was not used.",
     });
@@ -190,7 +194,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason: "Test Tracker declares issue tracking and ships no code for it.",
     });
   });
@@ -210,7 +214,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason:
         "Test Tracker cannot say which account it acts as, so this deployment could not tell its own ticket moves from a person's. An issue tracker has to answer that.",
     });
@@ -226,7 +230,7 @@ describe("resolveActiveIssueTracker", () => {
       { integrationId: "test tracker", configFingerprint: "fp-1" },
     ]);
 
-    expect(resolved).toMatchObject({ ok: false, unreadable: false });
+    expect(resolved).toMatchObject({ ok: false, refusal: "unusable" });
     expect(resolved.ok === false && resolved.reason).toBe(
       "The issue tracker Test Tracker moved after this run started (reconfigured). Start a new run.",
     );
@@ -255,6 +259,50 @@ describe("resolveActiveIssueTracker", () => {
   });
 });
 
+// Red when: the adapter core posts through hands the provider what a block or
+// an agent wrote. An agent's summary bound into post_ticket_comment carried a
+// tracing key an admin stored in the dashboard, which is in every agent
+// sandbox by design, straight onto the ticket its author can read.
+describe("what core publishes through the tracker", () => {
+  it("takes every secret the deployment knows out of a comment before the tracker sees it", async () => {
+    const postComment = vi.fn(async () => null);
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), postComment } }));
+    knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+    await tracker.postComment("AWT-1", "Summary: tracing is set up with plainvalue4471tracer.");
+
+    expect(postComment).toHaveBeenCalledTimes(1);
+    const [, posted] = postComment.mock.calls[0] as unknown as [string, string];
+    expect(posted).not.toContain("plainvalue4471tracer");
+    expect(posted).toContain("Summary: tracing is set up with");
+  });
+
+  it("posts nothing when the secrets to redact with cannot be read", async () => {
+    const postComment = vi.fn(async () => null);
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), postComment } }));
+    knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+
+    await expect(tracker.postComment("AWT-1", "anything")).rejects.toThrow("settings unreadable");
+    expect(postComment).not.toHaveBeenCalled();
+  });
+
+  it("leaves what it does not publish alone, and absent what the tracker lacks", async () => {
+    const fetchTicket = vi.fn(async () => ({ identifier: "AWT-1" }));
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), fetchTicket } as never }));
+    knownSecretValues.mockClear();
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+    await tracker.fetchTicket("AWT-1");
+
+    expect(fetchTicket).toHaveBeenCalledWith("AWT-1");
+    expect(knownSecretValues).not.toHaveBeenCalled();
+    expect(tracker.createTicket).toBeUndefined();
+  });
+});
+
 describe("what core asks of the resolution", () => {
   it("hands core a real adapter, not something that answers every name", async () => {
     // Eighteen places in core ask whether this tracker can do an optional
@@ -265,7 +313,7 @@ describe("what core asks of the resolution", () => {
     const adapter = { ...adapterThatKnowsItself(), listStatuses: async () => [] };
     readable(provider("Test Tracker", { adapter }));
 
-    const { issueTracker } = await createAdapters();
+    const issueTracker = issueTrackerOrThrow(await createAdapters());
 
     expect(issueTracker.getCurrentUserAccountId).toBeTypeOf("function");
     expect((issueTracker as unknown as Record<string, unknown>).updateLabels).toBeUndefined();
@@ -276,14 +324,20 @@ describe("what core asks of the resolution", () => {
     // legitimate state now, and most callers of `createAdapters` want the run
     // registry or the sender. Refusing when the set is built would take the
     // run list, the capacity snapshot and every notification down with the
-    // tracker, so the refusal waits until something reaches for the tracker.
+    // tracker, so the refusal is carried as data for the caller to decide on.
     readable();
 
     const adapters = await createAdapters();
 
     expect(adapters.runRegistry).toBeDefined();
     expect(adapters.messaging).toBeDefined();
-    expect(() => adapters.issueTracker).toThrow(NO_PROVIDER);
+    expect(adapters.issueTrackerResolution).toEqual({
+      ok: false,
+      refusal: "not_connected",
+      reason: NO_PROVIDER,
+    });
+    expect(issueTrackerIfConnected(adapters)).toBeUndefined();
+    expect(() => issueTrackerOrThrow(adapters)).toThrow(NO_PROVIDER);
   });
 
   it("turns an unexpected throw into the same refusal, not into a dead caller", async () => {
@@ -291,14 +345,14 @@ describe("what core asks of the resolution", () => {
     // is a different thing: a module that failed to load, a driver that gave
     // up. The poller builds its adapters BEFORE its first phase, so a throw
     // escaping here killed the whole tick, housekeeping included, rather than
-    // the ticket half. It lands on the getter now, carrying what threw.
+    // the ticket half. It lands on the resolution now, carrying what threw.
     resolveUsableIntegrations.mockRejectedValue(new Error("module load failed"));
 
     const adapters = await createAdapters();
 
     expect(adapters.runRegistry).toBeDefined();
     expect(adapters.messaging).toBeDefined();
-    expect(() => adapters.issueTracker).toThrow("module load failed");
+    expect(() => issueTrackerOrThrow(adapters)).toThrow("module load failed");
   });
 
   it("throws the refusal, in the words a person reads, when there is no tracker", async () => {

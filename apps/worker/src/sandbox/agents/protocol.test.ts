@@ -147,6 +147,7 @@ describe("protocol diagnostics", () => {
       redactDiagnosticText(
         "sk-ant-abc bearer ghp_abcdefghijklmnopqrstuvwxyz gho_abcdefghijklmnopqrstuvwxyz " +
           "ghu_abcdefghijklmnopqrstuvwxyz glpat-abcdefghijklmnop token=secretvalue",
+        [],
       ),
     ).not.toMatch(/sk-ant-|gh[pousr]_|glpat-|secretvalue/);
   });

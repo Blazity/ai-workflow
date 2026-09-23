@@ -9,10 +9,7 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import {
-  IssueTrackerNotFoundError,
-  type IssueTrackerAdapter,
-} from "../../adapters/issue-tracker/types.js";
+import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { isPullRequestUnreadableError } from "@integrations/sdk";
 import { isRepositoryWithinPinnedScope } from "../../adapters/vcs/repository-directory.js";
 import {
@@ -32,7 +29,11 @@ import {
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
-import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
+import {
+  issueTrackerWiring,
+  ticketSubject,
+  type ResolvedIssueTracker,
+} from "../../engine/support/issue-tracker-runtime.js";
 import {
   createManualDispatchPrReader,
   resolveConfiguredPullRequestUrl,
@@ -49,7 +50,7 @@ import {
 import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
-import { ManualDispatchError } from "./errors.js";
+import { issueTrackerForDispatch, ManualDispatchError } from "./errors.js";
 import { readVcsBotLogin } from "../vcs/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
@@ -151,7 +152,9 @@ function deployedBlockTypes(
 
 export async function resolveManualDispatch(input: {
   db: Db;
-  issueTracker: IssueTrackerAdapter;
+  /** The deployment's tracker, or why there is none: read only by the inputs
+   *  that need a ticket (`issueTrackerForDispatch`). */
+  issueTrackerResolution: ResolvedIssueTracker;
   definitionId: number;
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
@@ -250,7 +253,7 @@ async function loadDeployedTrigger(
 async function resolveTicketDispatch(
   input: {
     persistence: ManualDispatchPersistence;
-    issueTracker: IssueTrackerAdapter;
+    issueTrackerResolution: ResolvedIssueTracker;
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "ticket" }>;
@@ -263,9 +266,12 @@ async function resolveTicketDispatch(
   },
 ): Promise<Extract<ResolvedManualDispatch, { inputKind: "ticket" }>> {
   const ticketKey = normalizeTicketKey(input.dispatchInput.ticketKey);
+  // Outside the try: no tracker is a refusal about the deployment, not the
+  // tracker failing to answer, and the catch below would say the latter.
+  const issueTracker = issueTrackerForDispatch(input.issueTrackerResolution);
   let ticket;
   try {
-    ticket = await input.issueTracker.fetchTicket(ticketKey);
+    ticket = await issueTracker.fetchTicket(ticketKey);
   } catch (error) {
     if (error instanceof IssueTrackerNotFoundError) {
       throw new ManualDispatchError(
@@ -336,7 +342,7 @@ async function resolveTicketDispatch(
 async function resolvePullRequestDispatch(
   input: {
     persistence: ManualDispatchPersistence;
-    issueTracker: IssueTrackerAdapter;
+    issueTrackerResolution: ResolvedIssueTracker;
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "pull_request" }>;
@@ -473,7 +479,10 @@ async function resolvePullRequestDispatch(
         "This trigger only accepts pull requests created by AI Workflow.",
       );
     }
-    const ticket = await input.issueTracker.fetchTicket(owned.ticketKey).catch(() => null);
+    // Refused before the lookup: no tracker is not "could not be verified",
+    // and retrying cannot make one appear.
+    const issueTracker = issueTrackerForDispatch(input.issueTrackerResolution);
+    const ticket = await issueTracker.fetchTicket(owned.ticketKey).catch(() => null);
     if (!ticket) {
       throw new ManualDispatchError(
         502,

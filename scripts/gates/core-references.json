@@ -164,6 +164,7 @@
         "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
         "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
         "apps/worker/src/engine/blocks/investigate/execute.ts",
+        "apps/worker/src/engine/blocks/investigate/manifest.ts",
         "packages/contracts/workflow-graph.ts"
       ]
     },

@@ -29,6 +29,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
     ticketKeyFromBranch,
   } = await import("./support/workflow-naming.js");
   const { createAdapters } = await import("./support/adapters.js");
+  const { issueTrackerIfConnected } = await import("./support/connected-issue-tracker.js");
   const { logger } = await import("../infra/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
@@ -58,12 +59,23 @@ async function runGate(input: PostPrGateWorkflowInput) {
     throw new Error("VCS adapter does not support gate statuses");
   }
   const vcs = adapters.vcs;
+  // Decided once, before any gate status exists. The gate is about the pull
+  // request and needs no tracker; this step has no retries, so a tracker read
+  // that threw after the statuses below were created would leave them pending
+  // on the PR forever, blocking any branch rule that requires them.
+  const issueTracker = issueTrackerIfConnected(adapters);
 
   const ticketKey = ticketKeyFromBranch(input.headRef);
   let ticket = null;
-  if (ticketKey) {
+  if (ticketKey && !issueTracker) {
+    logger.info(
+      { ticketKey, reason: adapters.issueTrackerResolution.ok ? undefined : adapters.issueTrackerResolution.reason },
+      "post_pr_gate_ticket_skipped_no_issue_tracker",
+    );
+  }
+  if (ticketKey && issueTracker) {
     try {
-      const fetched = await adapters.issueTracker.fetchTicket(ticketKey);
+      const fetched = await issueTracker.fetchTicket(ticketKey);
       ticket = {
         identifier: fetched.identifier,
         title: fetched.title,
@@ -122,7 +134,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
       files: null,
       adapters: {
         vcs: adapters.vcs,
-        issueTracker: adapters.issueTracker,
+        ...(issueTracker ? { issueTracker } : {}),
       },
     },
     config,

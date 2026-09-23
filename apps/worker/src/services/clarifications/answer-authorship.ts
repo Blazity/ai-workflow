@@ -222,7 +222,8 @@ export async function readBotAccountId(
 type ComposedAuthorRecount = number | "cannot_count" | "evidence_gone";
 
 async function recountComposedAuthors(input: {
-  issueTracker: Pick<IssueTrackerAdapter, "getCurrentUserAccountId">;
+  /** Absent only for a question with no ticket, which has nothing to count. */
+  issueTracker: Pick<IssueTrackerAdapter, "getCurrentUserAccountId"> | undefined;
   ticketKey: string | null;
   comments: readonly TicketComment[] | null;
   commentsCoverWindow: boolean;
@@ -232,7 +233,7 @@ async function recountComposedAuthors(input: {
 }): Promise<ComposedAuthorRecount> {
   // No ticket, or a delivery that read none: a composed answer comes from a
   // ticket's comments, so without them there is nothing to count yet.
-  if (!input.ticketKey || input.comments === null) return "cannot_count";
+  if (!input.ticketKey || !input.issueTracker || input.comments === null) return "cannot_count";
   // A read with a gap in the answer's own window answers neither question here.
   // It cannot say the evidence is gone, because what is missing from it may
   // simply be on a page nobody read; and it cannot be counted either, because
@@ -349,7 +350,8 @@ export async function readAnswerAuthorship(input: {
   answeredAt: Date;
   answerer: { id: string; label: string };
   authorCount?: number;
-  issueTracker: Pick<IssueTrackerAdapter, "getCurrentUserAccountId">;
+  /** The tracker the question's ticket lives in; absent for a question with no ticket. */
+  issueTracker: Pick<IssueTrackerAdapter, "getCurrentUserAccountId"> | undefined;
   ticketComments: readonly TicketComment[] | null;
   ticketCommentsCoverWindow: boolean;
 }): Promise<AnswerAuthorship> {

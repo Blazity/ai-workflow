@@ -15,6 +15,7 @@ import {
   isAiReviewDestination,
 } from "../tickets/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerOrThrow } from "../../engine/support/connected-issue-tracker.js";
 import { TriggerHttpError } from "../../infra/trigger-http-error.js";
 
 /**
@@ -53,7 +54,11 @@ export async function actOnTicketEvent(
   // read somewhere else. The thunk is memoised per request, so every phase
   // below shares this read.
   const board = await ticketBoardSettings(await loadSettings());
-  const adapters = await createAdapters();
+  const resolved = await createAdapters();
+  // A tracker's delivery about one of its tickets is ticket work from end to
+  // end, so no usable tracker is this event's failure, reported by the
+  // webhook route's own handler (the board read above refuses the same way).
+  const adapters: Adapters = { ...resolved, issueTracker: issueTrackerOrThrow(resolved) };
   // The one derivation, from the tracker this deployment serves rather than
   // from anything the delivery said about itself. Everything that can later
   // find, cancel or resume this run spells the key this way.
@@ -362,7 +367,10 @@ export async function actOnTicketEvent(
   return dispatch(ticketKey, adapters, loadSettings, "default");
 }
 
-type Adapters = Awaited<ReturnType<typeof createAdapters>>;
+/** The adapters with the tracker this event's handling cannot do without. */
+type Adapters = Awaited<ReturnType<typeof createAdapters>> & {
+  readonly issueTracker: import("../../adapters/issue-tracker/types.js").IssueTrackerAdapter;
+};
 type Board = Awaited<ReturnType<typeof ticketBoardSettings>>;
 
 async function dispatch(

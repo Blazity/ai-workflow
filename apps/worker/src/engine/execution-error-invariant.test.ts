@@ -255,7 +255,7 @@ describe("execution error invariant: every surface shows the same message", () =
     expect(spendReason).toContain("spend limit");
     expect(spendReason).toContain(`AIW-DIAG-${RUN_ID}-implementation-1`);
     expect(spendReason).not.toContain("PATH aliases");
-    expect(sanitizeRunError(spendReason, "Workflow execution failed.")).toEqual({
+    expect(sanitizeRunError(spendReason, "Workflow execution failed.", [])).toEqual({
       message: spendReason,
       code: `AIW-DIAG-${RUN_ID}-implementation-1`,
     });
@@ -263,7 +263,7 @@ describe("execution error invariant: every surface shows the same message", () =
 
   it("shows the same message in the run header and the run list", () => {
     // Both read run.error / the durable status reason through this boundary.
-    expect(sanitizeRunError(reason, "Workflow execution failed.")).toEqual({
+    expect(sanitizeRunError(reason, "Workflow execution failed.", [])).toEqual({
       message: reason,
       code: `AIW-DIAG-${RUN_ID}-planning-1`,
     });
@@ -299,7 +299,7 @@ describe("execution error invariant: every surface shows the same message", () =
     // The host survives, on every surface.
     expect(withCredentialedUrl).toContain("https://gitlab.com/acme/app.git");
     expect(
-      sanitizeRunError(withCredentialedUrl, "Workflow execution failed.")?.message,
+      sanitizeRunError(withCredentialedUrl, "Workflow execution failed.", [])?.message,
     ).toBe(withCredentialedUrl);
   });
 

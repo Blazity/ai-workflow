@@ -2186,13 +2186,41 @@ the whole of what a page sees beyond what its own package ships.
 
 Three core reads now ask the registry instead of naming a provider:
 
-- `integrationSecretValues()` feeds the redaction pass over MCP results and the
-  credential scan a clarification snapshot runs. Core used to list
-  `GENAI_ENGINE_API_KEY` by hand; an integration's variable names are its own,
-  and a stored connection has no variable at all, so the set is resolved rather
-  than listed. A tracing provider's key is inside a sandbox by design and an
-  agent can echo its own environment, so dropping that coverage with the
-  variable would have been a real regression.
+- `knownSecretValues()` (`services/integrations/secret-values.ts`) is the one
+  set every redaction and scan in core uses: run logs, replays, telemetry,
+  memory, briefings, the analysis report and failure comments, leak review and
+  MCP results. It is the environment's secret-named values, the values each
+  integration's secret fields have in the environment, and the secrets of
+  every stored version not yet redacted (the active one and the ones a
+  rotation replaced, which runs started before it still hold; a disconnect
+  redacts them), read in one statement. A connection stored in the dashboard,
+  which never reaches the environment, is covered the same as one from a
+  variable. A read that fails is retried briefly; one that still fails throws
+  with a fixed sentence (the database's words go to the log), and no caller
+  carries on with the environment half: a smaller set there is a stored secret
+  written in the clear. The clarification snapshot scan asks the same source
+  for the `agent_tracing` integrations only, because its patterns are written
+  into the sandbox and decision 7 names tracing as the one integration whose
+  secret is there by design.
+- One rule for everything core writes or publishes: the step that writes or
+  publishes a value applies the whole set. Workflow scope cannot read a
+  connection, so it redacts with the environment half, and an agent writes
+  whatever its sandbox holds. The rule is enforced at the boundaries core owns
+  rather than per call site, listed once in `engine/support/publication-redaction.ts`:
+
+  | Boundary | What passes through it | When the set cannot be read |
+  |---|---|---|
+  | The issue tracker adapter `resolveActiveIssueTracker` builds | `postComment`, `createTicket`: every ticket comment, agent-written ones included | The post throws; the caller's own failure path reports it |
+  | The version control adapter `createRepositoryVcsRuntime` builds | Pull request titles and bodies, comments, review threads, reviews, run failure notes, gate status summaries | The same |
+  | `messagingSender().notifyForTicket` | Every chat notification, the failure reason included | Not sent, answered as not delivered (it never throws) |
+  | The steps in `steps/ticket-analysis.ts` that write workflow-scope text | The analysis report, the failure reason's status row, the failed-ticket mark, the phase failure and execution error logs | The row or line is written with the text withheld |
+
+  A consumer whose design is to degrade degrades on an unreadable set too:
+  investigate withholds its evidence and reports each source as a gap, leak
+  review retries its collect step (spaced, twice) and then fails the block
+  with the settings as the cause, publishing nothing. The clarification
+  snapshot fails closed: the run fails after the step's retries rather than
+  parking with a snapshot nobody scanned for the tracing key.
 - Integration settings that cannot be read mean "nothing usable" where the
   caller is doing something alongside the work (tracing a sandbox, drawing a
   page, where the page says the worker did not answer rather than that the
@@ -2415,6 +2443,30 @@ read by three callers that used to derive it separately: the palette's
 availability, the run's pins, and the dispatch blocker. Deriving it three times
 is how a palette and a run come to disagree about one deployment, which is the
 failure this whole file keeps returning to.
+
+It answers two questions, and the first version answered only the narrower
+one. `required` is what a block cannot be offered without, and only the palette
+and the publish gate read it. `reached` is everything a run executing the block
+touches, and the pins, the dispatch blocker and "which workflows use this
+integration" read it: a ticket trigger reaches the issue tracker for its whole
+run, and every block that touches the workspace reaches version control,
+memory and every agent tracing provider. Which blocks touch it is the
+scheduler's own rule (`workflowWorkspaceAccessOf` in `@shared/workflow-graph`),
+not a second list: the workspace is prepared on first use, so a block that
+starts touching it is counted the day it does. Reading `required` for the pins
+left an agent graph with no version control pin, so each of its version
+control calls read the missing pin as a provider that moved, and it let a
+disable preview report that switching off the tracker stops no workflow.
+
+A run suspended before the pins widened still carries the narrower set it
+recorded, because pins are a step result that replays unchanged. So which pin
+holds a call has one reading (`engine/support/recorded-pins.ts`): only a pin
+recorded for the provider is compared. For version control a provider the pins
+do not name is not pinned, because a repository names its provider and several
+serve side by side; for a capability one provider serves at a time
+(messaging, memory, the tracker) a provider absent from a non-empty set arrived
+after the run started, alone or in place of the one it used, and is refused as
+before.
 
 Worth stating plainly for S10 to S12, because the cost of getting it wrong
 grows with every stage: after those stages almost everything a run does is a

@@ -87,7 +87,13 @@ let adapters: Adapters;
 beforeEach(async () => {
   db = await createTestDb();
   adapters = {
-    issueTracker: {} as Adapters["issueTracker"],
+    issueTrackerResolution: {
+      ok: true,
+      id: "jira",
+      name: "Jira",
+      adapter: {} as never,
+      wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example" },
+    },
     vcs: {} as Adapters["vcs"],
     messaging: {} as Adapters["messaging"],
     runRegistry: {

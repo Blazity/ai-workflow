@@ -7,10 +7,10 @@ const fetchTicket = vi.fn();
 let getCurrentUserAccountId: (() => Promise<string>) | undefined;
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       fetchTicket,
       ...(getCurrentUserAccountId ? { getCurrentUserAccountId } : {}),
-    },
+    } },
   }),
 }));
 

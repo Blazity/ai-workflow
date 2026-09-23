@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: mocks.issueTracker }),
+  createAdapters: () => ({ issueTrackerResolution: { ok: true, adapter: mocks.issueTracker  }}),
 }));
 vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),

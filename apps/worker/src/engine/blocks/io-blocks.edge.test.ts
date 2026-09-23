@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
+  createAdapters: () => ({ issueTrackerResolution: { ok: true, adapter: { postComment: mocks.postComment }  }}),
 }));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));

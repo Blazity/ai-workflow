@@ -24,13 +24,13 @@ const service = vi.hoisted(() => ({
 }));
 vi.mock("../../services/manual-dispatch/service.js", () => service);
 
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import type { McpActorContext } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerWorkflowTools } from "./workflows.js";
 
 const ORG_ID = "org-execute";
@@ -75,7 +75,7 @@ async function connectedClient(actor: Partial<McpActorContext> = {}) {
     server,
     // `now` is read through the closure so a single client can act twice a day
     // apart, which is what the idempotency reclaim case needs.
-    depsFor(db, () => now, { actor: actorFor(actor), adapters: {} as Adapters }),
+    depsFor(db, () => now, { actor: actorFor(actor), adapters: adaptersFor("not_connected") }),
   );
   const client = new Client({ name: "workflows-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -483,6 +483,31 @@ describe("workflows.dispatch", () => {
     expect(requestIds[0]).not.toBe(requestIds[1]);
     expect(requestIds[1]).toMatch(DERIVED_REQUEST_ID);
     expect(await auditedErrorCodes()).toEqual(["CONFLICT"]);
+  });
+
+  it("gives the key back when no issue tracker is usable for a ticket dispatch", async () => {
+    // What the dispatch service answers for a ticket input on a deployment with
+    // no tracker (issueTrackerForDispatch): refused before anything was
+    // reserved or moved, so the agent may ask again once an admin connects one.
+    const noTracker =
+      "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
+    service.dispatchManualWorkflow
+      .mockRejectedValueOnce(new ManualDispatchError(409, "integration_unavailable", noTracker))
+      .mockImplementationOnce(async (arg: { request: { requestId: string } }) => ({
+        requestId: arg.request.requestId,
+        status: "started",
+        runId: "wrun_after_connect",
+      }));
+    const client = await connectedClient();
+
+    const first = await client.callTool({ name: "workflows.dispatch", arguments: DISPATCH_ARGS });
+    const second = await client.callTool({ name: "workflows.dispatch", arguments: DISPATCH_ARGS });
+
+    expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("VALIDATION_FAILED");
+    expect(errorText(first)).toBe(noTracker);
+    expect(second.isError).not.toBe(true);
+    expect(service.dispatchManualWorkflow).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the key when the provider could not be reached, because the ticket may already have moved", async () => {

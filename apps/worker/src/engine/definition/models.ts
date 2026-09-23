@@ -39,10 +39,12 @@ export async function fetchTicketStatuses(
   issueTracker?: IssueTrackerAdapter,
 ): Promise<Array<{ id: string; name: string }>> {
   try {
-    const adapter =
-      issueTracker ??
-      (await (await import("../support/adapters.js")).createAdapters()).issueTracker;
-    return (await adapter.listStatuses?.()) ?? [];
+    const { createAdapters } = await import("../support/adapters.js");
+    const { issueTrackerIfConnected } = await import("../support/connected-issue-tracker.js");
+    // No usable tracker has no statuses to offer, which is the same answer
+    // the editor already gets during an outage.
+    const adapter = issueTracker ?? issueTrackerIfConnected(await createAdapters());
+    return (await adapter?.listStatuses?.()) ?? [];
   } catch {
     // The editor remains usable during provider outages. Passing an empty list
     // makes buildWorkflowEditorOptions expose the configured legacy targets.

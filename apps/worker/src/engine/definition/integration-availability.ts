@@ -16,7 +16,7 @@
  * and that nobody ever tested is usable, which is every deployment alive on
  * the day this lands; reading the test verdict here would empty their palettes.
  */
-import { INVESTIGATE_CHAT_SOURCE } from "../blocks/investigate/manifest.js";
+import { investigateSources } from "../blocks/investigate/manifest.js";
 import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
@@ -25,7 +25,9 @@ import type {
   IntegrationStatus,
   IntegrationUnavailableReason,
   WorkflowBlockAvailability,
+  WorkflowDefinitionV2Node,
 } from "@shared/contracts";
+import { workflowWorkspaceAccessOf } from "@shared/workflow-graph";
 
 /** One integration as the engine needs it. Carries no connection value. */
 export interface IntegrationPresence {
@@ -308,9 +310,14 @@ function capabilityLabel(capability: string): string {
 }
 
 const NO_CAPABILITIES: readonly string[] = [];
-const MESSAGING: readonly string[] = ["messaging"];
-const VCS: readonly string[] = ["vcs"];
+const MESSAGING = "messaging";
+const VCS = "vcs";
+const ISSUE_TRACKER = "issue_tracker";
+const MEMORY = "memory";
+const AGENT_TRACING = "agent_tracing";
 
+/** Blocks that cannot be offered without version control: the triggers that
+ *  fire on a pull request and the blocks that call the provider directly. */
 const VCS_BLOCKS = new Set([
   "trigger_pr_created",
   "trigger_pr_ready",
@@ -331,45 +338,144 @@ const VCS_BLOCKS = new Set([
 ]);
 
 /**
+ * Blocks that run an agent in a sandbox without touching the workspace. Every
+ * agent sandbox is configured with every tracing provider (`agentTracingRun`,
+ * called by `ensureAgentSandbox` in `blocks/agent-sandbox.ts`), so a
+ * generic_agent whose workspace mode is "none" still reaches tracing. With a
+ * workspace mode it touches the workspace and is covered by the rule below.
+ */
+const AGENT_SANDBOX_BLOCKS = new Set(["generic_agent"]);
+
+/**
+ * Blocks that read or write a ticket through the issue tracker.
+ *
+ * The ticket triggers make the whole run about a ticket, so they stand for
+ * what every run they start reaches whatever its blocks are: the ticket is
+ * read at dispatch (`dispatchTicket` in services/dispatch/dispatch.ts), moved
+ * back to the backlog when the run fails and on to AI Review when it finishes
+ * (`moveTicketStep`, through the run's `moveTargets` in agent-workflow.ts). A
+ * plan approval continues a ticket's run (`dispatchPlanApproved` in
+ * services/approvals/dispatch.ts). The rest call it themselves:
+ * post_ticket_comment, send_plan_approval and update_ticket_status.
+ */
+const ISSUE_TRACKER_BLOCKS = new Set([
+  "trigger_ticket_ai",
+  "trigger_plan_approved",
+  "post_ticket_comment",
+  "send_plan_approval",
+  "update_ticket_status",
+]);
+
+/**
+ * Whether a block touches the run's workspace, from the rule the scheduler
+ * already runs on (`workflowWorkspaceAccessOf` in @shared/workflow-graph), not
+ * from a second list here: a block that starts touching the workspace is
+ * counted the day it does, where a hand-kept list would silently lose its pins.
+ *
+ * Touching the workspace reaches three capabilities, because the workspace is
+ * prepared on first use (`ensureWorkspace` in blocks/prepare-workspace, which
+ * the agent blocks reach through `ensureCodeWorkspace`): version control, to
+ * resolve and clone the repositories; agent tracing, because the sandbox is
+ * configured with every tracing provider (`agentTracingRun`); and memory,
+ * hydrated into the workspace (`hydrateWorkspaceMemoryStep`, seeded by
+ * `seedRepoMemoryStep`) and captured back when the run tears it down
+ * (`persistWorkspaceMemoryStep`). The set it answers for is wider than the
+ * blocks that prepare it (a check or a leak review reads a workspace an
+ * earlier block prepared), and that is harmless: such a block cannot run
+ * without a prepared workspace, so its run reaches the same three anyway.
+ */
+function touchesWorkspace(type: string, params: Readonly<Record<string, unknown>> | undefined): boolean {
+  const node = { type, configuration: params ?? {} } as unknown as WorkflowDefinitionV2Node;
+  return workflowWorkspaceAccessOf(node) !== "none";
+}
+
+/** What a core block needs from the deployment's capabilities. */
+export interface CoreBlockCapabilities {
+  /**
+   * What the block cannot be offered without. Block availability refuses the
+   * block when one of these has no single usable provider, so this is the
+   * palette's and the publish gate's question. Deliberately narrower than
+   * `reached`: an agent block without a tracing provider runs untraced, and
+   * one without a memory integration uses the built-in store.
+   */
+  readonly required: readonly string[];
+  /**
+   * Every capability a run executing this block reaches, `required` included.
+   * Run pinning and "which workflows use this integration" read this, because
+   * both ask what a run touches, not what the palette gates on: a run that
+   * pinned less would follow a live change for what it left out, and a
+   * disable preview that counted less would promise a disable stops nothing.
+   */
+  readonly reached: readonly string[];
+}
+
+/**
  * The capabilities a core block consumes, given its parameters.
  *
  * An integration's block declares this in its manifest. A core block has no
  * manifest, so it is declared here, once, and read by everything that needs
- * the answer: whether the block can be offered at all, which provider the run
- * pins, and whether that provider is still the one the run started with. Three
- * answers from one statement, because three statements is how a palette and a
- * run come to disagree about the same deployment.
+ * the answer: whether the block can be offered at all (`required`), which
+ * providers the run pins, and which workflows a change to an integration
+ * reaches (`reached`, through `integrationsUsedBy`). One statement, because
+ * three is how a palette, a run and a disable preview come to disagree about
+ * the same deployment.
  */
 export function coreBlockCapabilities(
   type: string,
   params: Readonly<Record<string, unknown>> | undefined,
-): readonly string[] {
-  if (VCS_BLOCKS.has(type)) return VCS;
-  if (type === "send_message") return MESSAGING;
-  if (type === "investigate") {
-    // An absent selection means both sources on (the parameter's own
-    // default), so only a list that omits the chat source opts out. The
-    // value is the block's own parameter vocabulary, which is why it comes
-    // from the block rather than being written here.
-    const sources: unknown = params?.sources;
-    const chat = Array.isArray(sources) ? sources.includes(INVESTIGATE_CHAT_SOURCE) : true;
-    return chat ? MESSAGING : NO_CAPABILITIES;
+): CoreBlockCapabilities {
+  const required: string[] = [];
+  const reached: string[] = [];
+  const need = (capability: string): void => {
+    if (!required.includes(capability)) required.push(capability);
+    use(capability);
+  };
+  const use = (capability: string): void => {
+    if (!reached.includes(capability)) reached.push(capability);
+  };
+
+  if (ISSUE_TRACKER_BLOCKS.has(type)) use(ISSUE_TRACKER);
+  if (VCS_BLOCKS.has(type)) need(VCS);
+  if (touchesWorkspace(type, params)) {
+    use(VCS);
+    use(MEMORY);
+    use(AGENT_TRACING);
   }
-  return NO_CAPABILITIES;
+  if (AGENT_SANDBOX_BLOCKS.has(type)) use(AGENT_TRACING);
+  if (type === "send_message") need(MESSAGING);
+  if (type === "investigate") {
+    const sources = investigateSources(params);
+    if (sources.issueTracker) use(ISSUE_TRACKER);
+    if (sources.chat) need(MESSAGING);
+  }
+  return {
+    required: required.length > 0 ? required : NO_CAPABILITIES,
+    reached: reached.length > 0 ? reached : NO_CAPABILITIES,
+  };
 }
 
 /**
  * Every integration a definition's nodes reach, in first-use order.
  *
- * A node reaches one in two ways: it is an integration's own block, or it is a
- * core block that consumes a capability an integration serves. Both count. A
- * run that pinned only the first kind would follow a live configuration change
- * for the second, so changing where a workflow posts, mid-run, would go
- * unnoticed by the very mechanism built to notice it.
+ * A node reaches one in three ways: it is an integration's own block, it is an
+ * integration's block that requires a capability another integration serves,
+ * or it is a core block that reaches a capability an integration serves. All
+ * count. A run that pinned only the first kind would follow a live
+ * configuration change for the others, so changing where a workflow posts,
+ * mid-run, would go unnoticed by the very mechanism built to notice it; and a
+ * disable preview that counted only the first would report that switching off
+ * the tracker every ticket workflow runs on stops nothing.
+ *
+ * Only usable providers are named (`providers` holds nothing else), so a
+ * capability nobody serves adds nothing here: its refusal is block
+ * availability's to give.
  */
 export function integrationsUsedBy(
   nodes: readonly {
     readonly type: string;
+    /** A stored definition's node carries its parameters here. */
+    readonly configuration?: Readonly<Record<string, unknown>>;
+    /** A runtime node carries the same parameters here. */
     readonly params?: Readonly<Record<string, unknown>>;
   }[],
   integrations: DeploymentIntegrations,
@@ -378,14 +484,22 @@ export function integrationsUsedBy(
   const add = (id: string): void => {
     if (!used.includes(id)) used.push(id);
   };
+  const addProvidersOf = (capability: string): void => {
+    for (const id of integrations.providers.get(capability) ?? []) add(id);
+  };
   for (const node of nodes) {
     const requirement = integrations.blocks.get(node.type);
     if (requirement) {
       add(requirement.integrationId);
+      for (const capability of requirement.capabilities) addProvidersOf(capability);
       continue;
     }
-    for (const capability of coreBlockCapabilities(node.type, node.params)) {
-      for (const id of integrations.providers.get(capability) ?? []) add(id);
+    // Every caller but the palette hands stored nodes, whose parameters are
+    // `configuration`: reading only `params` saw none of them, so an
+    // investigation that opted out of chat still pinned the chat provider.
+    const parameters = node.configuration ?? node.params;
+    for (const capability of coreBlockCapabilities(node.type, parameters).reached) {
+      addProvidersOf(capability);
     }
   }
   return used;

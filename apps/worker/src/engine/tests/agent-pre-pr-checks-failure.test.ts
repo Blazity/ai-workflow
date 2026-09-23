@@ -2,6 +2,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// A deployment with nothing connected: the secrets it knows are its
+// environment's. This suite is about something else, and the real source reads
+// the integration settings from a database it does not have
+// (services/integrations/secret-values.test.ts proves that read).
+vi.mock("../../services/integrations/secret-values.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/integrations/secret-values.js")>();
+  const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
+  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
+});
+
 const mocks = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),

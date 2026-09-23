@@ -59,7 +59,6 @@ const COMPUTED_ENVIRONMENT_RESIDUE = [
   // which variables those are is a manifest's answer. Naming them here instead
   // would mean a provider added later leaking its token into a published tool
   // result until somebody remembered this list.
-  "services/settings/runtime-settings.ts:process.env[field.env]",
 ];
 
 const WAVE_ACCESSORS = [

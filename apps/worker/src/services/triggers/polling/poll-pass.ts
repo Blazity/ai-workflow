@@ -36,13 +36,22 @@ import {
   sweepConnectedMcpRateLimits,
 } from "../../mcp/index.js";
 import type { RunsLister } from "../../overview/index.js";
-import { ticketSubjects } from "../../../engine/support/issue-tracker-runtime.js";
+import type {
+  ConnectedIssueTracker,
+  IssueTrackerRefusal,
+} from "../../../engine/support/issue-tracker-runtime.js";
+import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
+import type { IssueTrackerAdapter } from "../../../adapters/issue-tracker/types.js";
 import { reconcileRuns } from "../../run-lifecycle/index.js";
 import {
   createConnectedScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "../../schedule-trigger/index.js";
-import { maxConcurrentAgents, ticketBoardSettings } from "../../settings/index.js";
+import {
+  maxConcurrentAgents,
+  ticketBoardOf,
+  type TicketBoardSettings,
+} from "../../settings/index.js";
 import {
   collectConnectedSnapshots,
 } from "../../telemetry/index.js";
@@ -51,7 +60,7 @@ import {
   sweepConnectedOrphanedRunningRuns,
   upsertConnectedRunSnapshots,
 } from "../../../db/repositories/runs/telemetry.js";
-import { createAdapters } from "../../../engine/support/adapters.js";
+import { createAdapters, type Adapters } from "../../../engine/support/adapters.js";
 import {
   redispatchPendingWebhookDeliveries,
   sweepConnectedWebhookRateLimits,
@@ -164,45 +173,89 @@ export function createRepositoryCatalogReader(
 }
 
 /**
- * What the ticket half of a poll pass produced, or the zeroes that say it did
- * not run. `ticketPhasesRan` is the one field a reader cannot infer from the
- * counts: a tick that discovered nothing and a tick with no tracker at all
- * both report zero everything, and only one of them is a deployment that is
- * not watching a board.
+ * Why the ticket phases (discovery, approval recovery, ticket dispatch, the
+ * at-capacity queue) did not run on a tick. The one thing a reader cannot
+ * infer from the counts: a quiet tick and a tick with no board both report
+ * zero everything, and only one of them is a deployment not watching a board.
+ *
+ * - `no_issue_tracker_connected`: nothing serves issue tracking here. An answer
+ *   about the deployment, not a failure, so it is logged at info: on a
+ *   deployment that never connected a tracker it is the shape of every tick.
+ * - `issue_tracker_ambiguous`: two trackers serve it and none is selected. A
+ *   misconfiguration that silently stops all ticket discovery and dispatch
+ *   until an admin picks one, logged with the sentence that says so.
+ * - `issue_tracker_unusable`: the one tracker cannot serve (it ships no code,
+ *   or cannot say which account it acts as), with its sentence.
+ * - `issue_tracker_unreadable`: the integration settings could not be read, so
+ *   nobody knows whether a tracker is connected.
+ * - `board_read_failed`: a tracker is connected and reading its AI column
+ *   failed (a 401, a timeout).
+ * - `dispatch_protection_unreadable`: the clarification and approval records
+ *   that say which subjects a new run must not replace could not be read.
+ * - `ticket_phases_failed`: the phases started and something in them threw.
+ *
+ * Every reason but the first is logged at error with what threw.
  */
+type TicketPhasesSkipReason =
+  | "no_issue_tracker_connected"
+  | "issue_tracker_ambiguous"
+  | "issue_tracker_unusable"
+  | "issue_tracker_unreadable"
+  | "board_read_failed"
+  | "dispatch_protection_unreadable"
+  | "ticket_phases_failed";
+
+/**
+ * The AI column this tick, read through the tick's ONE tracker resolution (the
+ * one `createAdapters` made), or why there is none. Every tracker call and
+ * every subject key on the tick comes from `tracker`, so none of them can
+ * answer from a different resolution than the board did.
+ */
+type BoardRead =
+  | {
+      readonly ok: true;
+      readonly tracker: ConnectedIssueTracker;
+      readonly settings: TicketBoardSettings;
+      readonly ticketKeys: string[];
+    }
+  | { readonly ok: false; readonly reason: TicketPhasesSkipReason };
+
+/**
+ * What a new run on this tick must not replace and the reconciler must treat
+ * gently. Database records, not the board, so it is read whether or not a
+ * tracker is connected.
+ */
+interface DispatchProtection {
+  /** Every subject a clarification holds. Dispatch leaves these alone. */
+  readonly clarificationSubjects: ReadonlySet<string>;
+  /** Claims whose run is finished, released quietly rather than through the
+   *  orphan cancellation cascade: clarification successors and approval parks. */
+  readonly terminalSubjects: ReadonlySet<string>;
+  /** Claims a clarification is waiting on, which the reconciler retains. */
+  readonly retainedSubjects: ReadonlySet<string>;
+  /** Pending decisions and approved plans not yet dispatched. Each owns its
+   *  ticket's next path. */
+  readonly blockingApprovals: ApprovalRow[];
+}
+
 interface TicketPhases {
-  ticketPhasesRan: boolean;
-  ticketKeys: string[];
   ticketsHeld: boolean;
   started: string[];
-  cancelled: number;
-  cleaned: number;
-  releasedTriggerRecovery: { attempted: number; started: number; errors: number };
-  polledTriggerRecovery: Awaited<ReturnType<typeof recoverPendingTriggers>>;
-  manualDispatchRecovery: {
-    scanned: number;
-    started: number;
-    recovering: number;
-    failed: number;
-  };
   approvalRecovery: Awaited<ReturnType<typeof recoverApprovedPlanDispatches>>;
   atCapacityQueue: { queued: number; commented: number };
 }
 
-function skippedTicketPhases(): TicketPhases {
-  return {
-    ticketPhasesRan: false,
-    ticketKeys: [],
-    ticketsHeld: false,
-    started: [],
-    cancelled: 0,
-    cleaned: 0,
-    releasedTriggerRecovery: { attempted: 0, started: 0, errors: 0 },
-    polledTriggerRecovery: { listed: 0, attempted: 0, started: 0, errors: 0 },
-    manualDispatchRecovery: { scanned: 0, started: 0, recovering: 0, failed: 0 },
-    approvalRecovery: { scanned: 0, started: 0, blocked: 0, errors: 0 },
-    atCapacityQueue: { queued: 0, commented: 0 },
-  };
+const NO_TICKET_PHASES: TicketPhases = {
+  ticketsHeld: false,
+  started: [],
+  approvalRecovery: { scanned: 0, started: 0, blocked: 0, errors: 0 },
+  atCapacityQueue: { queued: 0, commented: 0 },
+};
+
+function errorFields(error: unknown): { error: string; stack?: string } {
+  return error instanceof Error
+    ? { error: error.message, ...(error.stack ? { stack: error.stack } : {}) }
+    : { error: String(error) };
 }
 
 /**
@@ -233,12 +286,10 @@ export async function runPollPass(
   loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>,
 ) {
   const adapters = await createAdapters();
-  // Best-effort, like every other housekeeping phase in this pass, and it has
-  // to be: this call sits ABOVE the ticket half, so a database blip inside it
-  // used to kill the whole tick, which is exactly the failure the containment
-  // below reports as contained. Guarded here rather than moved down because
-  // expiring a clarification whose window has closed has nothing to do with a
-  // tracker, and a deployment with none should still do it.
+  // Best-effort, like every other housekeeping phase in this pass: a database
+  // blip here must not cost the phases below it. Expiring a clarification
+  // whose window has closed has nothing to do with a tracker, and a deployment
+  // with none should still do it.
   const clarificationExpiry = await expireConnectedHookClarifications().catch(
     (err) => {
       logger.warn(
@@ -249,239 +300,116 @@ export async function runPollPass(
     },
   );
 
-  /**
-   * The catalog, once per tick, and only for the phases that dispatch.
-   *
-   * A thunk rather than a value for the same reason the webhook ingresses take
-   * one: this pass is also the deployment's housekeeping, and clarification
-   * expiry, the at-capacity queue, claim release, the rate sweeps and the stall
-   * backstop have no dispatch decision to make. A catalog read that fails must
-   * cost the dispatch phases and nothing else, so the failure is caught here and
-   * every phase that needs a snapshot asks for one and skips itself without it.
-   * Memoised by the route, so this is one query however many phases ask.
-   */
+  // The catalog, once per tick, and only for the phases that dispatch. See
+  // `createRepositoryCatalogReader` for which phases ask and what they do
+  // without it.
   const catalogReader = createRepositoryCatalogReader(loadRepositoryCatalog);
   const repositoryCatalogOrNull = catalogReader.read;
 
-  /**
-   * The half of a tick that cannot happen without an issue tracker.
+  /*
+   * THE RUN PHASES, split by what each one needs.
    *
-   * Discovery, dispatch, claim reconciliation, approval recovery and the
-   * at-capacity queue all read or write tickets. Everything after this call
-   * does not: pull request check reconciliation, webhook delivery recovery,
-   * the schedule triggers, the rate and retention sweeps and the telemetry
-   * snapshot are the deployment's housekeeping and are what keeps running when
-   * this half cannot.
+   * Only the ticket phases need a board: discovery, approval recovery, ticket
+   * dispatch and the at-capacity queue. Manual-dispatch recovery, claim
+   * reconciliation and the pull request trigger drains are about runs and
+   * claims, and run on every tick. No board is an answer (`BoardRead`), not a
+   * throw, so a deployment with no tracker, or with one that is failing,
+   * skips the ticket phases, says why, and does everything else. All of it
+   * used to sit in one ticket half that threw on its first line without a
+   * tracker, so on such a deployment no claim was ever released, no manual
+   * dispatch recovered and no queued pull request trigger started.
    *
-   * Which is the point. A deployment with no issue tracker connected is a
-   * legitimate state since S12, and reading the board is a database read that
-   * can fail transiently on a deployment that has one. Before this the refusal
-   * left `runPollPass` on the first line and took every phase below it with it,
-   * silently: nothing dispatched, nothing reconciled, no schedule fired, and
-   * the only sign was a cron response nobody reads.
+   * The order is the one the protections need. The protection records are read
+   * before the board, so a subject is protected for the whole snapshot. Claims
+   * are reconciled before anything dispatches, so a released owner is free for
+   * its successor, and approval recovery runs after the reconciler has cleared
+   * a reserved owner it retained for the ticket's settlement.
    */
-  async function runTicketPhases(): Promise<TicketPhases> {
-    const board = await ticketBoardSettings(settings);
-    const clarificationProtection =
-      await classifyConnectedProtectedClarificationSubjects();
-    const protectedClarificationSubjects = new Set(clarificationProtection.all);
-    // Subjects reconciled by terminal cleanup only: their run is finished and its
-    // bound claim must be released quietly, never through the orphan cancellation
-    // cascade. Clarification successors and approval parks share that shape.
-    const terminalReconciliationSubjects = new Set(
-      clarificationProtection.terminal,
-    );
-    const retainedClarificationSubjects = new Set(
-      clarificationProtection.retained,
-    );
+  const protection = await readDispatchProtection().catch((error: unknown) => {
+    logger.error(errorFields(error), "poll_dispatch_protection_failed");
+    return null;
+  });
+  const board = await readTicketBoard(adapters, settings);
 
-    // A persisted approval owns the ticket's next path. Protect both pending
-    // decisions and approved-undispatched continuations for the entire poll
-    // snapshot. Recovery runs after owner reconciliation below, so an exact
-    // reserved owner retained for Jira settlement can be cleared before retry.
-    const blockingApprovals = await listConnectedDispatchBlockingApprovals();
-    const protectedDiscoverySubjects = new Set(protectedClarificationSubjects);
-    for (const subjectKey of (
-      await ticketSubjects(blockingApprovals.map((approval) => approval.ticketKey))
-    ).values()) {
-      protectedDiscoverySubjects.add(subjectKey);
+  const manualDispatchRecovery = await recoverManualDispatchRequests(
+    adapters,
+    settings,
+    repositoryCatalogOrNull,
+  );
+
+  const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
+  const releasedTriggerSubjects = new Set<string>();
+  let claimReconciliation: "ran" | "skipped" | "failed" = "skipped";
+  let cancelled = 0;
+  let cleaned = 0;
+  // Without the protection records the reconciler cannot tell a claim a
+  // clarification is waiting on from an orphan, and would cancel it.
+  if (protection) {
+    try {
+      ({ cancelled, cleaned } = await reconcileClaims({
+        adapters,
+        settings,
+        protection,
+        aiColumnTickets: board.ok ? board.ticketKeys : null,
+        onSubjectReleased: async (subjectKey) => {
+          releasedTriggerSubjects.add(subjectKey);
+          if (releasedTriggerRecovery.started > 0) return;
+          // The claim release around this callback is housekeeping and has
+          // already happened; only the successor it could start needs the
+          // catalog.
+          const drainCatalog = await repositoryCatalogOrNull("released_trigger_drain");
+          if (!drainCatalog) return;
+          releasedTriggerRecovery.attempted++;
+          try {
+            const result = await drainOldestPendingTrigger(subjectKey, {
+              runRegistry: adapters.runRegistry,
+              maxConcurrentAgents: maxConcurrentAgents(settings),
+              repositoryCatalog: drainCatalog,
+            });
+            if (result?.result === "started") releasedTriggerRecovery.started++;
+            if (result?.result === "error") releasedTriggerRecovery.errors++;
+          } catch (error) {
+            releasedTriggerRecovery.errors++;
+            throw error;
+          }
+        },
+      }));
+      claimReconciliation = "ran";
+    } catch (error) {
+      claimReconciliation = "failed";
+      logger.error(errorFields(error), "poll_claim_reconciliation_failed");
     }
-
-    // The run that filed a plan ended when it parked the ticket outside the AI
-    // column, so its bound claim is terminal bookkeeping, not an orphan. Cancelling
-    // it retires the pending approval and strands the ticket with nobody able to
-    // approve; terminal cleanup releases the same claim quietly, which is what the
-    // approval dispatch needs to reserve.
-    for (const subjectKey of await listConnectedApprovalParkedSubjects()) {
-      terminalReconciliationSubjects.add(subjectKey);
-    }
-
-    // Durable clarification recovery owns its subject before generic AI-column
-    // discovery. Even when capacity prevents a missing successor reservation
-    // from being recreated on this tick, the answered checkpoint remains
-    // protected and cannot be replaced by a fresh ticket workflow.
-    const ticketKeys = await discoverAiColumnTickets(adapters, board);
-
-    const manualDispatchCatalog = await repositoryCatalogOrNull("manual_dispatch_recovery");
-    const manualDispatchRecovery = manualDispatchCatalog
-      ? await recoverManualDispatches({
-          adapters,
-          maxConcurrentAgents: maxConcurrentAgents(settings),
-          repositoryCatalog: manualDispatchCatalog,
-        })
-      : { scanned: 0, started: 0, recovering: 0, failed: 0 };
-    const protectedRunSubjects = new Set(retainedClarificationSubjects);
-    for (const request of await listConnectedRecoverableManualDispatches()) {
-      protectedRunSubjects.add(request.subjectKey);
-    }
-
-    const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
-    const releasedTriggerSubjects = new Set<string>();
-    const { cancelled, cleaned } = await reconcileRuns(
-      new Set(ticketKeys),
-      adapters.runRegistry,
-      adapters.issueTracker,
-      async (ticketKey, reason) => {
-        const detail =
-          reason === "inflight_claim"
-            ? "claim was cleared after the ticket left AI"
-            : "workflow run was cancelled after the ticket left AI";
-        await adapters.messaging.notifyForTicket(ticketKey, {
-          kind: "canceled",
-          reason: `${detail}.`,
-        });
-      },
-      async (subjectKey) => {
-        releasedTriggerSubjects.add(subjectKey);
-        if (releasedTriggerRecovery.started > 0) return;
-        // The claim release around this callback is housekeeping and has already
-        // happened; only the successor it could start needs the catalog.
-        const drainCatalog = await repositoryCatalogOrNull("released_trigger_drain");
-        if (!drainCatalog) return;
-        releasedTriggerRecovery.attempted++;
-        try {
-          const result = await drainOldestPendingTrigger(subjectKey, {
-            runRegistry: adapters.runRegistry,
-            maxConcurrentAgents: maxConcurrentAgents(settings),
-            repositoryCatalog: drainCatalog,
-          });
-          if (result?.result === "started") releasedTriggerRecovery.started++;
-          if (result?.result === "error") releasedTriggerRecovery.errors++;
-        } catch (error) {
-          releasedTriggerRecovery.errors++;
-          throw error;
-        }
-      },
-      protectedRunSubjects,
-      undefined,
-      terminalReconciliationSubjects,
-      retireClarificationForGoneTicket,
-      settings,
-    );
-
-    const polledTriggerRecovery = await recoverPendingTriggers(
-      adapters,
-      releasedTriggerSubjects,
-      releasedTriggerRecovery.started === 0,
-      settings,
-      await repositoryCatalogOrNull("pending_trigger_recovery"),
-    );
-    const approvalRecovery = await recoverApprovedPlanDispatches(
-      blockingApprovals,
-      adapters,
-      settings,
-    );
-    // Ticket dispatch consults the same reader the recovery phases do, and for a
-    // worse failure than theirs: a run started on a tick whose catalog cannot be
-    // read does not fail here, it fails INSIDE the workflow, in
-    // `loadRunStartSettingsStep`, and the ticket gets a raw database error in
-    // front of whoever moved it. Held instead. Nothing is claimed, the ticket
-    // stays in the AI column, and the next tick dispatches it.
-    //
-    // Asked only when there is something to dispatch, so a quiet tick still
-    // reports `not_needed` rather than touching the table to decide nothing.
-    const dispatchCatalog =
-      ticketKeys.length === 0 ? null : await repositoryCatalogOrNull("ticket_dispatch");
-    const ticketsHeld = ticketKeys.length > 0 && dispatchCatalog === null;
-    const dispatchOutcome: DispatchOutcome = ticketsHeld
-      ? { started: [], atCapacity: [] }
-      : await dispatchDiscoveredTickets(
-          ticketKeys,
-          adapters,
-          protectedDiscoverySubjects,
-          settings,
-        );
-    const started = dispatchOutcome.started;
-
-    // Surface every at-capacity refusal on the ticket: queue each refused ticket
-    // and post a Jira comment per at-capacity episode (at-least-once, effectively
-    // once; retried on Jira failure; row dropped when the ticket dispatches or
-    // leaves the AI column). Best-effort — a failed queue pass must not fail the
-    // poll.
-    const atCapacityQueue = await reconcileAtCapacityQueue({
-      issueTracker: adapters.issueTracker,
-      atCapacityKeys: dispatchOutcome.atCapacity,
-      startedKeys: dispatchOutcome.started,
-      currentTicketKeys: ticketKeys,
-    }).catch((err) => {
-      logger.warn(
-        { err: (err as Error).message },
-        "poll_at_capacity_queue_failed",
-      );
-      return { queued: 0, commented: 0 };
-    });
-    return {
-      ticketPhasesRan: true,
-      ticketKeys,
-      ticketsHeld,
-      started,
-      cancelled,
-      cleaned,
-      releasedTriggerRecovery,
-      polledTriggerRecovery,
-      manualDispatchRecovery,
-      approvalRecovery,
-      atCapacityQueue,
-    };
   }
 
-  // The WHOLE half, not the board read inside it. Reading the board is only
-  // the first tracker call the half makes; `adapters.issueTracker` is another,
-  // and its resolution was frozen when the adapters were built, above. A read
-  // that failed there and succeeded here, or a tracker connected between the
-  // two, threw from the middle of the half and took the housekeeping below
-  // with it, which is the failure the comment on `runTicketPhases` promises
-  // does not happen. Warn, not error: on a deployment that never connected a
-  // tracker this is the normal shape of every tick, and an error line per
-  // minute would bury the ticks where something is actually wrong.
-  // The WHOLE half, not the board read inside it. Reading the board is only
-  // the first tracker call the half makes; `adapters.issueTracker` is another,
-  // and its resolution was frozen when the adapters were built, above. A read
-  // that failed there and succeeded here, or a tracker connected between the
-  // two, threw from the middle of the half and took the housekeeping below
-  // with it, which is the failure the comment on `runTicketPhases` promises
-  // does not happen. Warn, not error: on a deployment that never connected a
-  // tracker this is the normal shape of every tick, and an error line per
-  // minute would bury the ticks where something is actually wrong.
-  const ticket = await runTicketPhases().catch((error): TicketPhases => {
-    logger.warn(
-      { err: error instanceof Error ? error.message : String(error) },
-      "poll_ticket_phases_skipped",
-    );
-    return skippedTicketPhases();
-  });
-  const {
-    ticketKeys,
-    ticketsHeld,
-    started,
-    cancelled,
-    cleaned,
-    releasedTriggerRecovery,
-    polledTriggerRecovery,
-    manualDispatchRecovery,
-    approvalRecovery,
-    atCapacityQueue,
-  } = ticket;
+  const polledTriggerRecovery = await recoverPendingTriggers(
+    adapters,
+    releasedTriggerSubjects,
+    releasedTriggerRecovery.started === 0,
+    settings,
+    await repositoryCatalogOrNull("pending_trigger_recovery"),
+  );
+
+  let ticketPhasesReason: TicketPhasesSkipReason | null = board.ok ? null : board.reason;
+  let ticket = NO_TICKET_PHASES;
+  if (board.ok && !protection) {
+    ticketPhasesReason = "dispatch_protection_unreadable";
+    logTicketPhasesSkipped(ticketPhasesReason, {});
+  } else if (board.ok && protection) {
+    try {
+      ticket = await runTicketPhases({
+        board,
+        protection,
+        adapters,
+        settings,
+        readCatalog: repositoryCatalogOrNull,
+      });
+    } catch (error) {
+      ticketPhasesReason = "ticket_phases_failed";
+      logTicketPhasesSkipped(ticketPhasesReason, errorFields(error));
+    }
+  }
+  const ticketKeys = board.ok ? board.ticketKeys : [];
+  const { ticketsHeld, started, approvalRecovery, atCapacityQueue } = ticket;
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
@@ -599,7 +527,9 @@ export async function runPollPass(
   logger.info(
     {
       catalogRead: catalogReader.outcome(),
-      ticketPhases: ticket.ticketPhasesRan ? "ran" : "skipped",
+      ticketPhases: ticketPhasesReason === null ? "ran" : "skipped",
+      ticketPhasesReason,
+      claimReconciliation,
       discovered: ticketKeys.length,
       started: started.length,
       ticketsHeld: ticketsHeld ? ticketKeys.length : 0,
@@ -617,8 +547,13 @@ export async function runPollPass(
     catalogRead: catalogReader.outcome(),
     // Said out loud for the same reason as `catalogRead`: zero discovered and
     // zero started is what a quiet tick reports too, and a deployment whose
-    // ticket half never ran must not read as a quiet one.
-    ticketPhases: ticket.ticketPhasesRan ? ("ran" as const) : ("skipped" as const),
+    // ticket phases never ran must not read as a quiet one. The reason says
+    // whether that is the deployment's configuration or something failing.
+    ticketPhases: ticketPhasesReason === null ? ("ran" as const) : ("skipped" as const),
+    ticketPhasesReason,
+    // "skipped" when the protection records could not be read, "failed" when
+    // the reconciler threw. Either way no claim was released on this tick.
+    claimReconciliation,
     discovered: ticketKeys.length,
     started: started.length,
     atCapacityQueue,
@@ -644,7 +579,7 @@ export async function runPollPass(
 }
 
 async function evaluateScheduleTriggers(
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
+  adapters: Adapters,
   settings: SettingsSnapshot,
 ): Promise<ReturnType<typeof runScheduleTriggerPass>> {
   return await runScheduleTriggerPass(
@@ -683,7 +618,7 @@ async function evaluateScheduleTriggers(
 }
 
 async function recoverPendingWebhookDeliveries(
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
+  adapters: Adapters,
   settings: SettingsSnapshot,
 ): Promise<{ attempted: number; started: number; errors: number }> {
   try {
@@ -705,7 +640,7 @@ async function recoverPendingWebhookDeliveries(
 }
 
 async function recoverPendingTriggers(
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
+  adapters: Adapters,
   releasedSubjects: ReadonlySet<string>,
   mayStart: boolean,
   settings: SettingsSnapshot,
@@ -758,9 +693,206 @@ async function recoverPendingTriggers(
   return metrics;
 }
 
+async function readDispatchProtection(): Promise<DispatchProtection> {
+  const clarifications = await classifyConnectedProtectedClarificationSubjects();
+  // A persisted approval owns the ticket's next path, pending or approved and
+  // not yet dispatched, for the entire poll snapshot.
+  const blockingApprovals = await listConnectedDispatchBlockingApprovals();
+  // The run that filed a plan ended when it parked the ticket outside the AI
+  // column, so its bound claim is terminal bookkeeping, not an orphan.
+  // Cancelling it retires the pending approval and strands the ticket with
+  // nobody able to approve; terminal cleanup releases the same claim quietly,
+  // which is what the approval dispatch needs to reserve.
+  const terminalSubjects = new Set(clarifications.terminal);
+  for (const subjectKey of await listConnectedApprovalParkedSubjects()) {
+    terminalSubjects.add(subjectKey);
+  }
+  return {
+    clarificationSubjects: new Set(clarifications.all),
+    terminalSubjects,
+    retainedSubjects: new Set(clarifications.retained),
+    blockingApprovals,
+  };
+}
+
+function logTicketPhasesSkipped(
+  reason: TicketPhasesSkipReason,
+  fields: Record<string, unknown>,
+): void {
+  if (reason === "no_issue_tracker_connected") {
+    logger.info({ reason, ...fields }, "poll_ticket_phases_skipped");
+  } else {
+    logger.error({ reason, ...fields }, "poll_ticket_phases_skipped");
+  }
+}
+
+const TRACKER_SKIP_REASONS: Record<IssueTrackerRefusal, TicketPhasesSkipReason> = {
+  not_connected: "no_issue_tracker_connected",
+  ambiguous: "issue_tracker_ambiguous",
+  unusable: "issue_tracker_unusable",
+  unreadable: "issue_tracker_unreadable",
+};
+
+/**
+ * The board and the tickets in its AI column, or why there are none. Never
+ * throws: a missing tracker is the deployment's configuration and a failed
+ * column read is the tracker's failure, and each is an answer the pass acts on
+ * by skipping the ticket phases and nothing else.
+ */
+async function readTicketBoard(
+  adapters: Adapters,
+  settings: SettingsSnapshot,
+): Promise<BoardRead> {
+  const tracker = adapters.issueTrackerResolution;
+  if (!tracker.ok) {
+    const reason = TRACKER_SKIP_REASONS[tracker.refusal];
+    logTicketPhasesSkipped(reason, { detail: tracker.reason });
+    return { ok: false, reason };
+  }
+  try {
+    const board = await ticketBoardOf(tracker, settings);
+    return {
+      ok: true,
+      tracker,
+      settings: board,
+      ticketKeys: await discoverAiColumnTickets(tracker.adapter, board),
+    };
+  } catch (error) {
+    logTicketPhasesSkipped("board_read_failed", errorFields(error));
+    return { ok: false, reason: "board_read_failed" };
+  }
+}
+
+async function recoverManualDispatchRequests(
+  adapters: Adapters,
+  settings: SettingsSnapshot,
+  readCatalog: (phase: string) => Promise<RepositoryCatalogSnapshot | null>,
+): Promise<Awaited<ReturnType<typeof recoverManualDispatches>>> {
+  const none = { scanned: 0, started: 0, recovering: 0, failed: 0 };
+  const catalog = await readCatalog("manual_dispatch_recovery");
+  if (!catalog) return none;
+  return await recoverManualDispatches({
+    adapters,
+    maxConcurrentAgents: maxConcurrentAgents(settings),
+    repositoryCatalog: catalog,
+  }).catch((error: unknown) => {
+    logger.error(errorFields(error), "poll_manual_dispatch_recovery_failed");
+    return none;
+  });
+}
+
+/**
+ * Every claim, reconciled. With no AI column snapshot (`aiColumnTickets` null)
+ * the reconciler retains the claims that follow a ticket's column and settles
+ * the rest; see "no board" in `reconcileRuns`.
+ */
+async function reconcileClaims(input: {
+  adapters: Adapters;
+  settings: SettingsSnapshot;
+  protection: DispatchProtection;
+  aiColumnTickets: readonly string[] | null;
+  onSubjectReleased: (subjectKey: string) => Promise<void>;
+}): Promise<{ cancelled: number; cleaned: number }> {
+  const { adapters, settings, protection } = input;
+  // A claim a clarification is waiting on, or one a manual dispatch is still
+  // recovering, belongs to that owner and is not an orphan. Read after manual
+  // recovery ran, so a request it just settled is no longer protected.
+  const protectedRunSubjects = new Set(protection.retainedSubjects);
+  for (const request of await listConnectedRecoverableManualDispatches()) {
+    protectedRunSubjects.add(request.subjectKey);
+  }
+  // The tick's one resolution, the same value `readTicketBoard` read the
+  // column through, so the reconciler's adapter and board come from one tracker.
+  const tracker = adapters.issueTrackerResolution;
+  return await reconcileRuns(
+    input.aiColumnTickets === null ? null : new Set(input.aiColumnTickets),
+    adapters.runRegistry,
+    tracker.ok ? tracker : undefined,
+    async (ticketKey, reason) => {
+      const detail =
+        reason === "inflight_claim"
+          ? "claim was cleared after the ticket left AI"
+          : "workflow run was cancelled after the ticket left AI";
+      await adapters.messaging.notifyForTicket(ticketKey, {
+        kind: "canceled",
+        reason: `${detail}.`,
+      });
+    },
+    input.onSubjectReleased,
+    protectedRunSubjects,
+    undefined,
+    protection.terminalSubjects,
+    retireClarificationForGoneTicket,
+    settings,
+  );
+}
+
+/**
+ * The phases that need a board: approval recovery, ticket dispatch and the
+ * at-capacity queue. Every tracker call here goes through the board's own
+ * resolution.
+ */
+async function runTicketPhases(input: {
+  board: Extract<BoardRead, { ok: true }>;
+  protection: DispatchProtection;
+  adapters: Adapters;
+  settings: SettingsSnapshot;
+  readCatalog: (phase: string) => Promise<RepositoryCatalogSnapshot | null>;
+}): Promise<TicketPhases> {
+  const { board, protection, adapters, settings } = input;
+  const approvalRecovery = await recoverApprovedPlanDispatches(
+    protection.blockingApprovals,
+    adapters,
+    board.tracker.adapter,
+    settings,
+  );
+
+  // Ticket dispatch consults the same reader the recovery phases do, and for a
+  // worse failure than theirs: a run started on a tick whose catalog cannot be
+  // read does not fail here, it fails INSIDE the workflow, in
+  // `loadRunStartSettingsStep`, and the ticket gets a raw database error in
+  // front of whoever moved it. Held instead. Nothing is claimed, the ticket
+  // stays in the AI column, and the next tick dispatches it.
+  //
+  // Asked only when there is something to dispatch, so a quiet tick still
+  // reports `not_needed` rather than touching the table to decide nothing.
+  const dispatchCatalog =
+    board.ticketKeys.length === 0 ? null : await input.readCatalog("ticket_dispatch");
+  const ticketsHeld = board.ticketKeys.length > 0 && dispatchCatalog === null;
+
+  // Durable clarification recovery and a persisted approval each own their
+  // subject before generic AI-column discovery does: even when capacity keeps
+  // a missing successor from being reserved on this tick, the subject is not
+  // replaced by a fresh ticket workflow.
+  const protectedSubjects = new Set(protection.clarificationSubjects);
+  for (const approval of protection.blockingApprovals) {
+    protectedSubjects.add(ticketSubjectKey(board.tracker.id, approval.ticketKey));
+  }
+  const dispatchOutcome: DispatchOutcome = ticketsHeld
+    ? { started: [], atCapacity: [] }
+    : await dispatchDiscoveredTickets(board, adapters, protectedSubjects, settings);
+
+  // Surface every at-capacity refusal on the ticket: queue each refused ticket
+  // and post a comment per at-capacity episode (at-least-once, effectively
+  // once; retried on a tracker failure; row dropped when the ticket dispatches
+  // or leaves the AI column). Best-effort: a failed queue pass must not fail
+  // the poll.
+  const atCapacityQueue = await reconcileAtCapacityQueue({
+    issueTracker: board.tracker.adapter,
+    atCapacityKeys: dispatchOutcome.atCapacity,
+    startedKeys: dispatchOutcome.started,
+    currentTicketKeys: board.ticketKeys,
+  }).catch((err) => {
+    logger.warn({ err: (err as Error).message }, "poll_at_capacity_queue_failed");
+    return { queued: 0, commented: 0 };
+  });
+  return { ticketsHeld, started: dispatchOutcome.started, approvalRecovery, atCapacityQueue };
+}
+
 async function recoverApprovedPlanDispatches(
   blockingApprovals: ApprovalRow[],
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
+  adapters: Adapters,
+  issueTracker: IssueTrackerAdapter,
   settings: SettingsSnapshot,
 ): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
   const approved = blockingApprovals.filter(
@@ -773,7 +905,7 @@ async function recoverApprovedPlanDispatches(
       try {
         const result = await dispatchPlanApproved({
           runRegistry: adapters.runRegistry,
-          issueTracker: adapters.issueTracker,
+          issueTracker,
           approval,
           actor: {
             id: approval.decidedById ?? "system",
@@ -812,8 +944,8 @@ async function recoverApprovedPlanDispatches(
 }
 
 async function discoverAiColumnTickets(
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
-  board: Awaited<ReturnType<typeof ticketBoardSettings>>,
+  issueTracker: IssueTrackerAdapter,
+  board: TicketBoardSettings,
 ): Promise<string[]> {
   // Core asks what it wants to know, which is "the tickets in this column",
   // and the provider builds its own query. Until S12 this line composed a JQL
@@ -821,7 +953,7 @@ async function discoverAiColumnTickets(
   // tracker that cannot parse JQL impossible to use. The stable order that
   // made the old query safe is part of the port's contract now, with the
   // reason it exists written beside it.
-  const ticketKeys = await adapters.issueTracker.ticketsInStatus(board.aiColumn);
+  const ticketKeys = await issueTracker.ticketsInStatus(board.aiColumn);
   const normalizedKeys = normalizeTicketKeys(ticketKeys, board);
 
   if (normalizedKeys.length !== ticketKeys.length) {
@@ -847,29 +979,27 @@ interface DispatchOutcome {
 }
 
 async function dispatchDiscoveredTickets(
-  ticketKeys: string[],
-  adapters: Awaited<ReturnType<typeof createAdapters>>,
+  board: Extract<BoardRead, { ok: true }>,
+  adapters: Adapters,
   protectedSubjects: ReadonlySet<string>,
   settings: SettingsSnapshot,
 ): Promise<DispatchOutcome> {
+  const { ticketKeys } = board;
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/services/dispatch/dispatch.ts caps started
   // workflows at MAX_CONCURRENT_AGENTS even when racers run concurrently,
   // so excess parallel dispatches safely return `at_capacity`.
-  // One resolution for the whole column, not one per ticket: this map is the
-  // same derivation `ticketSubject` makes, and asking per ticket inside the
-  // parallel map below read the tracker's connection once per discovered
-  // ticket.
-  const subjectKeys = await ticketSubjects(ticketKeys);
+  // The subject from the board's own resolution: the same derivation
+  // `ticketSubject` makes, without reading the tracker's connection again.
   const results = await Promise.all(
     ticketKeys.map(async (key) => {
-      if (protectedSubjects.has(subjectKeys.get(key)!)) {
+      if (protectedSubjects.has(ticketSubjectKey(board.tracker.id, key))) {
         // A protected subject may hold a suspended clarification run whose
         // answers arrived as human comments. Try to wake it (no nudging on the
         // poll: the cron JQL snapshot is not the human's commit gesture). A
         // resumed run needs no dispatch, so this always returns started:false.
         const resume = await resumeConnectedClarificationFromComments({
-          issueTracker: adapters.issueTracker,
+          issueTracker: board.tracker.adapter,
           ticketKey: key,
           allowNudge: false,
           aiColumn: settings.COLUMN_AI,
@@ -925,7 +1055,7 @@ async function dispatchDiscoveredTickets(
 
 function normalizeTicketKeys(
   ticketKeys: string[],
-  board: Awaited<ReturnType<typeof ticketBoardSettings>>,
+  board: TicketBoardSettings,
 ): string[] {
   const expectedPrefix = `${board.projectKey.trim().toUpperCase()}-`;
   const unique = new Set<string>();

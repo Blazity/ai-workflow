@@ -7,7 +7,6 @@ import {
 } from "../../memory/repo-memory.js";
 import { orgSubjectKey, repoOwner, repoSubjectKey } from "../support/subject-key.js";
 import { WORKSPACE_ROOT_DIR } from "../../sandbox/repo-workspace.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "../helpers/effective-prompt.js";
 import {
@@ -981,7 +980,7 @@ export async function distillRepoMemoryStep(
       usage = result.usage;
       providerCalled = true;
     } catch (err) {
-      log.warn({ err: redactProviderError(err) }, "repo_memory_distill_llm_failed");
+      log.warn({ err: await redactProviderError(err) }, "repo_memory_distill_llm_failed");
       return finish("llm_failed");
     }
 
@@ -1202,7 +1201,7 @@ export async function distillRepoMemoryStep(
         {
           ...bindings,
           // A driver error can echo the statement, and with it the document.
-          err: redactProviderError(err),
+          err: await redactProviderError(err),
         },
         "repo_memory_distill_failed",
       );
@@ -1601,7 +1600,7 @@ export async function captureDefaultBranchFilesStep(
       } catch (err) {
         unavailable += 1;
         log.warn(
-          { repo: key, err: redactProviderError(err) },
+          { repo: key, err: await redactProviderError(err) },
           "repo_memory_default_branch_files_failed",
         );
       } finally {
@@ -1641,7 +1640,7 @@ export async function captureDefaultBranchFilesStep(
           sandboxId: input.sandboxId,
           runId: input.runId,
           step: "captureDefaultBranchFiles",
-          err: redactProviderError(err),
+          err: await redactProviderError(err),
         },
         "repo_memory_default_branch_files_failed",
       );
@@ -2025,7 +2024,7 @@ export async function loadRepoMemorySourcesStep(
   } catch (err) {
     // Same wrapped reporting as the write path: a failed logger import here
     // would otherwise escape a step whose whole contract is that it cannot throw.
-    const reason = redactProviderError(err);
+    const reason = await redactProviderError(err);
     try {
       const { logger } = await import("../../infra/logger.js");
       logger.warn(
@@ -2371,16 +2370,28 @@ function distillOutcomeFields(result: DistillRepoMemoryResult): Record<string, u
 }
 
 /** An error from the model provider or the database driver can echo request
- * content back, so redact configured secrets, mask long opaque runs and bound
- * it before it reaches a log sink. */
-function redactProviderError(err: unknown): string {
+ * content back, so redact every secret the deployment knows, mask long opaque
+ * runs and bound it before it reaches a log sink.
+ *
+ * The set is read here, on the failure path only, so a healthy step pays
+ * nothing for it. When it cannot be read the text is withheld rather than
+ * redacted with part of the set, and the log line still says which step
+ * failed: these steps must not throw, so withholding is their fail-closed. */
+async function redactProviderError(err: unknown): Promise<string> {
+  let secrets: readonly string[];
+  try {
+    const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+    secrets = await knownSecretValues();
+  } catch {
+    return "[error text withheld: the secrets to redact it with could not be read]";
+  }
   const message = err instanceof Error ? err.message : String(err);
   // The git credential header goes first, before the length cap and before the
   // two general passes, because it is the one secret in here that neither of
   // them can see. See GIT_AUTH_HEADER_PATTERN.
   return redactConfiguredSecretsInText(
     message.replace(GIT_AUTH_HEADER_PATTERN, "[git-auth redacted]"),
-    configuredReplaySecrets(),
+    secrets,
   )
     .replace(OPAQUE_TOKEN_PATTERN, (token) => `${token.slice(0, 8)}****`)
     .slice(0, 500);

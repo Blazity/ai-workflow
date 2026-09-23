@@ -345,14 +345,39 @@ export async function snapshotClarificationSandboxStep(
     const { integrationSecretValues } = await import(
       "../../services/integrations/runtime.js"
     );
+    // What was handed to THIS sandbox, and nothing more, because the patterns
+    // below are written into it: the agent credentials the harness exports, and
+    // the secrets of the tracing integrations, which ADR-010 (decision 7) puts
+    // in a sandbox by design. Never the whole known set: every other
+    // integration's token, a GitHub App private key and the database URL were
+    // never in here, and writing them into a pattern file would hand them to
+    // whatever the agent left running. A tracing key stored in the dashboard is
+    // covered the same as one from the environment.
+    //
+    // Settings that cannot be read FAIL THE RUN, deliberately: a snapshot lives
+    // seven days and is restored into later sandboxes, so it is never taken
+    // with the tracing key unscanned. This step keeps the runtime's default
+    // retries, which ride out a blink; once they are spent the park rethrows
+    // (the snapshot call in agent-workflow.ts has no catch of its own) and the
+    // run fails. It does not park without a snapshot. The message is this
+    // failure's own, so an operator can tell a settings outage from a sandbox
+    // that refused the pattern file, and the cause rides with it.
+    let tracingSecrets: string[];
+    try {
+      tracingSecrets = await integrationSecretValues({
+        include: (manifest) => manifest.capabilities.includes("agent_tracing"),
+      });
+    } catch (error) {
+      throw new Error(
+        "clarification credential scan could not be prepared: the integration settings could not be read",
+        { cause: error },
+      );
+    }
     const credentialValues = [
       env.ANTHROPIC_API_KEY,
       env.CODEX_API_KEY,
       env.CODEX_CHATGPT_OAUTH_TOKEN,
-      // Every connected integration's, because a tracing provider's key is
-      // inside this sandbox by design and a snapshot must not carry it out.
-      // Asked for rather than listed: core no longer knows their names.
-      ...(await integrationSecretValues()),
+      ...tracingSecrets,
     ].filter(
       (value): value is string =>
         typeof value === "string" && value.length > 0,

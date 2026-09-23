@@ -25,6 +25,7 @@ import { getRequestSettingsSnapshot } from "../services/settings/index.js";
 import { getRequestRepositoryCatalogSnapshot } from "../services/repository-catalog/index.js";
 import { connectedDeploymentIntegrations } from "../services/workflow-definitions/block-contracts.js";
 import { readCapabilityOverview } from "../services/capabilities/index.js";
+import { knownSecretValues } from "../services/integrations/index.js";
 import {
   betterAuthBaseUrl,
   mcpSettings,
@@ -202,6 +203,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     // touch a database. The tools take the value.
     loadDeploymentIntegrations: () => connectedDeploymentIntegrations(),
     loadCapabilityOverview: () => readCapabilityOverview(),
+    loadKnownSecrets: () => knownSecretValues(),
     requestId,
     traceId: requestId,
     now: () => new Date(),

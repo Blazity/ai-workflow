@@ -104,6 +104,7 @@ const deps = {
   },
   loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
   loadCapabilityOverview: async () => ({ capabilities: [] }),
+  loadKnownSecrets: async () => [],
   requestId: "request_1",
   traceId: "trace_1",
   now: () => new Date("2026-08-11T12:00:00.000Z"),

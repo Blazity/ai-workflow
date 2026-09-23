@@ -5,6 +5,7 @@ import { type BlockInvocationContext, type EngineCtx } from "../blocks/support/t
 import { asRepositoryScriptsOutput, repositoryScriptCoverageNotes, REPOSITORY_SCRIPTS_ABANDONED_CLASS, REPOSITORY_SCRIPTS_BUDGET_CLASS, REPOSITORY_SCRIPTS_FAILED_CLASS, REPOSITORY_SCRIPTS_NOT_STARTED_CLASS, REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS, type RepositoryScriptsOutput } from "../blocks/support/repository-scripts-output.js";
 import { isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, type RunBudgetAttribution, type RunBudgetObservation } from "./run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { isRunControlError } from "./run-control-error.js";
 
 export function errorMessage(err: unknown): string {
@@ -122,15 +123,19 @@ export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput
   const isError = error instanceof Error;
   const name = isError ? error.name : typeof error;
   const stack = isError ? error.stack ?? "" : "";
+  // The environment's secrets only: this runs in workflow scope, which cannot
+  // read a stored connection. The step this input is handed to redacts again
+  // with every secret the deployment knows before anything is logged.
+  const secrets = environmentSecretValues();
   return {
     name,
-    message: redactDiagnosticText(isError ? error.message : String(error)).slice(
+    message: redactDiagnosticText(isError ? error.message : String(error), secrets).slice(
       0,
       PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
     ),
     label: isError ? name : "",
     stack: stack
-      ? redactDiagnosticText(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      ? redactDiagnosticText(stack, secrets).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
       : "",
   };
 }

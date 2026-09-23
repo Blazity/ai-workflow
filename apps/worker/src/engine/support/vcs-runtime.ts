@@ -15,6 +15,8 @@ import {
   type ManualDispatchPrCapableVCS,
 } from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
+import { recordedPinFor } from "./recorded-pins.js";
+import { redactingPublications, VCS_PUBLICATIONS } from "./publication-redaction.js";
 
 /**
  * The connections a run started with, as far as this caller knows them.
@@ -43,20 +45,6 @@ import type { SandboxProviderConfig } from "../../sandbox/manager.js";
  * the drain, the drain did not hold.
  */
 export type RunIntegrationPins = readonly IntegrationConnectionPin[] | undefined;
-
-/**
- * Whether this call carries pins worth comparing against current settings.
- *
- * An empty list answers no for the same reason an absent one does: there is
- * nothing in it to find this provider in, so there is no recorded connection
- * to hold the run to. See {@link RunIntegrationPins} for who arrives without
- * them.
- */
-export function hasRecordedIntegrationPins(
-  pins: RunIntegrationPins,
-): pins is readonly IntegrationConnectionPin[] {
-  return pins !== undefined && pins.length > 0;
-}
 
 export interface RepositoryVcsTarget {
   provider: VcsProviderKind;
@@ -147,18 +135,15 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
       `Version control provider ${target.provider} is not connected. Connect it on the Integrations page.`,
     );
   }
-  // No pins means nothing to hold this call to, so it proceeds against the
-  // provider as it is configured right now. That is correct for a caller that
-  // is not a run, and covered by the S10 drain for a run row written before the
-  // pins column existed. {@link RunIntegrationPins} names both and says who
-  // says so out loud.
-  if (hasRecordedIntegrationPins(target.integrationPins)) {
-    const pin = target.integrationPins.find(
-      (candidate) => candidate.integrationId === target.provider,
-    );
-    const check = pin
-      ? checkIntegrationPin(pin, state)
-      : ({ ok: false, reason: "disconnected" } as const);
+  // Only a pin the run recorded for this provider holds the call to anything
+  // (`recorded-pins.ts` is the rule). No pin proceeds against the provider as
+  // it is configured right now: a caller that is not a run, a run row written
+  // before the pins column existed ({@link RunIntegrationPins}), and a run
+  // whose recorded pins did not name this provider, which for version control
+  // is a repository it did not reach at its start.
+  const recorded = recordedPinFor(target.integrationPins, target.provider, "per_repository");
+  if (recorded.kind === "pinned") {
+    const check = checkIntegrationPin(recorded.pin, state);
     if (!check.ok) {
       throw new Error(
         `Version control provider ${usable.manifest.name} moved after this run started (${check.reason}). Start a new run.`,
@@ -177,10 +162,14 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
     ...usable.ctx,
     connection: connectionWithoutLegacyBot,
   } as unknown as IntegrationContext<IntegrationManifest>;
-  return (factory as unknown as (
+  const adapter = (factory as unknown as (
     context: IntegrationContext<IntegrationManifest>,
     repository: { repoPath: string; baseBranch: string },
   ) => VCSAdapter)(ctx, target);
+  // Every title, body, comment, review and status summary core publishes
+  // through it is redacted with the whole set of known secrets first: one of
+  // the publishing boundaries `publication-redaction.ts` lists.
+  return redactingPublications(adapter, VCS_PUBLICATIONS);
 }
 
 function lazyAdapter(resolve: () => Promise<VCSAdapter>): DeferredVcsAdapter {
@@ -407,13 +396,13 @@ export async function listVcsRepositories(options: {
   const failures: Array<{ provider: string; message: string; error: unknown }> = [];
   for (const entry of usable) {
     try {
-      const pin = options.integrationPins?.find(
-        (candidate) => candidate.integrationId === entry.manifest.id,
-      );
-      // See the skip in `resolveIntegrationAdapter`: same rule, same reasons.
-      if (hasRecordedIntegrationPins(options.integrationPins)) {
+      // The rule `resolveIntegrationAdapter` follows: only a recorded pin holds.
+      const recorded = recordedPinFor(options.integrationPins, entry.manifest.id, "per_repository");
+      if (recorded.kind === "pinned") {
         const state = resolved.states.get(entry.manifest.id);
-        const check = pin && state ? checkIntegrationPin(pin, state) : { ok: false, reason: "disconnected" } as const;
+        const check = state
+          ? checkIntegrationPin(recorded.pin, state)
+          : ({ ok: false, reason: "disconnected" } as const);
         if (!check.ok) {
           throw new Error(
             `${entry.manifest.name} moved after this run started (${check.reason}). Start a new run.`,

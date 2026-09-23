@@ -73,13 +73,6 @@ export function formatAttachmentsIndex(
   return lines.join("\n");
 }
 
-// MAX_ATTEMPTS = 3 means at most 2 sleeps between 3 tries. The spec phrases this
-// as "500 → 2000 → 5000ms" but with only 3 attempts the 5000ms delay never fires
-// (the 3rd failure exits the loop). We encode just the two delays that actually
-// run to avoid confusing dead-code.
-const MAX_ATTEMPTS = 3;
-const BACKOFFS_MS = [500, 2000];
-
 interface Downloader {
   downloadAttachment(url: string, opts?: { timeoutMs?: number }): Promise<Buffer>;
 }
@@ -89,7 +82,18 @@ interface AttachmentsLogger {
   warn: (obj: unknown, msg?: string) => void;
 }
 
-export async function fetchAttachmentsWithRetry(
+/**
+ * Download what the ticket carries into memory, within the caps, one tracker
+ * call per attachment.
+ *
+ * No retry here. The tracker's adapter makes its requests through `ctx.http`,
+ * which already retries a read on the failures that say nothing about it (a
+ * network error, a 5xx, a rate limit) inside the operator's per-attachment
+ * deadline. A loop here on top multiplied that: up to nine requests for one
+ * file, and, for a provider that stays down or a download that times out, the
+ * operator's deadline spent three times over inside one step.
+ */
+export async function downloadTicketAttachments(
   downloader: Downloader,
   attachments: TicketAttachment[],
   caps: AttachmentCaps,
@@ -113,7 +117,7 @@ export async function fetchAttachmentsWithRetry(
       result.push(skip(att, "skipped: per-file size cap", log));
       continue;
     }
-    // Cap: total size — once exceeded, all remaining are skipped.
+    // Cap: total size. Once exceeded, all remaining are skipped.
     if (totalCapTripped || bytesCommitted + att.size > caps.maxTotalSizeBytes) {
       totalCapTripped = true;
       result.push(skip(att, "skipped: total size cap", log));
@@ -128,63 +132,36 @@ export async function fetchAttachmentsWithRetry(
     const safeName = resolveFilename(att, usedFilenames);
     usedFilenames.add(safeName);
 
-    let attempts = 0;
-    let lastError: Error | undefined;
-    while (attempts < MAX_ATTEMPTS) {
-      attempts++;
-      try {
-        const content = await downloader.downloadAttachment(contentUrl, {
-          timeoutMs: caps.downloadTimeoutMs,
-        });
-        bytesCommitted += att.size;
-        log.info(
-          {
-            filename: safeName,
-            originalFilename: att.filename,
-            mimeType: att.mimeType,
-            size: att.size,
-            attempts,
-          },
-          "attachment downloaded",
-        );
-        result.push({
+    try {
+      const content = await downloader.downloadAttachment(contentUrl, {
+        timeoutMs: caps.downloadTimeoutMs,
+      });
+      bytesCommitted += att.size;
+      log.info(
+        {
           filename: safeName,
           originalFilename: att.filename,
           mimeType: att.mimeType,
           size: att.size,
-          content,
-        });
-        lastError = undefined;
-        break;
-      } catch (err) {
-        lastError = err as Error;
-        if (!isRetryable(lastError) || attempts >= MAX_ATTEMPTS) break;
-        // Known simplification: we do not honor `Retry-After` on 429 responses.
-        // The `Downloader` interface returns only Buffer, so response headers are
-        // not surfaced. Static backoff is sufficient for v1; revisit if Atlassian
-        // rate-limiting causes repeated retry storms.
-        const delay = Math.min(BACKOFFS_MS[attempts - 1] ?? 5000, 10_000);
-        await new Promise((r) => {
-          setTimeout(r, delay);
-        });
-      }
-    }
-
-    if (lastError) {
-      log.warn(
-        {
-          filename: att.filename,
-          reason: lastError.message,
-          attempts,
         },
-        "attachment failed",
+        "attachment downloaded",
       );
       result.push({
         filename: safeName,
         originalFilename: att.filename,
         mimeType: att.mimeType,
         size: att.size,
-        failed: { reason: shortReason(lastError.message), attempts },
+        content,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn({ filename: att.filename, reason: message }, "attachment failed");
+      result.push({
+        filename: safeName,
+        originalFilename: att.filename,
+        mimeType: att.mimeType,
+        size: att.size,
+        failed: { reason: shortReason(message), attempts: 1 },
       });
     }
   }
@@ -216,19 +193,6 @@ function resolveFilename(
   const dot = safe.lastIndexOf(".");
   if (dot <= 0) return `${safe}-${att.id}`;
   return `${safe.slice(0, dot)}-${att.id}${safe.slice(dot)}`;
-}
-
-function isRetryable(err: Error): boolean {
-  const msg = err.message ?? "";
-  const status5xxPattern =
-    /\b(?:status(?:Code)?\s*[:=]?\s*5\d\d|HTTP\/\d(?:\.\d)?\s+5\d\d)\b/i;
-  const status429Pattern =
-    /\b(?:status(?:Code)?\s*[:=]?\s*429|HTTP\/\d(?:\.\d)?\s+429)\b/i;
-  if (err.name === "AbortError") return true;
-  if (/ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN/i.test(msg)) return true;
-  if (status5xxPattern.test(msg)) return true;
-  if (status429Pattern.test(msg)) return true;
-  return false;
 }
 
 function shortReason(msg: string): string {

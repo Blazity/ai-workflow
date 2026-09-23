@@ -27,7 +27,7 @@ import {
 } from "@shared/agent-visibility";
 import type { Db } from "../db/types.js";
 import {
-  configuredVisibilityDetector,
+  knownSecretsVisibilityDetector,
   redactForStorage,
   VisibilityCaptureRefusal,
 } from "./visibility-detector.js";
@@ -222,7 +222,7 @@ export async function recordAgentBriefing(
       return written === "conflict" ? { outcome: "conflict" } : { outcome: "capture_disabled" };
     }
 
-    const sanitize = options.sanitize ?? configuredVisibilityDetector();
+    const sanitize = options.sanitize ?? (await knownSecretsVisibilityDetector());
     let built: { index: AgentBriefingIndex; texts: { sha256: string; text: string }[] };
     try {
       built = await buildAgentBriefing(input, { sanitize });
@@ -314,7 +314,10 @@ export async function recordSkippedAgentBriefing(
   // sends, and no reason is kept for a send nobody asked to keep.
   const disabled = options.capture === false;
   try {
-    const reason = safeDetail(skip.reason, options.sanitize ?? configuredVisibilityDetector());
+    const reason = safeDetail(
+      skip.reason,
+      options.sanitize ?? (await knownSecretsVisibilityDetector()),
+    );
     const written = await marker(options, identity, {
       capture: disabled ? "capture_disabled" : "capture_skipped",
       detail: disabled ? null : reason,

@@ -1,13 +1,11 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { integrationManifests } from "@integrations/registry";
-import { configuredReplaySecrets } from "./configured-secrets.js";
+import { environmentSecretValues } from "./configured-secrets.js";
 
-describe("configuredReplaySecrets", () => {
+describe("environmentSecretValues", () => {
   it("includes every non-empty secret-named value, including short values", () => {
     expect(
-      configuredReplaySecrets({
+      environmentSecretValues({
         API_TOKEN: "abc",
         DATABASE_PASSWORD: "pw",
         OAUTH_SECRET: "x",
@@ -22,7 +20,7 @@ describe("configuredReplaySecrets", () => {
   // the secret words.
   it("includes the database connection strings and the webhook trigger encryption key", () => {
     expect(
-      configuredReplaySecrets({
+      environmentSecretValues({
         DATABASE_URL: "postgres://app:pw1@db.example/main",
         DATABASE_URL_UNPOOLED: "postgres://app:pw2@db.example/main",
         POSTGRES_URL: "postgres://app:pw3@db.example/main",
@@ -39,37 +37,34 @@ describe("configuredReplaySecrets", () => {
     ]);
   });
 
-  // Red when: a credential the MCP result sanitizer redacts at serve time
-  // (`configuredSecretValues` in services/settings/runtime-settings.ts) is not
-  // a configured secret here, so a briefing could store a value MCP then
-  // rewrites, and the dashboard and MCP would show two texts. Read from that
-  // function's source rather than from a list copied beside it: a twentieth
-  // secret added there is exactly the case a copied list cannot catch.
-  it("covers every credential the MCP result sanitizer redacts", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("../services/settings/runtime-settings.ts", import.meta.url)),
-      "utf8",
-    );
-    const start = source.indexOf("export function configuredSecretValues");
-    expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf("\n}", start));
-    // Two halves since integrations became packages: the platform credentials
-    // this file names outright, and every secret field an integration manifest
-    // declares, which the sanitizer spreads in. Reading both from source is the
-    // point: a secret added to either half is exactly what a list copied beside
-    // this test cannot catch.
-    const mcpSecretNames = [
-      ...[...body.matchAll(/env\.([A-Z][A-Z0-9_]*)/g)].map((match) => match[1]!),
+  // Red when: a platform credential or an integration's environment-sourced
+  // secret is not caught by the environment rule. Workflow scope has only this
+  // half of the known set, so a name the rule misses is a secret printed into
+  // a replay before any step can catch it. The platform names are the ones the
+  // MCP sanitizer used to list by hand; the integration names are read from
+  // the manifests, so a new integration's secret is covered the day it ships.
+  it("covers every platform credential and every integration secret variable", () => {
+    const names = [
+      "ANTHROPIC_API_KEY",
+      "CODEX_API_KEY",
+      "CODEX_CHATGPT_OAUTH_TOKEN",
+      "VERCEL_TOKEN",
+      "CRON_SECRET",
+      "WEBHOOK_TRIGGER_ENCRYPTION_KEY",
+      "BETTER_AUTH_SECRET",
+      "SSO_CLIENT_SECRET",
+      "RESEND_API_KEY",
+      "RESEND_WEBHOOK_SECRET",
+      "INTEGRATION_SECRETS_KEY",
       ...integrationManifests.flatMap((manifest) =>
         manifest.connection.fields.filter((field) => field.secret).map((field) => field.env),
       ),
     ];
-    expect(body).toContain("integrationManifests");
-    expect(mcpSecretNames.length).toBeGreaterThanOrEqual(19);
+    expect(names.length).toBeGreaterThan(11);
 
-    const environment = Object.fromEntries(mcpSecretNames.map((name) => [name, `value-of-${name}`]));
-    expect(configuredReplaySecrets(environment).sort()).toEqual(
-      mcpSecretNames.map((name) => `value-of-${name}`).sort(),
+    const environment = Object.fromEntries(names.map((name) => [name, `value-of-${name}`]));
+    expect(environmentSecretValues(environment).sort()).toEqual(
+      names.map((name) => `value-of-${name}`).sort(),
     );
   });
 });

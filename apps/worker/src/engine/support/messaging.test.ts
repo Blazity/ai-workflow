@@ -15,8 +15,11 @@ import {
 } from "../../test-support/issue-tracker.js";
 
 const resolveUsableIntegrations = vi.fn();
+/** Every secret the deployment knows, as the source hands it over. */
+const knownSecretValues = vi.fn(async (): Promise<string[]> => []);
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  knownSecretValues,
   // The comparison itself is the real one: a mocked pin check would prove that
   // this module calls something, not that a moved provider is refused.
   checkIntegrationPin: (
@@ -135,6 +138,46 @@ describe("messagingSender", () => {
       "!12",
       "#7",
     ]);
+  });
+
+  // Red when: the sender hands the provider the reason workflow scope built,
+  // which only the environment's secrets were taken out of. A tracing key an
+  // admin stored in the dashboard, echoed by an agent, reached the channel in
+  // the clear while the ticket showed it redacted.
+  it("takes every secret the deployment knows out of what it sends", async () => {
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readable(provider("Test Chat", { notifyForTicket }));
+    knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    await messagingSender().notifyForTicket("AWT-42", {
+      kind: "failed",
+      reason: "the agent printed plainvalue4471tracer and stopped",
+    });
+
+    const sent = notifyForTicket.mock.calls[0]![1] as { reason: string };
+    expect(sent.reason).not.toContain("plainvalue4471tracer");
+    expect(sent.reason).toContain("the agent printed");
+  });
+
+  it("sends nothing, and says so, when the secrets to redact with cannot be read", async () => {
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readable(provider("Test Chat", { notifyForTicket }));
+    knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const delivery = await messagingSender().notifyForTicket("AWT-42", {
+      kind: "failed",
+      reason: "the agent printed something",
+    });
+
+    expect(delivery).toEqual({
+      delivered: false,
+      reason: "the secrets to redact this notification with could not be read, so it was not sent",
+    });
+    expect(notifyForTicket).not.toHaveBeenCalled();
   });
 
   it("still sends a message about a ticket when no tracker is connected", async () => {

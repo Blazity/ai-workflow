@@ -29,6 +29,7 @@ import type {
   IntegrationUnavailableReason,
 } from "@shared/contracts";
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
+import { recordedPinFor } from "./recorded-pins.js";
 import type {
   IntegrationManifest,
   MemoryAdapter,
@@ -211,17 +212,17 @@ export async function activeMemory(
       });
     }
 
-    if (pins && pins.length > 0) {
+    // An engine the run's pins do not name was connected after the run
+    // started, and serving it would move where a run in flight remembers
+    // things, mid-run (`recorded-pins.ts` is the rule).
+    const recorded = recordedPinFor(pins, only.manifest.id, "one_per_deployment");
+    if (recorded.kind !== "not_pinned") {
       const { checkIntegrationPin } = await import("../../services/integrations/runtime.js");
-      const pin = pins.find((candidate) => candidate.integrationId === only.manifest.id);
       const state = resolved.states.get(only.manifest.id);
       const check =
-        pin && state
-          ? checkIntegrationPin(pin, state)
-          : // This run pinned no memory provider and one is connected now, so
-            // it was connected after the run started. Serving it would move
-            // where a run in flight remembers things, mid-run.
-            ({ ok: false, reason: "disconnected" } as const);
+        recorded.kind === "pinned" && state
+          ? checkIntegrationPin(recorded.pin, state)
+          : ({ ok: false, reason: "disconnected" } as const);
       if (!check.ok) {
         return refusing({
           code: "moved",

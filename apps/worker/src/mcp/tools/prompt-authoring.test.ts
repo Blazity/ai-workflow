@@ -17,7 +17,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 
 import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -29,6 +28,7 @@ import {
 import { BUILT_IN_PROMPT_SLUG_BY_NAME } from "@shared/prompts";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerPromptAuthoringTools } from "./prompt-authoring.js";
 
 const ORG_ID = "org-execute";
@@ -138,7 +138,7 @@ async function connectedClient(actor: Partial<McpActorContext> = { scopes: WRITE
     server,
     depsFor(db, () => now, {
       actor: actorFor(actor),
-      adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+      adapters: adaptersFor("not_connected", { messaging: { notifyForTicket } }),
     }),
   );
   const client = new Client({ name: "prompt-authoring-test-client", version: "1.0.0" });

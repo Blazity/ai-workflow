@@ -55,7 +55,6 @@ Object.assign(process.env, {
 });
 
 import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -67,6 +66,7 @@ import {
 } from "../../db/schema.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import {
   activatedRepositoryCatalog,
   unactivatedRepositoryCatalog,
@@ -237,7 +237,7 @@ async function connectedClient(
   const server = new McpServer({ name: "workflow-authoring-test", version: "0.1.0" });
   const toolDeps = depsFor(db, () => now, {
     actor: actorFor(actor),
-    adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+    adapters: adaptersFor("not_connected", { messaging: { notifyForTicket } }),
     loadRepositoryCatalog,
   });
   registerWorkflowAuthoringTools(server, toolDeps);
