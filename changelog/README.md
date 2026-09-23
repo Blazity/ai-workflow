@@ -22,7 +22,8 @@ frontmatter, no heading:
 A change that has no user-visible effect (a refactor, a CI change, a test, a
 documentation move) gets no entry at all. Apply the label `changelog: skip` to
 the pull request instead; a completeness check in CI otherwise fails a pull
-request that touches `apps/**` or `packages/**` without either.
+request that touches `apps/**`, `packages/**` or `integrations/**` without
+either.
 
 That check counts an entry only when the entry reaches a reader. A file the
 pull request deletes is not an entry it adds, and a file that yields no bullet
