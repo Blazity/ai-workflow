@@ -36,7 +36,11 @@
  *   also takes them out of every `rendering` you recall before it reaches a
  *   prompt or a workspace, so a value you stored before it became a known
  *   secret goes no further; `entries` it hands on as you gave them, because
- *   a run quotes one back to retract it.
+ *   a run quotes one back to retract it. Two silences follow, by design: the
+ *   set is read once per step, so a secret added in the middle of a step is
+ *   taken out from the next step on; and because `entries` stay as stored, a
+ *   value stored before it became a known secret still reaches the model that
+ *   distils, which is how a run can name that entry to retract it.
  * - Size in a prompt. Core cuts what it injects to `MEMORY_PROMPT_BUDGET_BYTES`
  *   per scope and a notebook to `MEMORY_NOTEBOOK_MAX_BYTES`, with a marker,
  *   whatever you return.
