@@ -6,11 +6,16 @@ import type {
   SystemHealthResponse,
 } from "@shared/contracts";
 
+import { useSyncExternalStore } from "react";
+
 import { CkChip, type ChipTone } from "@/components/ui";
 import {
   buildSetupOverview,
+  scanAgeLine,
   type SetupOverviewTone,
 } from "@/lib/settings/overview";
+
+const subscribeNever = () => () => {};
 
 const TONES: Record<SetupOverviewTone, ChipTone> = {
   ok: "success",
@@ -47,6 +52,10 @@ export function SetupOverview({
   emptyStoredNote?: string;
 }) {
   const overview = buildSetupOverview({ settings, scan, scanReadable, catalogState });
+  // The server cannot know the browser's clock, so staleness is decided once
+  // the page is in the browser; before that the line says only when.
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
+  const age = scanReadable ? scanAgeLine(scan, hydrated ? Date.now() : null) : null;
 
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel">
@@ -58,6 +67,19 @@ export function SetupOverview({
           What this deployment is connected to and which behaviour is switched on.
         </p>
       </header>
+
+      {age && (
+        <p
+          role={age.stale ? "note" : undefined}
+          className={
+            age.stale
+              ? "m-0 mx-4 mt-3 rounded-sm border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[11px] text-neutral-800"
+              : "m-0 px-4 pt-3 font-body text-[11px] text-neutral-600"
+          }
+        >
+          {age.text}
+        </p>
+      )}
 
       <ul className="list-none m-0 px-4 py-2">
         {overview.rows.map((row) => (
