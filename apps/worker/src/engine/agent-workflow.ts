@@ -5144,6 +5144,12 @@ async function agentWorkflowBody(
           if (captured.withheld !== undefined) {
             reportMemoryRefusal("memory_capture_withheld", captured.withheld);
           }
+          // The prompt makes the notebook mandatory, so a run that left none
+          // is reported against the run id with every path checked, rather
+          // than looking like a run that never reached this step.
+          if (captured.absent !== undefined) {
+            reportMemoryRefusal("memory_capture_absent", captured.absent);
+          }
         }
       } catch {
         // Best effort: the step already logs, teardown must still run.

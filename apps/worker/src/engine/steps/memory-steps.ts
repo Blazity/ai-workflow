@@ -40,10 +40,10 @@ export interface WorkspaceMemoryTarget {
    * Manager-authored manifest carried on EngineCtx. Never a manifest read back
    * from the sandbox (see blocks/types.ts).
    *
-   * Both steps only handle the document at the agent's cwd (WORKSPACE_ROOT_DIR),
-   * which is where the agent writes it. The copies write-human-decisions-memory
-   * mirrors into the other write-scoped repositories are deliberately not
-   * persisted; stage 3 has to account for that if it makes them authoritative.
+   * Hydration writes the document at the agent's starting cwd
+   * (WORKSPACE_ROOT_DIR). Persist also reads every checkout the manifest names,
+   * because the agent's shell moves into a checkout to work and a relative
+   * write follows it; the newest copy wins.
    */
   workspaceManifest: WorkspaceManifest;
   runId: string;
@@ -106,6 +106,15 @@ export interface PersistWorkspaceMemoryResult {
   /** Why the agent's file was not stored over the provider's notebook, when
    *  it was not. Absent when the write went ahead or nothing was there. */
   withheld?: string;
+  /**
+   * The sentence saying the agent left no notebook, naming every path that
+   * was checked. Present only when none of them held a non-empty file.
+   *
+   * ADDED AFTER S13, absent on every result recorded before it: before it, an
+   * absent notebook returned `{ persisted: false }` and nothing else, which
+   * looked exactly like a run that never reached this step.
+   */
+  absent?: string;
 }
 
 /**
@@ -288,8 +297,10 @@ export async function hydrateWorkspaceMemoryStep(
 hydrateWorkspaceMemoryStep.maxRetries = 0;
 
 /**
- * Copies the memory document from the agent's cwd into the store at the end of
- * the run, including failed and canceled runs. Best effort: this runs inside the
+ * Copies the memory document the agent left in the workspace (at the sandbox
+ * root or inside any checkout, the newest copy) into the store at the end of
+ * the run, including failed and canceled runs. A run that left none says so,
+ * with the paths checked. Best effort: this runs inside the
  * teardown path, which must never fail because of memory.
  */
 export async function persistWorkspaceMemoryStep(
@@ -299,7 +310,6 @@ export async function persistWorkspaceMemoryStep(
   try {
     // Inside the try for the same reason as the hydration step above.
     const docPath = memoryDocPath(input.taskId);
-    const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
     const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
@@ -316,19 +326,18 @@ export async function persistWorkspaceMemoryStep(
       ...getSandboxCredentials(),
     });
 
-    // New path first; if it is absent or empty, fall back to the legacy path a
-    // run started under the pre-migration prompt wrote its increment to, so that
-    // increment is not lost at teardown. Whatever is found is handed to the
-    // provider, never written back into the workspace.
-    let file = await readMemoryFile(sandbox, absolutePath, MAX_WORKSPACE_MEMORY_BYTES);
-    if (!file || file.text.trim().length === 0) {
-      file = await readMemoryFile(
-        sandbox,
-        `${WORKSPACE_ROOT_DIR}/${legacyMemoryDocPath(input.taskId)}`,
-        MAX_WORKSPACE_MEMORY_BYTES,
-      );
+    // Every place the agent may have left it. The agent's prompt names a
+    // relative path, and the agent's shell does not stay where it started: in
+    // the discovery-promoted layout the only checkout is repos/<slug>, the
+    // agent cds into it to work, and the notebook lands there. Reading only the
+    // sandbox root lost every such notebook without a word.
+    const candidates = notebookCandidatePaths(input.workspaceManifest, input.taskId);
+    const file = await readNewestNotebook(sandbox, candidates);
+    if (!file) {
+      const absent = `the agent left no notebook for ${input.taskId}; checked ${candidates.join(", ")}`;
+      log.warn({ checkedPaths: candidates }, "memory_document_absent");
+      return { persisted: false, absent };
     }
-    if (!file || file.text.trim().length === 0) return { persisted: false };
     // Resolved after the read, so a deployment whose memory cannot be reached
     // does not pay a settings read for a workspace that had nothing to capture.
     const memory = await activeMemory();
@@ -370,7 +379,10 @@ export async function persistWorkspaceMemoryStep(
       );
       return { persisted: false, unavailable: written.detail };
     }
-    log.info({ bytes: utf8Bytes(file.text) }, "memory_document_persisted");
+    log.info(
+      { bytes: utf8Bytes(file.text), notebookPath: file.path },
+      "memory_document_persisted",
+    );
     return { persisted: true };
   } catch (err) {
     const { logger } = await import("../../infra/logger.js");
@@ -431,6 +443,79 @@ function legacyMemoryDocPath(taskId: string): string {
   // A task id may never walk out of the memory directory.
   if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
   return `${LEGACY_MEMORY_DIR}/${taskId}.md`;
+}
+
+/**
+ * Where the agent's notebook can be at teardown, in the order preferred when
+ * two copies are equally new: the sandbox root first (the agent's starting
+ * cwd, and where hydration writes), then every checkout the manifest names,
+ * each at the current path before any at the legacy one.
+ */
+function notebookCandidatePaths(
+  manifest: WorkspaceManifest,
+  taskId: string,
+): string[] {
+  const roots = [
+    WORKSPACE_ROOT_DIR,
+    ...manifest.repositories.map((repository) => repository.localPath),
+  ].filter((root, index, all) => all.indexOf(root) === index);
+  return [
+    ...roots.map((root) => `${root}/${memoryDocPath(taskId)}`),
+    ...roots.map((root) => `${root}/${legacyMemoryDocPath(taskId)}`),
+  ];
+}
+
+/**
+ * The notebook the agent wrote last, or null when no candidate holds one.
+ *
+ * Several copies are an ordinary state, not a corner: hydration writes the
+ * stored notebook at the sandbox root, and an agent working inside a checkout
+ * writes its update there. Taking the root copy would store the notebook this
+ * run started from and drop what it learned, so the newest file wins. When
+ * the modification times cannot be read, the candidate order decides.
+ */
+async function readNewestNotebook(
+  sandbox: SandboxInstance,
+  candidates: string[],
+): Promise<{ text: string; truncated: boolean; path: string } | null> {
+  const found: { text: string; truncated: boolean; path: string }[] = [];
+  for (const path of candidates) {
+    const file = await readMemoryFile(sandbox, path, MAX_WORKSPACE_MEMORY_BYTES);
+    if (file && file.text.trim().length > 0) found.push({ ...file, path });
+  }
+  if (found.length <= 1) return found[0] ?? null;
+  const mtimes = await modificationTimes(
+    sandbox,
+    found.map((file) => file.path),
+  );
+  let newest = found[0]!;
+  for (const file of found) {
+    if ((mtimes.get(file.path) ?? -Infinity) > (mtimes.get(newest.path) ?? -Infinity)) {
+      newest = file;
+    }
+  }
+  return newest;
+}
+
+/** Seconds since the epoch per path, from one `stat` call. Missing entries mean
+ * the time could not be read, never that the file is old. */
+async function modificationTimes(
+  sandbox: SandboxInstance,
+  paths: string[],
+): Promise<Map<string, number>> {
+  const times = new Map<string, number>();
+  try {
+    const result = await sandbox.runCommand("stat", ["-c", "%Y %n", "--", ...paths]);
+    for (const line of (await result.stdout()).split("\n")) {
+      const separator = line.indexOf(" ");
+      if (separator <= 0) continue;
+      const seconds = Number(line.slice(0, separator));
+      if (Number.isFinite(seconds)) times.set(line.slice(separator + 1), seconds);
+    }
+  } catch {
+    // The candidate order decides, which is what it did before copies existed.
+  }
+  return times;
 }
 
 /** PR subject keys contain slashes, so the directory to create is derived from

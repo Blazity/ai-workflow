@@ -131,10 +131,19 @@ function fakeSandbox(options: {
   lsFiles?: string;
   lsFilesExitCode?: number;
   readFileError?: Error;
+  /** Modification time in seconds per path, answered to `stat -c "%Y %n"`. */
+  mtimes?: Record<string, number>;
 } = {}) {
   const runCommand = vi.fn(async (command: string, args: string[]) => {
     if (command === "git" && args.includes("ls-files")) {
       return commandResult(options.lsFilesExitCode ?? 0, options.lsFiles ?? "");
+    }
+    if (command === "stat") {
+      const paths = args.slice(args.indexOf("--") + 1);
+      const lines = paths
+        .filter((path) => options.mtimes?.[path] !== undefined)
+        .map((path) => `${options.mtimes![path]} ${path}`);
+      return commandResult(lines.length === paths.length ? 0 : 1, lines.join("\n"));
     }
     return commandResult(0);
   });
@@ -566,12 +575,92 @@ describe("persistWorkspaceMemoryStep", () => {
     expect(stored?.bytes).toBeLessThanOrEqual(MAX_MEMORY_DOCUMENT_BYTES);
   });
 
-  it("skips a missing or empty document", async () => {
+  it("stores nothing for a missing or empty document, and says so", async () => {
     fakeSandbox({ files: { [ROOT_PATH]: "   \n" } });
-    expect(await persistWorkspaceMemoryStep(target)).toEqual({ persisted: false });
+    expect(await persistWorkspaceMemoryStep(target)).toEqual({
+      persisted: false,
+      absent: expect.stringContaining("the agent left no notebook for AIW-200"),
+    });
 
     fakeSandbox();
-    expect(await persistWorkspaceMemoryStep(target)).toEqual({ persisted: false });
+    expect(await persistWorkspaceMemoryStep(target)).toEqual({
+      persisted: false,
+      absent: expect.stringContaining("the agent left no notebook for AIW-200"),
+    });
+    expect(await countRows()).toBe(0);
+  });
+
+  it("stores a notebook the agent wrote inside the promoted checkout", async () => {
+    // Production, AWP-269 to AWP-272: repository selection promoted the
+    // discovery sandbox, so the only checkout was repos/<slug>. The agent
+    // worked from inside it and wrote the notebook relative to that cwd.
+    const inCheckout = `${PROMOTED_REPO_DIR}/${DOC_PATH}`;
+    fakeSandbox({ files: { [inCheckout]: "# notes\n- written from inside the checkout" } });
+
+    expect(
+      await persistWorkspaceMemoryStep({ ...target, workspaceManifest: promotedManifest }),
+    ).toEqual({ persisted: true });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# notes\n- written from inside the checkout",
+    );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ notebookPath: inCheckout }),
+      "memory_document_persisted",
+    );
+  });
+
+  it("stores the agent's update in the checkout over the older copy hydration left at the root", async () => {
+    // Hydration writes the stored notebook at the root; the agent read it,
+    // moved into the checkout and wrote its update there. The root copy is
+    // what the run started from, so storing it would drop this run's notes.
+    const inCheckout = `${PROMOTED_REPO_DIR}/${DOC_PATH}`;
+    fakeSandbox({
+      files: { [ROOT_PATH]: "# history", [inCheckout]: "# history\n- this run" },
+      mtimes: { [ROOT_PATH]: 1_790_000_000, [inCheckout]: 1_790_000_600 },
+    });
+
+    expect(
+      await persistWorkspaceMemoryStep({ ...target, workspaceManifest: promotedManifest }),
+    ).toEqual({ persisted: true });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# history\n- this run",
+    );
+  });
+
+  it("keeps the root copy when it is the newer one", async () => {
+    // The control for the case above: newest wins, not the checkout.
+    const inCheckout = `${PROMOTED_REPO_DIR}/${DOC_PATH}`;
+    fakeSandbox({
+      files: { [ROOT_PATH]: "# newer at root", [inCheckout]: "# older in checkout" },
+      mtimes: { [ROOT_PATH]: 1_790_000_600, [inCheckout]: 1_790_000_000 },
+    });
+
+    await persistWorkspaceMemoryStep({ ...target, workspaceManifest: promotedManifest });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# newer at root",
+    );
+  });
+
+  it("warns with every path it checked when the agent left no notebook", async () => {
+    fakeSandbox();
+
+    const captured = await persistWorkspaceMemoryStep({
+      ...target,
+      workspaceManifest: promotedManifest,
+    });
+
+    const checkedPaths = [
+      ROOT_PATH,
+      `${PROMOTED_REPO_DIR}/${DOC_PATH}`,
+      LEGACY_ROOT_PATH,
+      `${PROMOTED_REPO_DIR}/${LEGACY_DOC_PATH}`,
+    ];
+    expect(captured.persisted).toBe(false);
+    for (const path of checkedPaths) expect(captured.absent).toContain(path);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { checkedPaths },
+      "memory_document_absent",
+    );
     expect(await countRows()).toBe(0);
   });
 
