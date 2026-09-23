@@ -67,9 +67,16 @@ the workspace run the command. It is an operator setting, not part of the
 connection: change it on the Settings page (Integrations panel) or with the MCP
 `settings.set` tool, and the next command reads it. The environment variable
 is still read, split on commas as it always was, while nothing is stored; a
-stored value shadows it. Changing it never stops a run that is posting to
+stored value shadows it. Each id is its own entry: an entry that is blank or
+holds a comma is refused. Changing it never stops a run that is posting to
 Slack, and switching the connection between environment and stored values
 leaves it as it is.
+
+A Slack connection stored while the allowlist was still a connection field may
+carry it as `allowedUserIds`. Nothing reads that value; the setting applies,
+and with nothing set it lets everyone in. The Slack card says so and names the
+setting, each command logs `integration_stored_value_not_read`, and saving the
+connection again removes the old value.
 
 The commands are `list`, `status <KEY>`, `cancel <KEY>`, `redis summary`,
 `redis inspect <KEY>` and `redis reset <KEY>`. What each of them does is the
