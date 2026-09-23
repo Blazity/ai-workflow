@@ -131,6 +131,12 @@ function safeModelText(value: unknown): string {
   // paths/session bookkeeping that must never enter the report surface.
   return scrubForPublication(value
     .replace(/\b(?:ai-workflow|blazebot)\/memory\/[^\s)`\]]+/gi, "[omitted memory path]")
+    // A ticket attachment is the ticket's own file, copied into the sandbox
+    // under the name it has on the ticket (sandbox/attachments.ts), so its name
+    // is what a person recognises and the directory is the only private part.
+    // Hiding the whole path told AWP-279 its plan would test
+    // "[omitted private path]" when it meant the attached cases.csv.
+    .replace(/\/tmp\/attachments\/([^\s)`/]+)/gi, "$1")
     .replace(/(?:\/vercel\/sandbox|\/tmp\/attachments|\/workspace\/)[^\s)`]*/gi, "[omitted private path]")
     .replace(/\b(?:session|memory)[_-][A-Za-z0-9-]+\b/gi, "[omitted session reference]")
     .replace(/\bsession\s+memory(?:\s+(?:text|document|bookkeeping))?\b/gi, "[omitted session reference]"));

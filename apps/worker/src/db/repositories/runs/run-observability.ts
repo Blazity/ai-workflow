@@ -3,6 +3,8 @@ import {
   desc,
   eq,
   gt,
+  inArray,
+  isNull,
   lt,
   sql,
 } from "drizzle-orm";
@@ -547,6 +549,62 @@ export function replaceConnectedWorkflowBlockAttemptPersistence(
   input: Omit<ReplaceWorkflowBlockAttemptPersistenceInput, "db">,
 ) {
   return replaceWorkflowBlockAttemptPersistence({ ...input, db: getDb() });
+}
+
+/** The attempt states that mean "still going": exactly the ones the replay read
+ *  shows as cancelled once the run is terminal (run-replay-read.ts). */
+const OPEN_ATTEMPT_STATES: ReplayAttemptState[] = [
+  "running",
+  "waiting_loop",
+  "waiting_for_clarification",
+];
+
+/**
+ * Close every attempt of a run that is still open, as cancelled, with a
+ * completion time and a duration.
+ *
+ * For the cancel path only, behind its step-drain barrier. A run the cancel
+ * stops never reaches the workflow's own finalize, which is what closes open
+ * attempts on every other exit, so the attempt that was executing kept
+ * `completedAt` and `durationMs` null forever (production run
+ * wrun_01M375BB1PC0CG3F8KR0DGEWJ6, its planning attempt). One statement, and the
+ * revision moves like every other write to an attempt, so a writer holding the
+ * old revision loses rather than reopening it.
+ */
+export async function closeOpenBlockAttempts(input: {
+  db: Db;
+  runId: string;
+  outcomeStatus: string;
+  closedAt?: Date;
+}): Promise<number> {
+  assertNonEmpty(input.runId, "runId");
+  const closedAt = input.closedAt ?? new Date();
+  const outcome: ReplayAttemptOutcome = { kind: "cancelled", status: input.outcomeStatus };
+  const rows = await input.db
+    .update(workflowBlockAttempts)
+    .set({
+      state: "cancelled",
+      outcome,
+      completedAt: closedAt,
+      durationMs: sql`greatest(0, round(extract(epoch from (${closedAt}::timestamptz - ${workflowBlockAttempts.startedAt})) * 1000))::integer`,
+      observationRevision: sql`${workflowBlockAttempts.observationRevision} + 1`,
+      updatedAt: closedAt,
+    })
+    .where(
+      and(
+        eq(workflowBlockAttempts.runId, input.runId),
+        inArray(workflowBlockAttempts.state, OPEN_ATTEMPT_STATES),
+        isNull(workflowBlockAttempts.completedAt),
+      ),
+    )
+    .returning({ id: workflowBlockAttempts.id });
+  return rows.length;
+}
+
+export function closeConnectedOpenBlockAttempts(
+  input: Omit<Parameters<typeof closeOpenBlockAttempts>[0], "db">,
+): Promise<number> {
+  return closeOpenBlockAttempts({ ...input, db: getDb() });
 }
 
 export async function readRunReplayRun(
