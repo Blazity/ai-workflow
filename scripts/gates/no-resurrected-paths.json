@@ -4,6 +4,7 @@
   "apps/worker/src/routes/api/v1/workflow-definition.put.ts",
   "apps/worker/src/routes/api/v1/workflow-definition/restore.post.ts",
   "apps/worker/src/routes/api/v1/workflow-definitions/[id]/migrate.post.ts",
+  "apps/dashboard/app/api/workflow-definitions/[id]/migrate",
   "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx",
   "apps/worker/src/workflows/blocks",
   "apps/worker/src/harness-profiles/skill-artifact.test.ts",
