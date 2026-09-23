@@ -1545,6 +1545,26 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
+  it("cancels an orphan under the subject its claim holds, not the one this pass's tracker derives", async () => {
+    // The claim was taken while Linear was the tracker; this pass reads Jira.
+    // `ticket:jira:PROJ-1`, derived again from the key, is a subject nobody
+    // holds: cancelling it would release nothing and leave the run live (H2.2).
+    const bound = entry({ subjectKey: "ticket:linear:PROJ-1" });
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("Done");
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(await reconcileRuns(new Set(), runRegistry, connected(tracker))).toEqual({
+      cancelled: 1,
+      cleaned: 0,
+    });
+    expect(mockCancelRunDetailed).toHaveBeenCalledTimes(1);
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
+      expect.objectContaining({ subjectKey: "ticket:linear:PROJ-1", ticketKey: "PROJ-1" }),
+    );
+  });
+
   it("applies normal AI-column cancellation semantics to manual ticket runs", async () => {
     const bound = entry({ kind: "manual_ticket" });
     const runRegistry = registry([bound]);

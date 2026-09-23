@@ -13,7 +13,6 @@ import type {
 } from "../../adapters/issue-tracker/types.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import {
-  ticketSubject,
   trackerMoveTarget,
 } from "../../engine/support/issue-tracker-runtime.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
@@ -122,27 +121,8 @@ export interface CancelRunResult {
  * ticket out of its current column. Without this, the cron sees the ticket
  * still in COLUMN_AI on the next tick and re-dispatches a fresh run.
  */
-export async function cancelRun(
-  ticketKey: string,
-  target: CancelRunTarget,
-  runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
-  targetColumn?: IssueTrackerMoveTarget,
-  onReleased?: (subjectKey: string) => Promise<void> | void,
-  reason?: string,
-): Promise<boolean> {
-  return (
-    await cancelRunDetailed({
-      subjectKey: await ticketSubject(ticketKey),
-      ticketKey,
-      target,
-      runRegistry,
-      ...(issueTracker ? { issueTracker } : {}),
-      ...(targetColumn ? { targetColumn } : {}),
-      ...(onReleased ? { onReleased } : {}),
-      ...(reason ? { reason } : {}),
-    })
-  ).cancelled;
+export async function cancelRun(input: CancelRunDetailedInput): Promise<boolean> {
+  return (await cancelRunDetailed(input)).cancelled;
 }
 
 /**

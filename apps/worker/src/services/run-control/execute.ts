@@ -30,17 +30,10 @@ import type {
 import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import { ticketLinksOf } from "../../engine/support/ticket-url.js";
 import { logger } from "../../infra/logger.js";
-import type { CancelRunTarget } from "../run-lifecycle/index.js";
+import type { CancelRunDetailedInput } from "../run-lifecycle/index.js";
 
-export type CancelRunFn = (
-  ticketKey: string,
-  target: CancelRunTarget,
-  registry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
-  targetColumn?: IssueTrackerMoveTarget,
-  onReleased?: (subjectKey: string) => Promise<void> | void,
-  reason?: string,
-) => Promise<boolean>;
+/** Cancels the claim it is handed, named by the subject that claim holds. */
+export type CancelRunFn = (input: CancelRunDetailedInput) => Promise<boolean>;
 
 export interface RunControlDeps {
   readonly registry: RunRegistryAdapter & ThreadStore;
@@ -186,28 +179,28 @@ async function cancel(
     : "Cancelled through a run control command";
 
   if (entry.runId === null) {
-    const ok = await deps.cancelRun(
+    const ok = await deps.cancelRun({
+      subjectKey: entry.subjectKey,
       ticketKey,
-      { ownerToken: entry.ownerToken, runId: null },
-      deps.registry,
-      deps.issueTracker,
-      deps.backlog,
-      undefined,
+      target: { ownerToken: entry.ownerToken, runId: null },
+      runRegistry: deps.registry,
+      ...(deps.issueTracker ? { issueTracker: deps.issueTracker } : {}),
+      ...(deps.backlog ? { targetColumn: deps.backlog } : {}),
       reason,
-    );
+    });
     return answer(ok ? "cancelled_mid_dispatch" : "claim_not_cleared", null);
   }
 
   const runId = entry.runId;
-  const ok = await deps.cancelRun(
+  const ok = await deps.cancelRun({
+    subjectKey: entry.subjectKey,
     ticketKey,
-    { ownerToken: entry.ownerToken, runId },
-    deps.registry,
-    deps.issueTracker,
-    deps.backlog,
-    undefined,
+    target: { ownerToken: entry.ownerToken, runId },
+    runRegistry: deps.registry,
+    ...(deps.issueTracker ? { issueTracker: deps.issueTracker } : {}),
+    ...(deps.backlog ? { targetColumn: deps.backlog } : {}),
     reason,
-  );
+  });
   return answer(ok ? "cancelled" : "unconfirmed", runId);
 }
 
