@@ -1,2 +1,0 @@
-- Planning and implementation agents now see a Jira ticket's parent, its subtasks in their ranked order, and its links ("blocks", "relates to") with each one's key, status and title, in the prompt's runtime data and in the run briefing. Repository discovery reads the same list, so a parent whose subtasks name their files points discovery at the right repository.
-- Acceptance criteria are now read from a description that labels them "Acceptance:" or "AC:", as well as "Acceptance criteria".

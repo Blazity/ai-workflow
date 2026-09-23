@@ -1,1 +1,0 @@
-- The Integrations screens no longer point at a switch that is not shown, and an integration whose Test passed after the last health scan no longer carries that scan's warning. Times end in a fixed "UTC", and the setup overview marks its health scan stale as soon as it is, even on a page left open.

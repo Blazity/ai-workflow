@@ -1,2 +1,0 @@
-- The dashboard Integrations screens show each integration's own icon, and every card says at a glance whether an integration is not set up, incomplete, switched off, failing, or connected but never tested.
-- An integration's connection screen says first where its values come from, and a value read from the deployment's environment is shown as set and hidden, naming its variable, instead of as an empty field. A switched-off or failing integration keeps its place in the sidebar, marked Off or Failing.

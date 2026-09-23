@@ -1,2 +1,0 @@
-- The dashboard Settings page tells you when someone else changed a setting after you opened the page: your edit stays on screen next to their value, and you choose to store yours over it or take theirs. MCP `settings.set` and `settings.reset` accept the same `expectedVersion`.
-- Owners can remove a stored setting from the Settings page with "Remove stored value", after a confirmation that names the value that takes over and where it comes from, and the settings history names who made each change.
