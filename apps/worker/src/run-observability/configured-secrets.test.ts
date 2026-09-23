@@ -4,9 +4,14 @@ import { environmentSecretValues, secretForms } from "./configured-secrets.js";
 
 describe("environmentSecretValues", () => {
   it("always includes a credential main listed by name, however short", () => {
+    // Core's own by name; an integration's through its manifest's secret
+    // fields, which cover every integration variable main listed by hand.
+    const integrationSecret = integrationManifests
+      .flatMap((manifest) => manifest.connection.fields)
+      .find((field) => field.secret)!.env;
     const warn = vi.fn();
     expect(
-      environmentSecretValues({ JIRA_API_TOKEN: "abc", CRON_SECRET: "x", EMPTY_SECRET: "" }, warn),
+      environmentSecretValues({ [integrationSecret]: "abc", CRON_SECRET: "x", EMPTY_SECRET: "" }, warn),
     ).toEqual(["abc", "x"]);
     expect(warn).not.toHaveBeenCalled();
   });

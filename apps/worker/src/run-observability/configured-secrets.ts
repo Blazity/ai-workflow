@@ -1,3 +1,5 @@
+import { integrationManifests } from "@integrations/registry";
+
 /**
  * The environment half of "the secrets this deployment knows".
  *
@@ -26,32 +28,29 @@ const SECRET_ENVIRONMENT_KEY =
 
 /**
  * The credentials main listed by name (`configuredSecretValues` in its
- * `services/settings/runtime-settings.ts`), plus the key stored connections are
- * encrypted with. Always redacted, whatever their length: each is a credential
- * this product issues or reads, and a short one is a bad credential, not a
- * public one.
+ * `services/settings/runtime-settings.ts`), always redacted whatever their
+ * length: each is a credential this product issues or reads, and a short one
+ * is a bad credential, not a public one. Core's own are named here; an
+ * integration's are the secret fields its manifest declares (main's list
+ * named those of Jira, GitHub, GitLab, Slack and Arthur by hand, and every one
+ * of them is a secret field today), so a new integration's are covered the
+ * day it ships.
  */
 const KNOWN_SECRET_VARIABLES: ReadonlySet<string> = new Set([
-  "JIRA_API_TOKEN",
-  "GITHUB_APP_PRIVATE_KEY",
-  "GITLAB_TOKEN",
-  "CHAT_SDK_SLACK_TOKEN",
-  "SLACK_SIGNING_SECRET",
   "ANTHROPIC_API_KEY",
   "CODEX_API_KEY",
   "CODEX_CHATGPT_OAUTH_TOKEN",
-  "GENAI_ENGINE_API_KEY",
   "VERCEL_TOKEN",
   "CRON_SECRET",
-  "JIRA_WEBHOOK_SECRET",
-  "GITHUB_WEBHOOK_SECRET",
-  "GITLAB_WEBHOOK_SECRET",
   "WEBHOOK_TRIGGER_ENCRYPTION_KEY",
   "BETTER_AUTH_SECRET",
   "SSO_CLIENT_SECRET",
   "RESEND_API_KEY",
   "RESEND_WEBHOOK_SECRET",
   "INTEGRATION_SECRETS_KEY",
+  ...integrationManifests.flatMap((manifest) =>
+    manifest.connection.fields.filter((field) => field.secret).map((field) => field.env),
+  ),
 ]);
 
 /**
