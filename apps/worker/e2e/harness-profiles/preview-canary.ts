@@ -50,6 +50,28 @@ const REPLAY_CANARY_LOG_QUERY_FLOOR_MS = 30_000;
 const FIXTURE_LABELS = ["claude", "codex", "custom"] as const;
 type FixtureLabel = (typeof FIXTURE_LABELS)[number];
 
+/**
+ * Which fixtures a canary run dispatches. The default is the custom-profile
+ * case alone (a Haiku profile, definition 38), which also carries the replay
+ * leg: the built-in Claude case runs Opus and the built-in Codex case spends
+ * on the OpenAI account, and both run on demo, which shares production's
+ * database. `all` adds them back for a change that touches a built-in harness.
+ */
+export type CanaryCaseSelection = "custom" | "all";
+
+const SELECTED_LABELS: Record<CanaryCaseSelection, readonly FixtureLabel[]> = {
+  custom: ["custom"],
+  all: FIXTURE_LABELS,
+};
+
+/** `ENGINE_CANARY_CASES`: empty or absent is `custom`; anything unknown is refused. */
+export function canaryCaseSelection(source: NodeJS.ProcessEnv): CanaryCaseSelection {
+  const value = source.ENGINE_CANARY_CASES?.trim() ?? "";
+  if (value === "" || value === "custom") return "custom";
+  if (value === "all") return "all";
+  throw new Error(`ENGINE_CANARY_CASES must be "custom" or "all", got "${value}"`);
+}
+
 const BUILTIN_PROFILE_IDS = {
   claude: "builtin-claude",
   codex: "builtin-codex",
@@ -234,6 +256,7 @@ export async function runHarnessProfilePreviewCanary(
   options: HarnessProfilePreviewCanaryOptions = {},
 ): Promise<void> {
   const env = parseHarnessCanaryEnv(source);
+  const selection = canaryCaseSelection(source);
   const replayEnv = options.verifyReplay ? parseReplayCanaryEnv(source) : null;
   const mcp = await createCanaryMcpClient(env);
 
@@ -246,7 +269,7 @@ export async function runHarnessProfilePreviewCanary(
     const listed = await mcp.call<WorkflowListData>("workflows.list", {
       limit: 100,
     });
-    const cases = resolveCanaryCases(listed);
+    const cases = resolveCanaryCases(listed, selection);
 
     // A previous job that ended between a dispatch and its release (a timeout,
     // a cancelled job) leaves a claim the next preflight refuses as active_run,
@@ -285,11 +308,14 @@ export async function runHarnessProfilePreviewCanary(
  * disabled, deployed at the pinned version, and carries exactly one manually
  * dispatchable ticket trigger.
  */
-export function resolveCanaryCases(listed: WorkflowListData): CanaryCase[] {
+export function resolveCanaryCases(
+  listed: WorkflowListData,
+  selection: CanaryCaseSelection = "custom",
+): CanaryCase[] {
   if (listed.truncated) {
     throw new Error("Workflow list is truncated before canary fixture validation");
   }
-  return FIXTURE_LABELS.map((label) => {
+  return SELECTED_LABELS[selection].map((label) => {
     const fixture = ENGINE_CANARY_FIXTURES[label];
     const name = `Workflow ${fixture.workflowId} (${label} fixture)`;
     const summary = listed.workflows.find(
