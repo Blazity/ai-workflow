@@ -22,12 +22,14 @@ import {
   type PrePrFixBudgetContext,
   type PrePrPhaseStall,
   type RepoCheckBatchProgress,
+  type RepoCheckSkipReason,
   type RepoScriptsDirtiedRepo,
   type RepoScriptsGroupCoverage,
   type RepoScriptsGroupStatus,
   type RepoScriptsGroupStatusEntry,
 } from "../steps/pre-pr-checks-runner.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
+import { repositoryKey } from "../support/repository-access.js";
 import type {
   V2InvocationCancellation,
   V2InvocationObservationHooks,
@@ -391,14 +393,7 @@ export function runChecksScopeKeys(ctx: {
       ? ctx.selectedRepositories
       : null);
   if (!repositories || repositories.length === 0) return undefined;
-  return [
-    ...new Set(
-      repositories.map(
-        (repository) =>
-          `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-      ),
-    ),
-  ];
+  return [...new Set(repositories.map(repositoryKey))];
 }
 
 /**
@@ -866,6 +861,72 @@ function passedSummary(ranChecks: number): string {
   return `Repository scripts passed (${ranChecks} command${ranChecks === 1 ? "" : "s"}).`;
 }
 
+/** Why the launch step passed a repository over, as the walk records it.
+ *  `unrecorded` is a launch journaled by a deployment that kept no reason. */
+type RepoDeclineReason = RepoCheckSkipReason | "unrecorded";
+
+const DECLINE_REASON_ORDER: readonly RepoDeclineReason[] = [
+  "unchanged",
+  "not_in_workspace",
+  "unrecorded",
+];
+
+/** Names shown in one decline sentence before the rest are counted. */
+const DECLINED_NAMES_SHOWN = 3;
+
+function declineWhy(reason: RepoDeclineReason, count: number): string {
+  const one = count === 1;
+  switch (reason) {
+    case "unchanged":
+      return `this run did not change ${one ? "it" : "them"}`;
+    case "not_in_workspace":
+      return `${one ? "it is" : "they are"} not in this run's workspace`;
+    case "unrecorded":
+      return "no reason was recorded";
+  }
+}
+
+/**
+ * The sentences a gate adds for the configured repositories it passed over,
+ * one per reason, each naming the repositories.
+ *
+ * A gate that ran nothing used to say only "No repository scripts matched
+ * changed repositories.", and production read that as a pass while the one
+ * repository the agent changed had been declined by a path comparison that got
+ * the case wrong (AWP-272, pull request #19). Naming the repository and the
+ * reason is what lets an operator see the contradiction: a repository they know
+ * the run changed, listed as "not in this run's workspace".
+ *
+ * When something did run, only the repositories this run holds are named. The
+ * configuration lists every profiled repository in the catalog, so the ones
+ * outside the workspace are the ordinary state of every run and reciting them
+ * under a pass would bury the one sentence that matters: which repository of
+ * THIS run went unverified. When nothing ran, every one of them is named,
+ * because that is the only evidence of why.
+ *
+ * A gate only. A named selection has its coverage sentences, which already name
+ * every repository a selected group did not enter.
+ */
+function declinedRepositoryNotes(walk: ReadonlyArray<RepoCoverageEntry>): string[] {
+  const ranAnything = walk.some((entry) => entry.state === "ran");
+  const byReason = new Map<RepoDeclineReason, string[]>();
+  for (const entry of walk) {
+    if (entry.declined === undefined) continue;
+    if (ranAnything && entry.declined === "not_in_workspace") continue;
+    byReason.set(entry.declined, [...(byReason.get(entry.declined) ?? []), entry.repoKey]);
+  }
+  return DECLINE_REASON_ORDER.flatMap((reason) => {
+    const names = byReason.get(reason);
+    if (!names) return [];
+    const shown = names.slice(0, DECLINED_NAMES_SHOWN).join(", ");
+    const rest = names.length - DECLINED_NAMES_SHOWN;
+    return [
+      `Not run in ${shown}${rest > 0 ? ` and ${rest} more` : ""}: ` +
+        `${declineWhy(reason, names.length)}.`,
+    ];
+  });
+}
+
 function batchesResult(
   results: PrePrCheckCommandResult[],
   failures: PrePrCheckFailure[],
@@ -876,6 +937,7 @@ function batchesResult(
   setupFailedRepositories: string[],
   ranChecks: number,
   selection: RepoScriptsGroupSelection,
+  declinedNotes: string[],
 ): CheckBatchesResult {
   return {
     outcome: failures.length > 0 ? "failed" : "passed",
@@ -898,6 +960,7 @@ function batchesResult(
         ? formatPrePrCheckFailures(failures)
         : [
             ranChecks === 0 ? nothingRanSummary(selection) : passedSummary(ranChecks),
+            ...declinedNotes,
             ...repositoryScriptCoverageNotes(groupCoverage),
           ].join(" "),
   };
@@ -907,6 +970,8 @@ function batchesResult(
 export interface RepoCheckBatchRun {
   /** The repository was not started: not attached, or unchanged. */
   skipped: boolean;
+  /** Which of the two, when `skipped` and the launch step said. */
+  skipReason?: RepoCheckSkipReason;
   collected: CollectedRepoCheckBatch;
   /** Set when the batch never reported: it outlived its bound, or the sandbox
    *  under it went. Whatever `collected` holds is then a partial record. */
@@ -1040,7 +1105,13 @@ export async function runRepoCheckBatch(args: {
   );
   if (launchBoundary.failure) throw launchBoundary.failure;
   if (started.skipped) {
-    return { skipped: true, collected: unreadableBatch(), stall: null, elapsedMs: 0 };
+    return {
+      skipped: true,
+      ...(started.reason ? { skipReason: started.reason } : {}),
+      collected: unreadableBatch(),
+      stall: null,
+      elapsedMs: 0,
+    };
   }
   if (started.envFailure) {
     // Nothing was launched, so there is nothing to poll or collect. The count
@@ -1326,13 +1397,17 @@ type RepoCoverageState =
   | "absent";
 
 interface RepoCoverageEntry {
-  /** `provider:repoPath`, the key configured entries are deduplicated by, so a
-   *  repository mirrored on two providers stays two repositories here. */
+  /** `provider:repoPath` as the configuration spells it, for display. The walk
+   *  holds one entry per repository identity (uniqueConfiguredRepositories), so
+   *  a repository mirrored on two providers stays two repositories here. */
   repoKey: string;
   /** The groups this selection picked for the repository. Only read when the
    *  state is "ran". */
   selected: string[];
   state: RepoCoverageState;
+  /** Set when the launch step declined the repository, and why. Absent for a
+   *  repository the walk never reached, which the failure already names. */
+  declined?: RepoDeclineReason;
 }
 
 /**
@@ -1613,7 +1688,9 @@ async function runCheckBatches(
     if (run.skipped) {
       // The launch step declined: this repository is not in the workspace, or
       // the gate's change filter left it out. Either way the run never entered
-      // it, so coverage may claim nothing about it.
+      // it, so coverage may claim nothing about it, and the summary says which
+      // of the two it was.
+      coverage.declined = run.skipReason ?? "unrecorded";
       groupStatuses.push(...groupStatusesFor(repo, selectedGroups, groupCommands, null));
       continue;
     }
@@ -1667,12 +1744,13 @@ async function runCheckBatches(
     setupFailedRepositories,
     ranChecks,
     selection,
+    selection.kind === "gate" ? declinedRepositoryNotes(walk) : [],
   );
 }
 
 /**
- * Configured repositories deduplicated by provider and path, the last entry
- * winning.
+ * Configured repositories deduplicated by repository identity (provider and
+ * path, whatever the case), the last entry winning.
  *
  * The blocking runner keyed the configuration into a Map before walking the
  * workspace, so a duplicate entry only ever ran its last occurrence. Walking
@@ -1684,7 +1762,7 @@ function uniqueConfiguredRepositories(
 ): RepoScriptsConfig["repositories"] {
   return [
     ...new Map(
-      config.repositories.map((repo) => [`${repo.provider}:${repo.repoPath}`, repo]),
+      config.repositories.map((repo) => [repositoryKey(repo), repo]),
     ).values(),
   ];
 }
