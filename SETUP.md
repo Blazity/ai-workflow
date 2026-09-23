@@ -891,6 +891,17 @@ Leaving both unset leaves Arthur disconnected, and that is now a visible state r
 
 The tracer travels with the integration as `integrations/arthur/tracer.generated.ts` and is installed into each sandbox at run time, so no deploy-time build step is involved. Regenerate it from a newer upstream tracer with `pnpm --filter @integrations/arthur run build:tracer`.
 
+### Agent memory (built-in store or Mem0)
+
+Memory is an integration capability. With nothing connected, runs keep what
+they learn about repositories and owners, and each ticket's notebook, in the
+built-in store in this deployment's database; nothing needs configuring. To
+store it in a hosted [Mem0](https://mem0.ai) project instead, connect the Mem0
+integration (Integrations → Mem0, or `AIW_MEM0_API_KEY`). Read
+[`integrations/mem0/README.md`](./integrations/mem0/README.md) first: every
+deployment that shares this database switches with it, and what the built-in
+store already holds is not copied over.
+
 ### GitLab alongside (or instead of) GitHub
 
 GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN` and `GITLAB_WEBHOOK_SECRET` (leave the legacy `GITLAB_PROJECT_ID` unset: it makes the webhook ignore every other project). There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. One connection per integration means one GitLab host per deployment: a repository's identity does not record its host, so pointing an existing deployment at a second GitLab instance would retarget the repositories it already has. For GitLab.com setup, see [`docs/runbooks/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).

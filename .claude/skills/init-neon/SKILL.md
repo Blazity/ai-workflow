@@ -73,7 +73,7 @@ If invoked from `init-env`, return control. If standalone, end.
 
 - Build fails with `[db-migrate] FATAL: this Neon branch is already claimed by VERCEL_ENV='production', but this build is VERCEL_ENV='…'`: two environments share one Neon branch (the `env_marker` guard). Reconfigure the integration for branch-per-environment, redeploy.
 - `DATABASE_URL undefined` at build: integration not connected to this project, or env var scoped to the wrong environments.
-- Stale run registry (e.g. after a bad deploy or smoke test): run `pnpm exec tsx scripts/clear-run-registry.ts <ticket>` from `apps/worker` (after `vercel env pull .env.local`) to dump and clear `active_runs` / `failed_tickets` / `thread_parents`.
+- Stale run registry for one ticket (e.g. after a bad deploy or smoke test): run `/ai-workflow redis inspect <KEY>` in Slack to see its entries, then `/ai-workflow redis reset <KEY>` to clear them (`integrations/slack/commands.ts`). Reset does not cancel a live run; cancel it first with `/ai-workflow cancel <KEY>` or MCP `runs.cancel`. The old `scripts/clear-run-registry.ts` no longer exists.
 
 ## Don'ts
 
