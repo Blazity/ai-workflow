@@ -9,7 +9,10 @@ import { defineIntegration, defineIntegrationBlock, z } from "@integrations/sdk"
 
 const echoBlock = defineIntegrationBlock({
   type: "demo_echo",
-  paramsSchema: z.object({ message: z.string().min(1) }),
+  // Every parameter has a default, because a new node starts with its
+  // defaults and the editor has no form for an integration block's parameters.
+  paramsSchema: z.object({ message: z.string().min(1).default("Hello from the demo integration.") }),
+  defaults: { message: "Hello from the demo integration." },
   contract: { ports: ["out"], allowsFailurePort: true },
   ui: {
     label: "Demo echo",
@@ -31,9 +34,10 @@ const echoBlock = defineIntegrationBlock({
 const lookupBlock = defineIntegrationBlock({
   type: "demo_lookup",
   paramsSchema: z.object({
-    query: z.string().min(1),
+    query: z.string().min(1).default("status"),
     limit: z.number().int().positive().default(10),
   }),
+  defaults: { query: "status", limit: 10 },
   contract: { ports: ["out"], allowsFailurePort: true },
   ui: {
     label: "Demo lookup",

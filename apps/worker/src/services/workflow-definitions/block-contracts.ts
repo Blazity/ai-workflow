@@ -25,6 +25,7 @@ import type {
 import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { integrationManifests } from "@integrations/registry";
+import { trackerQueryRuleFor, type TrackerQueryRule } from "./tracker-query-templates.js";
 import {
   builtinCapabilitiesOfDeployment,
   workflowBlockRegistryContext,
@@ -73,6 +74,13 @@ export interface RequestBlockContracts {
   analyzeValues: WorkflowValueAnalyzer;
   /** Every block type's parameter schema, composed in `engine/definition`. */
   blockParamsSchemas: BlockParamsSchemas;
+  /**
+   * The connected tracker's rule for a query an author typed, or null when no
+   * single tracker is usable. Not part of the schemas above: whether it may
+   * refuse a template depends on what the deployed version already runs, which
+   * a per-type schema cannot see (`tracker-query-templates.ts`).
+   */
+  trackerQueryRule: TrackerQueryRule | null;
   /**
    * Which VCS providers this deployment has credentials for. The definition's
    * repository pin belongs to no block, so its check cannot go through the
@@ -166,6 +174,7 @@ export function blockContractsFor(
     resolveContract,
     analyzeValues: createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
     blockParamsSchemas: blockParamsSchemasFor(integrations),
+    trackerQueryRule: trackerQueryRuleFor(integrations),
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),
   };

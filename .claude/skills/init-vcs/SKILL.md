@@ -5,7 +5,9 @@ description: Configure or rotate the VCS provider (GitHub or GitLab) for the AI 
 
 # Initialize VCS provider
 
-Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-template per chosen provider. Provider credentials are additive in `apps/worker/src/infra/runtime-env.ts`: a deployment may configure GitHub (GitHub App vars), GitLab (`GITLAB_TOKEN` + `GITLAB_PROJECT_ID`), or both at once. `VCS_KIND` is optional and only pins the legacy single-repo helpers; leave it unset in a dual-provider deployment. The cross-field rule (`VCS_KIND=github` requires the GitHub App vars; `VCS_KIND=gitlab` requires `GITLAB_TOKEN`) is enforced by construction.
+Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-template per chosen provider. GitHub and GitLab are integrations (ADR-010): each declares its own variables in `integrations/<id>/manifest.ts`, a deployment may connect either or both, and which provider serves a repository comes from the repository record. No variable picks a provider.
+
+The variables below still configure them, and a deployment that already sets them needs nothing done. The alternative, which needs no redeploy, is the **Integrations** page in the dashboard: open the GitHub or GitLab card, paste the same values, press **Test**. Either way the card is where an admin sees whether the provider is connected and reads its health checks.
 
 > **Canonical reference:** [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab) holds the facts and constraints for both providers. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
 >
@@ -26,7 +28,7 @@ Halt.
 
 Ask: *"GitHub, GitLab, or both?"*
 
-Providers coexist: adding GitLab does NOT require removing `GITHUB_*` keys (and vice versa). A dual-provider deployment lists repositories from both providers in one catalog and a single run can mix them. Only when the user explicitly wants to DROP a provider should they remove that provider's keys; print a one-line note in that case. For "both", also collect per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, and leave `VCS_KIND` unset.
+Providers coexist: adding GitLab does NOT require removing `GITHUB_*` keys (and vice versa). A dual-provider deployment lists repositories from both providers in one catalog and a single run can mix them. Only when the user explicitly wants to DROP a provider should they remove that provider's keys; print a one-line note in that case. For "both", also collect per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`.
 
 ## Step 2 — Emit paste-template
 
@@ -43,7 +45,6 @@ GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; s
 Emit (paste into Vercel → Project Settings → Environment Variables, all three environments):
 
 ```
-VCS_KIND=github
 GITHUB_APP_ID=<value>
 GITHUB_APP_PRIVATE_KEY=<base64 PEM>
 GITHUB_INSTALLATION_ID=<value>
@@ -52,7 +53,6 @@ GITHUB_REPO=<value>
 GITHUB_WEBHOOK_SECRET=<value>
 ```
 
-(Omit the `VCS_KIND` line when configuring both providers.)
 
 ### GitLab branch
 
@@ -61,12 +61,11 @@ Walk the user through `references/gitlab-pat.md` to mint a token. Then collect:
 - `GITLAB_TOKEN` (`glpat-...`)
 - `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/infra/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
 - The default branch, saved in the repository profile
-- `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`).
+- `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`).
 
 Emit:
 
 ```
-VCS_KIND=gitlab
 GITLAB_TOKEN=<value>
 GITLAB_PROJECT_ID=<value>
 ```
@@ -84,5 +83,5 @@ If invoked from `init-env`, return control. If standalone, end.
 
 ## Don'ts
 
-- **Don't emit both branches unless the user chose "both".** For a single-provider setup, emitting both invites stale keys. For a deliberate dual-provider setup, emit both templates, drop the `VCS_KIND` lines, and add `GITHUB_BOT_LOGIN`/`GITLAB_BOT_LOGIN`.
+- **Don't emit both branches unless the user chose "both".** For a single-provider setup, emitting both invites stale keys. For a deliberate dual-provider setup, emit both templates and add `GITHUB_BOT_LOGIN`/`GITLAB_BOT_LOGIN`.
 - **Don't print the token after collecting it.** Reference by name only.

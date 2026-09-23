@@ -2,8 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { JiraAdapter } from "./issue-tracker";
 import { IssueTrackerNotFoundError } from "@integrations/sdk";
 
+// The adapter reaches Jira only through the fetch its context hands it, which
+// is the one production passes (`ctx.http.fetch`). The global one is a
+// tripwire: a request that fell back to it would be a path production never
+// takes, so it fails the test instead of answering.
 const mockFetch = vi.fn();
-global.fetch = mockFetch;
+global.fetch = (() => {
+  throw new Error("a Jira request went through the global fetch, not the context's");
+}) as typeof fetch;
 
 const CLOUD_ID = "test-cloud-id";
 const API_BASE = `https://api.atlassian.com/ex/jira/${CLOUD_ID}`;
@@ -14,7 +20,14 @@ function jiraAdapter() {
     apiToken: "token",
     projectKey: "PROJ",
     cloudId: CLOUD_ID,
+    fetch: mockFetch,
   });
+}
+
+/** The JQL of the most recent request, decoded the way Jira reads it. */
+function sentJql(): string {
+  const url = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+  return url.searchParams.get("jql") ?? "";
 }
 
 function jiraAdapterWithDiscovery() {
@@ -22,6 +35,7 @@ function jiraAdapterWithDiscovery() {
     baseUrl: "https://test.atlassian.net",
     apiToken: "token",
     projectKey: "PROJ",
+    fetch: mockFetch,
   });
 }
 
@@ -811,8 +825,135 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("the configured project scope of a search", () => {
+    // findTickets promises that no combination of keywords or authored query
+    // reaches a project this connection was not configured for. These read the
+    // query Jira would actually receive, so they fail on whatever widens it.
+    async function searchedJql(input: {
+      keywords: readonly string[];
+      providerQuery?: string;
+    }): Promise<string> {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ issues: [] }) });
+      await jiraAdapter().findTickets({ limit: 5, ...input });
+      return sentJql();
+    }
+
+    it("scopes to the configured project and ORs the keyword clauses", async () => {
+      expect(await searchedJql({ keywords: ["login failure", "payment"] })).toBe(
+        '(project = "PROJ") AND (text ~ "login failure" OR text ~ "payment")',
+      );
+    });
+
+    it("keeps the project scope first when an authored query narrows the search", async () => {
+      expect(
+        await searchedJql({ keywords: ["login"], providerQuery: "labels = support" }),
+      ).toBe('(project = "PROJ") AND (labels = support) AND (text ~ "login")');
+    });
+
+    it("scopes the authored query alone when no keywords were extracted", async () => {
+      expect(await searchedJql({ keywords: [], providerQuery: "labels = support" })).toBe(
+        '(project = "PROJ") AND (labels = support)',
+      );
+    });
+
+    it("never sends an unscoped query, even with nothing else to add", async () => {
+      expect(await searchedJql({ keywords: [] })).toBe('(project = "PROJ")');
+    });
+
+    it("cannot be widened past the configured project by a query naming another", async () => {
+      // Both project clauses are ANDed, so this finds nothing rather than
+      // finding OTHER's tickets: out of scope fails closed.
+      expect(
+        await searchedJql({
+          keywords: ["login"],
+          providerQuery: "project = OTHER OR project = PROJ",
+        }),
+      ).toBe(
+        '(project = "PROJ") AND (project = OTHER OR project = PROJ) AND (text ~ "login")',
+      );
+    });
+
+    it("drops an unbalanced authored query that tries to close the project scope", async () => {
+      expect(
+        await searchedJql({
+          keywords: ["login"],
+          providerQuery: "labels = support) OR (project = OTHER",
+        }),
+      ).toBe('(project = "PROJ") AND (text ~ "login")');
+    });
+
+    it("drops an authored query that hides a parenthesis behind a single-quoted string", async () => {
+      // JQL takes a value in single or double quotation marks. Read as if only
+      // double quotes opened a string, this looks balanced: the `"` inside the
+      // single-quoted value seems to open a string that swallows `) OR ... (`.
+      // Jira reads `'"'` as a one-character string, so the `)` closes the
+      // project clause and OR reaches every project the token can see.
+      expect(
+        await searchedJql({
+          keywords: ["login"],
+          providerQuery: `summary ~ '"' ) OR project = OTHER OR ( summary ~ '"'`,
+        }),
+      ).toBe('(project = "PROJ") AND (text ~ "login")');
+    });
+
+    it("drops an authored query that hides a parenthesis behind a double-quoted string", async () => {
+      expect(
+        await searchedJql({
+          keywords: [],
+          providerQuery: `summary ~ "'" ) OR project = OTHER OR ( summary ~ "'"`,
+        }),
+      ).toBe('(project = "PROJ")');
+    });
+
+    it("drops an authored query with a backslash outside a quoted value", async () => {
+      // Outside a string a backslash escapes the next character in Jira's
+      // lexer, so `\'` there is a literal quote rather than the start of a
+      // string. A reader that disagreed with Jira about that one character
+      // would see this as balanced while Jira sees the `)` close the scope, so
+      // a backslash outside a value is refused rather than interpreted.
+      expect(
+        await searchedJql({
+          keywords: [],
+          providerQuery: String.raw`summary ~ \' ) OR project = OTHER OR ( summary ~ '\''`,
+        }),
+      ).toBe('(project = "PROJ")');
+    });
+
+    it("drops an authored query that leaves a string open", async () => {
+      expect(
+        await searchedJql({ keywords: [], providerQuery: "summary ~ 'unterminated" }),
+      ).toBe('(project = "PROJ")');
+    });
+
+    it("keeps an authored query whose quoted value escapes its own quote", async () => {
+      expect(
+        await searchedJql({ keywords: [], providerQuery: String.raw`summary ~ 'it\'s (not) broken'` }),
+      ).toBe(String.raw`(project = "PROJ") AND (summary ~ 'it\'s (not) broken')`);
+    });
+
+    it("strips quotes and backslashes that would break out of a keyword clause", async () => {
+      expect(await searchedJql({ keywords: ['weird "quoted" \\keyword'] })).toBe(
+        '(project = "PROJ") AND (text ~ "weird quoted keyword")',
+      );
+    });
+
+    it("scopes a label search to the configured project and strips the label's quotes", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ issues: [{ key: "PROJ-3" }] }),
+      });
+
+      const keys = await jiraAdapter().ticketsWithLabel('marker" OR project = "OTHER');
+
+      expect(keys).toEqual(["PROJ-3"]);
+      expect(sentJql()).toBe('project = "PROJ" AND labels = "marker OR project = OTHER"');
+    });
+  });
+
   describe("findTickets", () => {
-    it("bounds Jira search latency with a timeout signal", async () => {
+    it("bounds Jira search latency with a timeout signal handed to the context's fetch", async () => {
+      // The context's fetch joins a caller's signal to every attempt, so the
+      // bound only operates if the signal reaches that fetch in `init`.
       const controller = new AbortController();
       const timeout = vi
         .spyOn(AbortSignal, "timeout")
@@ -826,6 +967,7 @@ describe("JiraAdapter", () => {
         await jiraAdapter().findTickets({ keywords: [], limit: 5 });
 
         expect(timeout).toHaveBeenCalledWith(5000);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
       } finally {
         timeout.mockRestore();

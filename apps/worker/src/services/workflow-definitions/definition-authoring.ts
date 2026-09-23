@@ -210,7 +210,7 @@ export async function saveWorkflowDefinitionDraftAndValidate(input: {
   });
 
   try {
-    const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(saved.draft);
+    const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(saved.draft, input.definitionId);
     return {
       definition: saved.definition,
       draftRow: saved,

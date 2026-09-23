@@ -194,9 +194,9 @@
       "reason": "the registry's other entries are read where there is no React: the worker, and the Workflow DevKit flow bundle. Keeping the dashboard entry off them is what lets one package serve three bundles."
     },
     {
-      "from": "^integrations/.*dashboard\\.tsx$",
+      "from": "^integrations/(?:_fixtures/)?[^/]+/dashboard(?:\\.tsx|/.+\\.tsx?)$",
       "to": "(?:^|/)worker\\.ts$",
-      "reason": "an integration's dashboard entry is compiled into the cockpit's bundle. Its worker entry is server code with provider SDKs and Node modules in it, so importing one from the other puts them in a browser. Share plain data through a third file in the package."
+      "reason": "an integration's dashboard entry, and any page code under the dashboard/ directory beside it, is compiled into the cockpit's bundle. Its worker entry is server code with provider SDKs and Node modules in it, so importing one from the other puts them in a browser. Share plain data through a third file in the package."
     }
   ],
   "forbiddenSpecifiers": [
@@ -206,9 +206,9 @@
       "reason": "`@/` is the dashboard's own alias. An integration reaching through it pins itself to a screen's internals, which change whenever a screen needs them to. Import @integrations/host-ui, which is the UI the host lends and is a contract that only grows."
     },
     {
-      "from": "^integrations/.*dashboard\\.tsx$",
+      "from": "^integrations/(?:_fixtures/)?[^/]+/dashboard(?:\\.tsx|/.+\\.tsx?)$",
       "specifier": "^(?:next/|node:|server-only$)",
-      "reason": "an integration's dashboard entry is a Server Component in our process, so these are the doors that let one stop being a page and start being part of the cockpit: next/headers reaches our cookies, next/navigation moves the person, node: reaches the filesystem, and server-only is how a module says it is ours. Integration code is trusted code we review, and this rule is what keeps a page from coupling itself to our runtime by accident. A page renders what its own package knows; if it needs more, that is a contract change, not an import."
+      "reason": "an integration's dashboard entry, and any page code under the dashboard/ directory beside it, is a Server Component in our process, so these are the doors that let one stop being a page and start being part of the cockpit: next/headers reaches our cookies, next/navigation moves the person, node: reaches the filesystem, and server-only is how a module says it is ours. Integration code is trusted code we review, and this rule is what keeps a page from coupling itself to our runtime by accident. A page renders what its own package knows; if it needs more, that is a contract change, not an import."
     }
   ]
 }

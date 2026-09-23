@@ -7,6 +7,7 @@ import {
 } from "@integrations/sdk";
 import { manifest } from "./manifest";
 import { JiraAdapter } from "./issue-tracker";
+import { jqlQueryRule } from "./jql";
 import { adapterFor, webhook } from "./webhook";
 
 type JiraManifest = typeof manifest;
@@ -65,6 +66,9 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
       message: `Connected to ${ctx.connection.projectKey}, ${found.length} status${found.length === 1 ? "" : "es"} visible.`,
     };
   },
+  // The adapter's own rule for an authored query, which core asks when a
+  // definition is saved, so an author hears about a query findTickets would drop.
+  issueTrackerQueryRule: jqlQueryRule,
   capabilities: {
     issue_tracker: (ctx) =>
       new JiraAdapter({

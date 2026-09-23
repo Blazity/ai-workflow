@@ -1,7 +1,7 @@
 /**
- * The manifest half of this package's fixture integration: one integration
- * that serves all three ported capabilities, for a provider core has never
- * heard of. `fixture-runtime.ts` implements it. Together they are the type
+ * The manifest half of this package's fixture integrations: one that serves
+ * four capabilities (issue tracking, version control, messaging and agent
+ * tracing) for a provider core has never heard of, and one that only traces. `fixture-runtime.ts` implements it. Together they are the type
  * evidence that the contract is usable (the package typecheck compiles them)
  * and the runtime evidence that conformance accepts a real integration.
  *
@@ -13,7 +13,7 @@ import { defineIntegration, defineIntegrationBlock, z } from "./index";
 export const researchBlock = defineIntegrationBlock({
   type: "sdkfixture_research",
   paramsSchema: z.object({
-    query: z.string().min(1),
+    query: z.string().min(1).default("recent incidents"),
     lookbackDays: z.number().int().positive().default(30),
     headers: z.record(z.string(), z.string()).optional(),
   }),

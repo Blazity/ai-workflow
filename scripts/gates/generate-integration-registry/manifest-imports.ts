@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { sourceFile } from "../generate-block-catalog/manifest-ast.js";
+import { type GlobalUse, unavailableGlobals, WORKFLOW_VM_GLOBALS } from "./graph-globals.js";
 
 const SDK = "@integrations/sdk";
 const EXTENSIONS = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
@@ -43,11 +45,31 @@ function specifiers(file: ts.SourceFile): string[] {
 }
 
 /**
+ * Whether a specifier names one of Node's own modules, with or without the
+ * `node:` prefix. The boundaries gate refuses `node:*` in a dashboard entry,
+ * but `"process"` or `"fs"` bare is the same module, and an import binds a
+ * local name the globals check rightly accepts as local.
+ */
+function isNodeBuiltin(specifier: string): boolean {
+  const name = specifier.startsWith("node:") ? specifier.slice("node:".length) : specifier;
+  return builtinModules.includes(name) || specifier.startsWith("node:");
+}
+
+/** One line per use, then the fix, so a refusal names every place at once. */
+function refuseGlobals(uses: readonly GlobalUse[], opening: string, closing: string): void {
+  if (uses.length === 0) return;
+  const lines = uses.map((use) => `  ${use.file}:${use.line} uses ${use.name}.${use.reason ? ` ${use.reason}` : ""}`);
+  throw new Error(`${opening}\n${lines.join("\n")}\n${closing}`);
+}
+
+/**
  * A manifest is read by the dashboard in a browser and by the Workflow DevKit
- * inside the flow bundle, where a Node module fails the Vercel build and
- * nothing else, so no local test would catch it. The rule is therefore the
- * whole reachable graph, not one file: a manifest may import `@integrations/sdk`
- * and files inside its own package, and each of those obeys the same rule.
+ * inside the flow bundle, where a Node module fails the Vercel build and a
+ * Node global fails the deployed workflow, and nothing local catches either.
+ * The rule is therefore the whole reachable graph, not one file: a manifest
+ * may import `@integrations/sdk` and files inside its own package, each of
+ * those obeys the same rule, and together they may use only the globals the
+ * VM gives them (`unavailableGlobals`, which asks the compiler).
  *
  * Returns every file the manifest reaches, the caller's cue for which files a
  * manifest change touches.
@@ -86,25 +108,33 @@ export function assertManifestIsPureData(
     }
   };
   visit(manifestPath);
+  refuseGlobals(
+    unavailableGlobals([...seen], "manifest", repositoryRoot),
+    "A manifest may use the language and what the Workflow DevKit's VM gives it " +
+      `(${WORKFLOW_VM_GLOBALS.join(", ")}), because the flow bundle evaluates it there. ` +
+      "Conformance and the typecheck run in Node, so they pass, and the deployed workflow throws a ReferenceError:",
+    "Write the value out as data, or compute it in the worker entry.",
+  );
   return [...seen];
 }
 
 /**
- * A dashboard entry may not read the deployment's environment.
+ * A dashboard entry may use only what a browser gives it.
  *
  * The specifier rules in `tiers.json` shut the doors that are imports:
- * `next/headers`, `node:*`, `server-only`. `process.env` is not an import, so
- * nothing there can see it, and it is the one reach that needs no dependency at
- * all: a Server Component in our process would get `WORKER_BASE_URL` and every
- * other variable this deployment runs with. An integration's own credentials
- * reach it through the context the SDK describes, on the worker side, where
- * they are resolved once.
+ * `next/headers`, `node:*`, `server-only`. Node's modules imported bare
+ * (`"process"`, `"fs"`) are shut here, in every file of the graph. A global is
+ * not an import, so nothing there can see it, and `process` is the one reach
+ * that needs no dependency at all: a Server Component in our process would get
+ * `WORKER_BASE_URL` and every other variable this deployment runs with. An
+ * integration's own credentials reach it through the context the SDK
+ * describes, on the worker side, where they are resolved once.
  *
- * Source text, not the type graph: this is about what a file can do at run
- * time, and the whole reachable graph inside the package is checked, because a
- * helper one file away would read the same environment.
+ * The question is the manifest's (`unavailableGlobals`) asked of the browser,
+ * over the whole reachable graph inside the package, because a helper one
+ * file away would read the same environment.
  */
-export function assertDashboardReadsNoEnvironment(
+export function assertDashboardUsesBrowserGlobals(
   packageDirectory: string,
   dashboardPath: string,
   repositoryRoot: string,
@@ -113,15 +143,16 @@ export function assertDashboardReadsNoEnvironment(
   const visit = (filePath: string): void => {
     if (seen.has(filePath)) return;
     seen.add(filePath);
-    const local = relative(repositoryRoot, filePath).replaceAll("\\", "/");
-    if (/\bprocess\s*\.\s*env\b/u.test(readFileSync(filePath, "utf8"))) {
-      throw new Error(
-        `${local}: a dashboard entry may not read process.env. It renders inside the cockpit's own process, so the environment it would read is this deployment's, not the integration's. ` +
-          "What an integration needs reaches it through the context the SDK describes, on the worker side.",
-      );
-    }
     const file = sourceFile(filePath);
     for (const specifier of specifiers(file)) {
+      if (isNodeBuiltin(specifier)) {
+        const local = relative(repositoryRoot, filePath).replaceAll("\\", "/");
+        throw new Error(
+          `${local}: a dashboard entry may not import "${specifier}", which is Node's own module. ` +
+            "It renders inside the cockpit's own server, where Node's modules reach this deployment's files and environment, not the integration's. " +
+            "What an integration needs reaches it through the context the SDK describes, on the worker side.",
+        );
+      }
       if (!specifier.startsWith(".")) continue;
       const target = resolveLocal(filePath, specifier);
       if (!target) continue;
@@ -130,4 +161,10 @@ export function assertDashboardReadsNoEnvironment(
     }
   };
   visit(dashboardPath);
+  refuseGlobals(
+    unavailableGlobals([...seen], "dashboard", repositoryRoot),
+    "A dashboard entry may use the language and what a browser gives it. It also renders inside the cockpit's own server, " +
+      "where process.env is this deployment's environment, not the integration's:",
+    "What an integration needs reaches it through the context the SDK describes, on the worker side.",
+  );
 }

@@ -70,6 +70,9 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
       baseUrl: e2eEnv.JIRA_BASE_URL,
       apiToken: e2eEnv.JIRA_API_TOKEN,
       projectKey: e2eEnv.JIRA_PROJECT_KEY,
+      // Plain fetch: this suite talks to a real Jira without an integration
+      // context, and nothing here depends on the context's retry policy.
+      fetch: (target, init) => fetch(target, init),
     });
 
     const ticketData = await jira.fetchTicket(ticketKey);

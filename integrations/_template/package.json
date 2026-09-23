@@ -25,7 +25,9 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"!(node_modules)/**/*.test.{ts,tsx}\" \"*.test.{ts,tsx}\"",
+    "test:zod4": "node --import tsx --import ../../packages/zod4-alias.mjs --test \"!(node_modules)/**/*.test.{ts,tsx}\" \"*.test.{ts,tsx}\""
   },
   "dependencies": {
     "@integrations/host-ui": "workspace:*",
@@ -35,6 +37,8 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "react": "catalog:",
-    "typescript": "catalog:"
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "zod4": "catalog:"
   }
 }
