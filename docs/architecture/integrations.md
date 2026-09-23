@@ -10,12 +10,348 @@ template (`integrations/_template`) and the SDK (`integrations/sdk`) open, you
 should not need anything else. Where you do, that is a gap in this page:
 say so in your pull request.
 
-The five integrations that ship (`integrations/arthur`, `slack`, `gitlab`,
-`github`, `jira`) and the built-in memory provider
+"Start here" is the path: the decisions, the steps with their commands, the
+review checklist and the proof. Every section after it is reference, and the
+path links into it where it applies. A coding agent follows the same path
+through the `new-integration` skill (`.claude/skills/new-integration`), which
+adds the points where it stops and asks a human.
+
+The six integrations that ship (`integrations/arthur`, `slack`, `gitlab`,
+`github`, `jira`, `mem0`) and the built-in memory provider
 (`apps/worker/src/memory/builtin/adapter.ts`) are the worked examples. Each one
 solved a different problem, and this page points at the one that solved yours.
 [ADR-010](../adr/ADR-010-integrations.md) holds the reasons behind every rule
 here, stage by stage.
+
+## Start here
+
+An integration is one package under `integrations/<id>` that core compiles
+into every build (see "What an integration is"). It can do four kinds of
+thing, in any combination:
+
+- **Serve a capability**: be the provider core asks for one of its seams.
+  There are five: `issue_tracker`, `vcs`, `messaging`, `memory` and
+  `agent_tracing` (see "Capabilities").
+- **Contribute blocks**: steps an author places in a workflow (see "Blocks").
+- **Receive a webhook**: the provider calls `/webhooks/<id>` (see "Webhooks").
+- **Show pages**: tabs in the dashboard, reading provider data (see
+  "Dashboard pages").
+
+Three product rules shape everything below. Connecting, credentials and
+enabling or disabling happen only in the dashboard, never over MCP, and an
+integration adds no MCP tools (see "MCP"). Core never names a provider: your
+provider's name, words and URLs stay in your package (see "Things you may not
+do"). And no deployment here is yours to try an unmerged integration on,
+because previews and the demo share production's database: you prove it
+locally with its tests and conformance, and an operator connects it on
+production after the merge.
+
+### 1. Decide before you scaffold
+
+Answer each of these, in writing, before the first command. The id and the
+connection fields become permanent the day the integration ships, and a
+wrong capability means rewriting the package.
+
+- [ ] **You have read the provider's current documentation** for
+      authentication, every call you will make, webhooks, rate limits and
+      error codes, and noted the page and the day for each ("Before you write
+      a line"). You have a test account's key for the questions the
+      documentation leaves open, or know whom to ask for one.
+- [ ] **The id**: 3 to 32 lowercase letters and digits, starting with a
+      letter (`hippo`, not `hippo-ai`). It names the package
+      (`@integrations/<id>`), the webhook URL, the screen
+      (`/integrations/<id>`) and the prefix of every block type, and it is
+      written into stored rows.
+- [ ] **What it contributes**: which capability it serves, if any, and
+      whether it adds blocks, a webhook or pages. For a capability, read the
+      shipped package the table in "Capabilities" points at. A capability
+      marked "one" already served here (Jira, Slack) means yours replaces
+      that provider on a deployment, it does not run beside it. When none of
+      the five fits, or you need a word the port does not have, that is a
+      change to the SDK, decided and recorded in ADR-010, not something an
+      integration does on its own.
+- [ ] **The connection fields**: for each, its key, its environment variable,
+      whether it is required, its default, its format, and **whether it is
+      secret** (every credential is, and a secret has no default). Which
+      non-secret field names the account, and how the connection test checks
+      that the key reaches it ("One connection").
+- [ ] **Operator settings**, if any: behaviour an admin changes that is not
+      about reaching the provider, such as who may run a command ("Operator
+      settings").
+- [ ] **The connection test**: which one call proves the values work, which
+      answers mean the values are wrong, and what the pass message names
+      ("The connection test").
+- [ ] **Health checks**: at least one; what each asks the provider, and which
+      are critical ("Health checks").
+- [ ] **A webhook**, only when the provider calls back about something core
+      acts on: its signature scheme, read off the provider's page, and whether
+      it needs the whole connection ("Webhooks"). A provider whose own events
+      (an incident, an alert) should start a workflow is pointed at core's
+      generic trigger instead.
+- [ ] **The credential lives without an install flow**: a long-lived token or
+      a key that mints short-lived ones. An OAuth install or a refresh token
+      that rotates on every use does not fit ("What an integration cannot
+      do").
+
+### 2. From scaffold to merged
+
+Commands run from the repository root. Each step ends in a checkpoint: do
+not start the next until it holds.
+
+1. **Create the package.**
+
+   ```sh
+   pnpm run new:integration -- <id> --name "Display Name"
+   ```
+
+   It copies `integrations/_template` to `integrations/<id>` with the
+   template's names replaced, a `test` script and a first test included. It
+   refuses, before writing anything, an id the SDK reserves, one an
+   integration already has, and one that core source already spells where no
+   allowlist row covers it, because the core-reference gate would fail your
+   first run on every such file. What the gate reads as core, and what it
+   counts as spelling an id, in the words it prints with every failure and
+   the scaffold with every refusal:
+
+   > Core is apps/worker, apps/dashboard, packages, as git lists them, minus
+   > every path matching an `exclude` pattern in
+   > scripts/gates/core-references.json.
+   >
+   > Core spells a provider id where one word starts with it, or where
+   > consecutive words join to exactly the id, in any case, in a file's path
+   > or in one identifier, string, template, regular expression or piece of
+   > JSX text; words split at punctuation and at case changes, so
+   > GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell
+   > their id, while scriptsEntry does not spell sentry and Team settings
+   > does not spell teams. Comments and the text of a className or style
+   > attribute are not read.
+
+   The refusal names the files. Where one is not about your provider (sample
+   data, a URL on a host that merely starts with the word), add the id to an
+   allowlist row with the reason and run the scaffold again; otherwise pick
+   another id. `acme` appears in core's examples, so it is refused.
+   *Checkpoint:* `integrations/<id>` exists and the command printed the next
+   steps.
+
+2. **Install and register it.**
+
+   ```sh
+   pnpm install
+   pnpm run gen:integrations
+   ```
+
+   `pnpm install` links the new workspace package and adds it to the
+   lockfile; `gen:integrations` adds it to the generated registries in
+   `integrations/registry`. From here the worker, the dashboard and the
+   Workflow DevKit know it exists.
+
+3. **Record its connection shape.**
+
+   ```sh
+   pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts -u
+   ```
+
+   This writes your fields into `connection-shape.snapshot.json`. The test
+   fails whenever a shipped integration's connection fields change (see "What
+   the run pin does to you"); for a new integration the change is only the
+   addition. It reads the generated registry and the committed snapshot and
+   nothing else: no database, no network, safe on any machine. Run it again
+   with `-u` whenever you change your fields before the merge.
+
+4. **Put it on CI's lists.** Add `--filter @integrations/<id>` to the root
+   `test:packages` and `test:packages:zod4` scripts in `package.json`. Those
+   lists are what CI runs, and `scripts/ci/verify-changed.test.ts` fails
+   while a package with a `test` script is missing from them.
+
+5. **Check the untouched scaffold.**
+
+   ```sh
+   pnpm --filter @integrations/<id> run typecheck
+   pnpm --filter @integrations/<id> run test
+   pnpm --filter @integrations/<id> run test:zod4
+   pnpm --filter @integrations/registry run test
+   ```
+
+   Your own tests under zod 3, the same under zod 4, and the conformance suite.
+   *Checkpoint:* all four pass before you have edited anything. If one fails
+   here, the template or the scaffold is at fault: report it rather than
+   work around it. From here on, run them after every change.
+
+6. **Make it yours:** the manifest, then the worker, then the tests, using the
+   reference sections below. The scaffold sets the block's `glyph` to your
+   name's initial; choose its `color` and `softColor` too, and replace the
+   placeholder `description` in `package.json`. Delete what you do not need,
+   and what goes with it:
+   - **No page:** delete `dashboard.tsx`, set `pages: []`, remove the
+     `./dashboard` entry from `exports` in `package.json`, the
+     `@integrations/host-ui`, `react` and `@types/react` dependencies, and the
+     page's line in the README. The generator refuses a `dashboard.tsx` with
+     no page declared, and a page with no `dashboard.tsx`; it does not read
+     `package.json`, but the unused-code gate (`pnpm run gate:unused`) fails
+     on a dependency nothing imports.
+   - **No block:** `blocks: []` in the manifest and `blocks: {}` in
+     `worker.ts` (the typecheck holds the two together), the block's tests and
+     its line in the README.
+   - **No webhook:** leave `webhook` out of `worker.ts`; the route answers
+     404 for you. A memory integration normally has none.
+
+   Record each provider page you wrote against in the README's table, and
+   every recorded payload with its source ("Recorded payloads").
+   *Checkpoint:* the four commands of step 5 pass, and each of your own tests
+   has been seen failing once (break the line it guards, watch it go red, put
+   the line back).
+
+7. **Review it** against the checklist below and run its commands.
+
+8. **Open the pull request** to `main`. It says which provider documentation
+   the adapter was written against, and, for a change to an integration that
+   has shipped, which connection shapes and block types moved. CI runs the
+   full worker suite; do not run it locally.
+   *Checkpoint:* the `ci` check is green, which `main` requires before a
+   merge.
+
+### 3. Review checklist
+
+Run these, and read each box against your diff. A reviewer reads the same
+list.
+
+```sh
+pnpm install
+pnpm run gen:integrations
+pnpm --filter @integrations/<id> run typecheck
+pnpm --filter @integrations/<id> run test
+pnpm --filter @integrations/<id> run test:zod4
+pnpm --filter @integrations/registry run test
+pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts
+pnpm run gate:core-references
+pnpm run gate:lint
+pnpm run gate:unused
+pnpm run verify:changed -- --worktree
+```
+
+`gate:lint` (oxlint) and `gate:unused` read every package, yours included, and
+`verify:changed` fails on their first diagnostic (`scripts/ci/gates.test.ts`,
+"lint and unused-code gates are unconditional"). Lint refuses, among others, a
+useless `undefined` (write `.catch(() => null)`), unsafe optional chaining and
+a spread that accumulates inside a `reduce`; the unused-code gate refuses an
+export or an exported type nothing imports, as well as a dependency. Run both
+early rather than meet them last.
+
+- [ ] **Nothing outside the package changed** except the lockfile, the
+      generated registries, the connection-shape snapshot, the two
+      `test:packages` lists, a changelog entry and, if the scaffold asked for
+      it, an allowlist row with its reason. No core file names your provider,
+      and nothing under `integrations/sdk` changed.
+- [ ] **`manifest.ts` is plain data**: no Node module, no provider SDK, no
+      global the Workflow DevKit lacks (`gen:integrations` names each).
+- [ ] **No `"use step"` or `"use workflow"`** anywhere in the package.
+- [ ] **Every value comes from `ctx`**: nothing reads `process.env`, and every
+      request goes through `ctx.http.fetch`, a provider SDK included ("What
+      the context gives you").
+- [ ] **Every credential field is `secret: true`**, no secret has a default,
+      and no page reader returns one.
+- [ ] **The connection test refuses only for a verdict about the values**
+      (`refusedOrThrow`) and names the account its pass reached.
+- [ ] **zod comes from `@integrations/sdk`** and `test:zod4` passes ("zod 3 in
+      tests, zod 4 in production").
+- [ ] **A webhook test verifies bytes the provider signed**, or payloads it
+      published signed by a helper short enough to read against its page
+      ("Recorded payloads").
+- [ ] **Every recorded payload has its `.source.txt`**, and its digest is
+      pinned in a test.
+- [ ] **Blocks**: one port `out`, every parameter has a default, every
+      `status` listed in `statusVariants`.
+- [ ] **No em dash and no en dash anywhere in the package**: code, comments,
+      strings, the README, fixtures' `.source.txt` and the changelog. The
+      repository writes with commas, colons and parentheses instead.
+- [ ] **The README** says what it connects, which values an admin needs and
+      where to find them, what connecting unlocks, and which provider pages
+      you read and when. A memory integration's README also says: that
+      connecting copies nothing and disconnecting deletes nothing; that
+      deployments sharing its connection share memory, and one engine project
+      per connection keeps them apart; which namespace it writes; whether
+      items go through the engine's own extraction, and why; and, when it has
+      no `store`, that the memory screen cannot list or erase what it holds.
+- [ ] **`changelog/unreleased/<slug>.md`** carries one bullet saying what a
+      person can do now and where (a page, a block). Never a defect, an
+      incident, a ticket key, a commit, a pull request number or a person, and
+      never the words fix, bug, broken or finally; `changelog/README.md` has
+      the whole rule. CI's completeness check reads only `apps/` and
+      `packages/`, so for a package under `integrations/` nothing but this
+      review asks for the entry.
+- [ ] **If yours is the first provider of a capability**, core's tests take a
+      new path. With no integration serving a capability, core resolves it
+      without reading the integration rows (`resolveUsableIntegrations` in
+      `apps/worker/src/services/integrations/usable.ts` returns early); with
+      one in the registry, every call site reads them first. Core tests that
+      swapped the database for a fake answering only their own calls then fail
+      at that read. Mem0 met this in `memory-steps.test.ts` and
+      `repo-memory-steps.test.ts` (both in `apps/worker/src/engine/steps`) and
+      fixed it the way those files already state their other premises: the
+      resolver answers "nothing connected" in the test's mock.
+      `verify:changed` does not run core tests your diff does not touch, so
+      CI's worker suite is where this shows: run the files that call your
+      capability's resolver yourself (`pnpm --dir apps/worker exec vitest run
+      <file>`) before you push. It changes production too: since Mem0
+      shipped, every `activeMemory` call reads the integration rows before
+      choosing the built-in store, so a database that does not answer for a
+      moment makes that step's memory `unreadable` (memory not used, said on
+      the run) where it used to go straight to the built-in store.
+
+Every row of "Things you may not do, and what happens if you do" is a review
+finding; the boxes above are the ones met most often.
+
+### 4. Prove it
+
+No deployment here is yours to try an integration on before it merges.
+Previews and the demo deployment read production's database, and the worker's
+build runs its migrations against whatever database it is given, so deploying
+an unmerged branch to either changes production without the review a merge
+gets. For the same reason, do not start a worker locally: on our machines
+`DATABASE_URL` points at production. So the proof comes in two halves.
+
+**Before the merge, locally, by you:**
+
+1. Your package's tests against recorded payloads, under both zod majors, and
+   conformance: the commands of step 5.
+2. For a question the documentation leaves open, one live call from your own
+   machine to the provider with a test account's key, kept as a recorded
+   payload ("Before you write a line").
+3. For a network-free double of your provider, copy the approach of
+   `integrations/_fixtures/demo`: a provider with no network at all,
+   registered only in a registry a developer generates locally with
+   `INTEGRATION_FIXTURES=1 pnpm run gen:integrations`. No deployment and no
+   CI job sets that flag, the committed registry is the one generated without
+   it, and `gen:integrations --check` compares against that whatever the flag
+   says; tests that need the fixture ask the generator for it directly.
+   Regenerate without the flag before you commit.
+
+**After the merge, on production, by an operator:**
+
+1. **Wait for the deploy.** `main` deploys production; the worker's `/health`
+   answers the `commit` it was built from, so check that it is your merge
+   commit or a later one.
+2. **Connect** through the card's Connection tab
+   (`/integrations/<id>/connection`) with stored values, which need no
+   redeploy. Save runs your connection test first and activates the values
+   only if it passes; its message must name the account meant.
+3. **Look.** The card reads Connected. Its blocks appear in the editor's
+   palette under its name, its pages in the sidebar below the Integrations
+   separator, its checks on the System health page, and `system.capabilities`
+   over MCP lists it with its blocks. Run a workflow that uses what it
+   contributes.
+4. **Switch it off again if anything is wrong**: Disable, on the same form,
+   stops its use at the next call on every deployment, because the rows are
+   shared.
+
+A memory integration has a longer operator's half, which starts with a drain:
+"Proving a memory integration on production", under "Memory".
+
+What a person sees before anybody connects it: the Integrations page lists a
+card for it, Not connected, with its description, its docs link and what it
+unlocks. On a deployment whose environment sets every required variable, it
+reads Connected, with a line saying the values come from this deployment's
+environment, and there is nothing to click.
 
 ## Before you write a line: read the current documentation
 
@@ -70,95 +406,6 @@ test runner behaves, read the version this repository pins: `zod`, `zod4`,
 `typescript`, `tsx`, `vitest` and `react` in the `catalog:` of
 `pnpm-workspace.yaml`, the Workflow DevKit (`workflow`) in
 `apps/worker/package.json`, and Next.js in `apps/dashboard/package.json`.
-
-## From nothing to a connected integration
-
-The whole path, so you can see where each section below fits. Commands run
-from the repository root.
-
-1. **Pick an id.** 3 to 32 lowercase letters and digits, starting with a
-   letter: `hippo`, not `Hippo`, `hippo-ai` or `hippo_ai`. It names the package
-   (`@integrations/<id>`), the webhook URL (`/webhooks/<id>`), the screen
-   (`/integrations/<id>`) and the prefix of every block type, and it is
-   written into stored rows, so it is permanent once shipped (see "Things you
-   may not do").
-2. **Create the package.** `pnpm run new:integration -- <id> --name "Display Name"`
-   copies `integrations/_template` to `integrations/<id>` with the template's
-   names replaced, a `test` script and a first test included. It refuses,
-   before writing anything, an id the SDK reserves, one an integration
-   already has, and one that core source already spells where no allowlist
-   row covers it, because the core-reference gate would fail your first run
-   on every such file. What the gate reads as core, and what it counts as
-   spelling an id, in the words it prints with every failure and the
-   scaffold with every refusal:
-
-   > Core is apps/worker, apps/dashboard, packages, as git lists them, minus
-   > every path matching an `exclude` pattern in
-   > scripts/gates/core-references.json.
-   >
-   > Core spells a provider id where one word starts with it, or where
-   > consecutive words join to exactly the id, in any case, in a file's path
-   > or in one identifier, string, template, regular expression or piece of
-   > JSX text; words split at punctuation and at case changes, so
-   > GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell
-   > their id, while scriptsEntry does not spell sentry and Team settings
-   > does not spell teams. Comments and the text of a className or style
-   > attribute are not read.
-
-   The refusal names the files. Where one is not about your provider (sample
-   data, a URL on a host that merely starts with the word), add the id to an
-   allowlist row with the reason and run the scaffold again; otherwise pick
-   another id. `acme` appears in core's examples, so it is refused.
-3. **Install and register it.** `pnpm install` links the new workspace package
-   and adds it to the lockfile; `pnpm run gen:integrations` adds it to the
-   generated registries in `integrations/registry`. From here the worker, the
-   dashboard and the Workflow DevKit know it exists.
-4. **Record its connection shape.**
-   `pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts -u`
-   writes your fields into `connection-shape.snapshot.json`. That test fails
-   whenever a shipped integration's connection fields change (see "What the
-   run pin does to you"); for a new integration the change is only the
-   addition. It reads the generated registry and the committed snapshot and
-   nothing else: no database, no network, safe on any machine.
-5. **Check it.** `pnpm --filter @integrations/<id> run typecheck`,
-   `pnpm --filter @integrations/<id> run test` (your own tests, and
-   `run test:zod4` for the same under zod 4) and
-   `pnpm --filter @integrations/registry run test` (the conformance suite).
-   All pass before you have edited anything. From here on, run them after
-   every change.
-6. **Make it yours:** the manifest, then the worker, then the tests, using
-   the sections below. The scaffold sets the block's `glyph` to your name's
-   initial; choose its `color` and `softColor` too, and replace the
-   placeholder `description` in `package.json`. Delete what you do not
-   need, and what goes with it:
-   - **No page:** delete `dashboard.tsx`, set `pages: []`, remove the
-     `./dashboard` entry from `exports` in `package.json`, the
-     `@integrations/host-ui`, `react` and `@types/react` dependencies, and the
-     page's line in the README. The generator refuses a `dashboard.tsx` with
-     no page declared, and a page with no `dashboard.tsx`; it does not read
-     `package.json`, but the unused-code gate (`pnpm run gate:unused`) fails
-     on a dependency nothing imports.
-   - **No block:** `blocks: []` in the manifest and `blocks: {}` in
-     `worker.ts` (the typecheck holds the two together), the block's tests and
-     its line in the README.
-   - **No webhook:** leave `webhook` out of `worker.ts`; the route answers
-     404 for you. A memory integration normally has none.
-7. **Prove it** with its own tests and conformance, locally (see "Your own
-   tests"). The live proof comes after the merge, on production, by an
-   operator through the Connection form ("Proving it works"): there is no
-   deployment you may change before then.
-8. **Open the pull request** with the checklist at the end of this page.
-
-What a person sees once it is deployed: the Integrations page lists a card
-for it, Not connected, with its description, its docs link and what it
-unlocks. On a deployment whose environment sets every required variable, it
-reads Connected (environment) with nothing to click. Otherwise an admin opens
-the card's Connection tab (`/integrations/<id>/connection`), fills the fields
-your manifest declares and saves; saving runs your connection test first and
-activates the values only if it passes. Once connected and enabled, its
-blocks appear in the editor's palette under its name, its pages appear in the
-sidebar below the Integrations separator, its checks appear on the System
-health page, and `system.capabilities` over MCP lists it with its blocks.
 
 ## What an integration is
 
@@ -266,10 +513,11 @@ column name). Conformance holds you to that
 **A block uses a capability by requiring it**, not by serving it. List it in
 the block's `requires.capabilities` and the editor offers the block only
 while the capability is served here; the executor's `ctx.capabilities` then
-has exactly those keys (`integrations/_fixtures/demo/worker.ts` requires
-`messaging`). `memory` and `agent_tracing` have no key there: core applies
-them around a run, so naming one only decides whether the block is offered,
-by the rule a run is served by. `memory` is offered whenever runs here
+has exactly those keys (`integrations/_fixtures/demo/manifest.ts` requires
+`messaging`, and its `worker.ts` uses `ctx.capabilities.messaging`). `memory`
+and `agent_tracing` have no key there: core applies them around a run, so
+naming one only decides whether the block is offered, by the rule a run is
+served by. `memory` is offered whenever runs here
 remember: with no memory integration switched on (the built-in store serves)
 and with one switched on and working; not while that one is Failing, and not
 while two are switched on. A block that requires `agent_tracing` is never
@@ -371,7 +619,9 @@ do them and cannot get them wrong:
   lessons, summed over the owner and every repository in the prompt. A
   rendering that does not fit what is left is cut and ends with a marker line
   the model reads (at the last line end that keeps at least half the room, and
-  inside a line when none does); the renderings after it are left out, and
+  inside a line when none does), or left out whole when less than 1 KiB of
+  room is left (`fitMemoryText`, `apps/worker/src/memory/content.ts`); the
+  renderings after it are left out, and
   both are logged (`repo_memory_injection_budget_exceeded`). A notebook is a
   file in the agent's workspace, not a prompt section, and is capped at
   `MEMORY_NOTEBOOK_MAX_BYTES` (256 KiB) the same way. So your rendering does not
@@ -413,7 +663,7 @@ off by default); promotion to an owner's facts also needs
 | Right after it, repository memory on (`seedRepoMemoryStep`, `repo-seed-steps.ts`) | per repository: `recall` of facts; an `observe` of `items` marked `derived` and `onlyIfEmpty` when nothing is held; an `observe` with only `refuted` to retract a script the repository no longer has | `repo:<provider>:<path>`, `facts` | `repo_memory_seeded`, `repo_memory_seed_refused`, `repo_memory_prune_refused`, `memory_provider_unavailable` | `memory_unavailable` (`where: "seed"`), as above |
 | Every agent invocation, repository memory on (`loadRepoMemorySourcesStep`, `repo-memory-steps.ts`) | `recall` of each owner's facts, then each repository's facts and lessons: up to 1 + 2N calls | `org:<provider>:<owner>` facts; `repo:...` facts and lessons | `repo_memory_injected` (documents, bytes, dropped, truncated), `repo_memory_injection_budget_exceeded`, `memory_provider_unavailable` (`provider`, how many refused), `repo_memory_load_deadline_exceeded` | the memory sections of what the agent was sent: `runs.briefing` over MCP and the node's last briefing in the editor; a refusal as `memory_unavailable` (`where: "prompt"`) |
 | Teardown, whatever the outcome, failed and cancelled runs included (`persistWorkspaceMemoryStep`) | `observe` of the agent's notebook `document`; when the workspace started without an answer from `recall`, a `recall` first, and no write over a notebook you hold | as the first row | `memory_document_persisted`; `memory_provider_unavailable` (`provider`, `code`, `detail`); `memory_capture_unavailable` with the run id; `memory_document_persist_withheld` and `memory_capture_withheld` when a stored notebook was kept | **logs only** |
-| After a run that succeeded and published, repository memory on (`distillRepoMemoryStep`) | `recall` of the notebook and of each write-scoped repository's facts and lessons; an `observe` of `items` (`learned`, `refuted`) per repository and scope; with promotion on, facts again and an `observe` on the owner: up to 1 + 3N calls | notebook, `repo:...`, `org:...` | `repo_memory_distilled` on every path, with an `outcome`; `repo_memory_write_refused`; `memory_provider_unavailable`; `memory_distill_unavailable` with the run id | **logs only** |
+| After a run that succeeded and published, repository memory on (`distillRepoMemoryStep`) | `recall` of the notebook and of each write-scoped repository's facts and lessons; an `observe` of `items` (`learned`, `refuted`) per repository and scope; with promotion on, facts again and an `observe` on the owner: up to 1 + 4N calls, and with promotion on, N more recalls and one `observe` per owner | notebook, `repo:...`, `org:...` | `repo_memory_distilled` on every path, with an `outcome`; `repo_memory_write_refused`; `memory_provider_unavailable`; `memory_distill_unavailable` with the run id | **logs only** |
 | The memory screen (`/memory`) and the `memory.list`, `memory.get` and `memory.forget` MCP tools | `store.list`, `store.read`, `store.forget` | the pairs your `list` returned | | the screen shows your listing and, when you cannot answer, your sentence; `complete: false` adds a notice that the list may be partial |
 
 Which provider answered is on those log lines (`provider`) and nowhere else: no
@@ -688,7 +938,33 @@ own tests".
 A run is not yet held to the memory provider it started with: the comparison
 exists and no call site passes it a pin (`memory-runtime.ts`), so a run in
 flight when an admin connects you may read from the built-in store and write
-to you. That is why the proof below starts with a drain.
+to you. That is why the proof on production starts with a drain.
+
+#### Proving a memory integration on production
+
+The operator's half of "Prove it", for a memory integration:
+
+1. **Drain first.** No run is running or waiting (the Runs page, or
+   `runs.stats` over MCP): a run in flight when you connect may read from the
+   built-in store and write to yours.
+2. **Connect** through the form, and check that Test names the project meant.
+3. **Turn on repository memory** on the Settings page if it is off, and run a
+   ticket through a workflow with one agent block on one repository.
+4. **In the worker's logs for that run**, by its id: `repo_memory_seeded`
+   (logged only when the seed wrote something, which on a first run it does
+   when the repository's manifest names its package manager or scripts),
+   `repo_memory_injected`, `memory_document_persisted` at teardown (when the
+   agent wrote a notebook), `repo_memory_distilled` with an `outcome` other
+   than `memory_unavailable`, and no `memory_provider_unavailable`, whose
+   `provider` field would name who refused.
+5. **In the engine's own console**: memories under the ticket's subject key and
+   under `repo:<provider>:<path>`, carrying your namespace. The memory screen
+   (`/memory`) lists the same documents by your `docPath`s.
+6. **Run the same ticket again**: the notebook the first run wrote is back in
+   the agent's workspace (`memory_document_hydrated_from_store`), and the seed
+   writes nothing (no `repo_memory_seeded` line).
+7. **Disable the integration**: the next run uses the built-in store, and the
+   memory screen shows the built-in documents as they were before step 2.
 
 ## One connection
 
@@ -778,7 +1054,7 @@ What each field property does, and what it costs to get wrong:
 - **`identity: true`** is for a secret that also names the account, so that
   swapping it for another account's stops runs in flight instead of reading
   as a rotation. Slack's bot token is the case: nothing else says which
-  workspace it is. It has a cost: rotating that secret also stops runs in
+  workspace it is (GitLab's token is marked too). It has a cost: rotating that secret also stops runs in
   flight. Prefer a non-secret field that names the account, as `projectId`
   does above and Jira's site URL does, and leave the token unmarked.
   Such a field means something only if the connection test checks that the
@@ -885,7 +1161,7 @@ a preview or on the demo either, and never deploy an unmerged branch there,
 because the worker's build runs its migrations against production's database.
 A Disable or stored values on production reach the demo and every preview
 too, because the rows are shared. How an integration is proven instead is
-under "Proving it works".
+under "Start here", "4. Prove it".
 
 ### The connection test
 
@@ -1077,15 +1353,17 @@ force:
 
 Where the comparison happens today: the blocks your integration contributes,
 and the `messaging` and `vcs` capabilities that core blocks consume. The
-`issue_tracker` and `memory` capabilities have the comparison written and no
-caller passes it a pin yet
-(`apps/worker/src/engine/support/issue-tracker-runtime.ts`,
+`issue_tracker` and `memory` capabilities have the comparison written, and no
+step that uses the tracker or memory passes it a pin yet (the one caller that
+does, a notification step, uses only messaging;
+`apps/worker/src/engine/support/issue-tracker-runtime.ts`,
 `memory-runtime.ts`), so a run using them follows the connection as it is now.
 
 What it means for the manifest of an integration that has shipped: renaming a
-field's key or `env`, changing its `default`, or turning `identity` on or off
-moves the fingerprint on every deployment that sets that field, and stops
-every run in flight through the integration. That is why the connection shape
+field's key or `env`, or turning `identity` on or off, moves the fingerprint on
+every deployment that sets that field, and changing its `default` moves it on
+every deployment that leaves the field unset; either stops every run in flight
+through the integration there. That is why the connection shape
 is a committed snapshot (`apps/worker/src/services/integrations/connection-shape.snapshot.json`):
 the edit and its consequence arrive in the same review, and a pull request
 that moves a shipped integration's row says which runs have to be drained
@@ -1214,7 +1492,7 @@ decision: what a ticket moving or a pull request event means for a run.
 Declare a webhook only when your provider calls you back about something core
 acts on: a memory integration normally has none, and Hippo's below exists to
 show the shape. A webhook also cannot start a workflow from events of the
-provider's own kind (an incident, a support request): the five answers below
+provider's own kind (an incident, a support request): the five answers above
 are everything core acts on. Point such a provider at core's generic trigger
 instead (`trigger_webhook`, which gives each deployed workflow its own
 `POST /webhooks/custom/<endpointId>`; SETUP.md, "Webhook trigger").
@@ -1557,12 +1835,11 @@ and `test:zod4`, the same files under the zod production loads through
 Keep both globs: Node's runner reads a bare `"*.test.ts"` as the package root
 only, so a test beside page code in `dashboard/` would never run and a test
 broken on purpose would stay green. GitHub, GitLab and Jira use `vitest run`
-instead, which finds nested files on its own. Then add
-`--filter @integrations/<id>` to the root `test:packages` and
-`test:packages:zod4` scripts in `package.json`: those lists are what CI runs,
-and `scripts/ci/verify-changed.test.ts` fails when a package that owns a
-`test` script is missing from them, when a test file in a package is one its
-script does not run, and when a package has a `test` script and no test.
+instead, which finds nested files on its own. CI runs your tests only
+through the root `test:packages` lists (step 4 of "2. From scaffold to
+merged"), and `scripts/ci/verify-changed.test.ts` also fails when a test file
+in a package is one its script does not run, and when a package whose script
+uses `node --test` has no test.
 
 ### Recorded payloads
 
@@ -1616,58 +1893,6 @@ block parameter schemas under both; the schemas in your worker code that read
 a provider's answers are checked only by your own `test:zod4`. Always write
 `z` from `@integrations/sdk`, never your own `zod` dependency.
 
-### Proving it works
-
-No deployment here is yours to try an integration on before it merges.
-Previews and the demo deployment read production's database, and the
-worker's build runs its migrations against whatever database it is given, so
-deploying an unmerged branch to either changes production without the review
-a merge gets. For the same reason, do not start a worker locally: on our
-machines `DATABASE_URL` points at production. So the proof comes in two
-halves:
-
-1. **Before the merge, locally**: your package's tests against recorded
-   payloads, conformance, the typecheck, and for a question the documentation
-   leaves open, a live call from your own machine to the provider with a test
-   account's key (see "Before you write a line"). `integrations/_fixtures/demo`
-   is a provider with no network at all, registered only in a registry a
-   developer generates locally with `INTEGRATION_FIXTURES=1 pnpm run
-   gen:integrations`. No deployment and no CI job sets that flag, the
-   committed registry is the one generated without it, and
-   `gen:integrations --check` compares against that whatever the flag says;
-   tests that need the fixture ask the generator for it directly. Copy its
-   approach for a network-free double of your own.
-2. **After the merge, on production**, by an operator, through the Connection
-   form with stored values, which need no redeploy: Save runs your connection
-   test, its message names the account, and the
-   integration reads Connected; its card, pages and health rows appear, and a
-   workflow can use its blocks. Disable, from the same form, is how it is
-   switched off again.
-
-For a memory integration, the operator's half is this:
-
-1. **Drain first.** No run is running or waiting (the Runs page, or
-   `runs.stats` over MCP): a run in flight when you connect may read from the
-   built-in store and write to yours.
-2. **Connect** through the form, and check that Test names the project meant.
-3. **Turn on repository memory** on the Settings page if it is off, and run a
-   ticket through a workflow with one agent block on one repository.
-4. **In the worker's logs for that run**, by its id: `repo_memory_seeded`
-   (logged only when the seed wrote something, which on a first run it does
-   when the repository's manifest names its package manager or scripts),
-   `repo_memory_injected`, `memory_document_persisted` at teardown (when the
-   agent wrote a notebook), `repo_memory_distilled` with an `outcome` other
-   than `memory_unavailable`, and no `memory_provider_unavailable`, whose
-   `provider` field would name who refused.
-5. **In the engine's own console**: memories under the ticket's subject key and
-   under `repo:<provider>:<path>`, carrying your namespace. The memory screen
-   (`/memory`) lists the same documents by your `docPath`s.
-6. **Run the same ticket again**: the notebook the first run wrote is back in
-   the agent's workspace (`memory_document_hydrated_from_store`), and the seed
-   writes nothing (no `repo_memory_seeded` line).
-7. **Disable the integration**: the next run uses the built-in store, and the
-   memory screen shows the built-in documents as they were before step 2.
-
 ## What an integration cannot do
 
 Some things look possible from the context and are not, and each has a pattern
@@ -1696,16 +1921,16 @@ that works:
 | Import a Node module or a provider SDK into `manifest.ts`, directly or through a file it imports | The Workflow DevKit's flow bundle fails the Vercel build, and nothing local would notice. `pnpm run gen:integrations` refuses it first, naming the import. |
 | Use a global the Workflow DevKit's VM lacks in `manifest.ts` or a file it imports (`Buffer`, `EventTarget`, `setTimeout`, `fetch`, `process`), one it makes differ (`Date`, `Math.random`, and `crypto`, whose `randomUUID` and `getRandomValues` it seeds), or one that reaches past the check (`globalThis`, `eval`, `Function`, a `declare` statement) | Conformance and the typecheck run in Node and pass; the deployed workflow throws a ReferenceError, hits a stub that throws, or reads a value the dashboard does not see. `pnpm run gen:integrations` refuses it first: it compiles the manifest's files against the language plus what the VM provides (`WORKFLOW_VM_GLOBALS` in `scripts/gates/generate-integration-registry/graph-globals.ts`, held to the pinned DevKit by a test) and names each use with its line. A type that mentions `Buffer`, or a local named `process`, is not a use. |
 | Put `"use step"` or `"use workflow"` in integration code | A step's identity is its module path plus its function name (the DevKit's id is `step//<module path>//<function>`), so a step inside your package would strand every run suspended in it the day the package moved or was renamed. Conformance refuses the directive in any file of the package. |
-| Put your provider's word into a shared type, or core's code | The next provider cannot implement the port without inventing a meaning for your word, and core grows a branch on your name. The core-reference gate fails on any core file that spells a shipped integration's id, its package names and the identifiers built from it included (`jira-client`, `JiraAdapter`). |
-| Pick an id core source already spells | The core-reference gate fails your first run on every core file that spells it where no allowlist row covers it (the rule is quoted under "From nothing to a connected integration"). `new:integration` refuses such an id and names the files. |
+| Put your provider's word into a shared type, or core's code | The next provider cannot implement the port without inventing a meaning for your word, and core grows a branch on your name. The core-reference gate fails on any core file that spells a shipped integration's id where no allowlist row covers it, its package names and the identifiers built from it included (`jira-client`, `JiraAdapter`). |
+| Pick an id core source already spells | The core-reference gate fails your first run on every core file that spells it where no allowlist row covers it (the rule is quoted under "Start here", step 1 of "2. From scaffold to merged"). `new:integration` refuses such an id and names the files. |
 | Parse with a zod feature zod 4 changed | Production fails at the first parse while every local test passes. |
 | Test a webhook against bytes you signed yourself | The provider's first real delivery is refused, discovered from its delivery log. |
 | Return `{ ok: false }` from `testConnection` for a timeout or a 5xx | A provider blip while an admin presses Test marks the connection Failing and stops every run until somebody presses Test again. |
 | Read your configuration from `process.env` | It bypasses the source an admin chose, is not pinned or redacted, and is missing on a deployment connected from the dashboard. |
 | Give a block a second port, or a parameter with no default | The port is refused by the generator. The parameter cannot be set in the editor, so the block cannot be published from it. |
 | Rename a block type, a status variant or the id after shipping | Stored workflows stop resolving the block or take another branch; the id is also written into stored rows (`ticket:jira:<KEY>` for every Jira run), so renaming it is a migration, not an edit. |
-| Rename a connection field's key or `env`, or change its default or `identity`, after shipping | Every run in flight through the integration stops with `reconfigured` on every deployment that set it. The connection-shape snapshot test makes the change visible in review; the drain happens before merge. |
-| Import another integration, `@shared/*` or anything in `apps/` | The boundaries gate and conformance refuse it. The SDK re-exports what you need from `@shared/contracts`. |
+| Rename a connection field's key or `env`, or change its default or `identity`, after shipping | Every run in flight through the integration stops with `reconfigured` on every deployment whose fingerprint moved: the ones that set the field, or for a default, the ones that leave it unset. The connection-shape snapshot test makes the change visible in review; the drain happens before merge. |
+| Import another integration, `@shared/*` or anything in `apps/` | The boundaries gate refuses the import, and conformance refuses the dependency in `package.json`. The SDK re-exports what you need from `@shared/contracts`. |
 | Return a secret from a page reader, or put one in a message | A reader's value reaches the browser. Messages and logs are redacted against your declared secrets, values are not. |
 | Leave a fetch in a page or a probe unbounded | A page is what the cockpit waits on, and a probe that hangs is cut off as down. |
 | Deploy an unmerged branch to the demo or a preview, or set your variables there | Its build runs your branch's migrations against production's database, and a connection there is production's connection. You find out when production changes. |
@@ -1714,74 +1939,12 @@ that works:
 | Hand a subject key or a notebook name to an engine call that reads it as a pattern, or leave your namespace off a read or a delete | A key containing `*` deletes every subject; another application's memories reach a prompt, the memory screen and an erasure. |
 | Let a provider SDK read `process.env`, keep its own timeout or send telemetry | It bypasses the connection an admin chose, the redaction and the memory budget, silently. |
 
-## Before you open a pull request
-
-```sh
-pnpm install
-pnpm run gen:integrations
-pnpm --filter @integrations/<id> run typecheck
-pnpm --filter @integrations/<id> run test
-pnpm --filter @integrations/<id> run test:zod4
-pnpm --filter @integrations/registry run test
-pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts
-pnpm run gate:core-references
-pnpm run gate:lint
-pnpm run gate:unused
-pnpm run verify:changed -- --worktree
-```
-
-- `gate:lint` (oxlint) and `gate:unused` read every package, yours included,
-  and `verify:changed` fails on their first diagnostic
-  (`scripts/ci/gates.test.ts`, "lint and unused-code gates are
-  unconditional"). Lint refuses, among others, a useless `undefined` (write
-  `.catch(() => null)`), unsafe optional chaining and a spread inside a `map`;
-  the unused-code gate refuses an export or an exported type nothing imports,
-  as well as a dependency. Run both early rather than meet them last.
-- **The first provider of a capability changes core's path in core's tests.**
-  With no integration serving a capability, core resolves it without reading
-  the integration rows (`resolveUsableIntegrations` in
-  `apps/worker/src/services/integrations/usable.ts` returns early); with one in
-  the registry, every call site reads them first. Core tests that swapped the
-  database for a fake answering only their own calls then fail at that read.
-  Mem0 met this in `memory-steps.test.ts` and `repo-memory-steps.test.ts` and
-  fixed it the way those files already state their other premises: the
-  resolver answers "nothing connected" in the test's mock. `verify:changed`
-  runs these files; if you are the first provider of a capability, expect it.
-  It changes production too: since Mem0 shipped, every `activeMemory` call on
-  every deployment reads the integration rows before choosing the built-in
-  store, so a database that does not answer for a moment makes that step's
-  memory `unreadable` (memory not used, said on the run) where it used to go
-  straight to the built-in store, which lives in the same database.
-- No em dash and no en dash anywhere in the package: code, comments, strings,
-  the README, fixtures' `.source.txt` and the changelog. The repository writes
-  with commas, colons and parentheses instead.
-- Your own tests have each been seen failing once: break the line a test
-  guards, watch it go red, put the line back. A test that never failed may
-  not be testing what its name says.
-
-- The package's README says what it connects, which values an admin needs and
-  where to find them, what connecting unlocks, and which provider pages you
-  read and when. A memory integration's README also says: that connecting
-  copies nothing and disconnecting deletes nothing; that deployments sharing
-  its connection share memory, and one engine project per connection keeps
-  them apart; which namespace it writes; whether items go through the
-  engine's own extraction, and why; and, when it has no `store`, that the
-  memory screen cannot list or erase what it holds.
-- `changelog/unreleased/<slug>.md` carries one bullet saying what a person can
-  do now and where (a page, a block, an MCP tool). Never a defect, an
-  incident, a ticket key, a commit, a pull request number or a person, and
-  never the words fix, bug, broken or finally; `changelog/README.md` has the
-  whole rule and its examples.
-- The pull request says which provider documentation the adapter was written
-  against, and, for a change to an integration that has shipped, which
-  connection shapes and block types moved.
-
 ## Where to look
 
 | For | Open |
 |---|---|
 | Every type and its rule | `integrations/sdk`: `manifest.ts`, `context.ts`, `runtime.ts`, and one file per port |
-| What conformance refuses, with each rule's sentence | `integrations/sdk/conformance.ts` |
+| What conformance refuses, with each rule's sentence | `integrations/sdk/conformance.ts` (manifest and runtime rules) and `integrations/registry/conformance.test.ts` (directives, dependencies, variables across packages) |
 | The starting point | `integrations/_template`, and `scripts/gates/new-integration.ts` which copies it |
 | A tracing provider, per-run state, a block that must be read, a page with data | `integrations/arthur` |
 | One active messaging provider, a slash command, a probe that cleans up after itself | `integrations/slack` |
@@ -1790,5 +1953,5 @@ pnpm run verify:changed -- --worktree
 | The one issue tracker, ticket events, a permanent id | `integrations/jira` |
 | The built-in memory provider | `apps/worker/src/memory/builtin/adapter.ts`, `apps/worker/src/engine/support/memory-runtime.ts` |
 | A memory engine, fixtures composed from documentation pages, an in-memory double of a provider | `integrations/mem0` |
-| A provider with no network, for demos | `integrations/_fixtures/demo` |
+| A provider with no network, for tests | `integrations/_fixtures/demo` |
 | Why any of this is shaped the way it is | [ADR-010](../adr/ADR-010-integrations.md) |

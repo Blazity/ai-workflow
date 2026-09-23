@@ -42,6 +42,8 @@ GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; s
 - The App subscribes to all five events in [GITHUB-APP-SETUP.md section 5](../../../docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events). Confirm it with the user; a shorter list makes triggers silently never fire.
 - Repositories are imported on the Repositories page afterwards. Do not collect the legacy `GITHUB_OWNER`/`GITHUB_REPO`.
 
+Before emitting, confirm the App subscribes to all five events (App settings, Permissions & events, Subscribe to events): **Pull request**, **Check run**, **Pull request review**, **Pull request review comment**, **Issue comment**. A missing one is a trigger that never fires, and nothing on this side says so except the Health page's GitHub check. Steps: [GITHUB-APP-SETUP.md §5](../../../docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events).
+
 Emit (paste into Vercel → Project Settings → Environment Variables, all three environments):
 
 ```

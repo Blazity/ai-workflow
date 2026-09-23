@@ -3,7 +3,7 @@ Last-verified: 2026-09-23
 
 # GitHub App setup
 
-Step-by-step guide for registering a GitHub App for the ai-workflow bot and collecting the four env vars the deployment needs. Sections 4 (permissions) and 5 (events) are the one home for those lists.
+Step-by-step guide for registering a GitHub App for the ai-workflow bot and collecting the four env vars the deployment needs.
 
 This replaces the previous "personal access token" setup. The App is **organization-owned** so it survives the creator leaving the org.
 
@@ -89,7 +89,7 @@ Leave everything on **No access**.
 
 ## 5. Subscribe to events
 
-This section is the one list of events the App needs; SETUP.md links here rather than repeating it. The code's own list is `REQUIRED_WEBHOOK_EVENTS` in `integrations/github/worker.ts`, and the GitHub card's **App webhook** health check on the Integrations page reads down and names every event the App does not subscribe to.
+The code's own list of the events the App needs is `REQUIRED_WEBHOOK_EVENTS` in `integrations/github/worker.ts`, and the GitHub card's **App webhook** health check on the Integrations page reads down and names every event the App does not subscribe to.
 
 Under **Subscribe to events**, enable these five:
 

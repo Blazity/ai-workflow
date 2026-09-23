@@ -34,7 +34,7 @@ checking the smaller set that is left (ADR-007).
 | [architecture/workflow-definition.md](./architecture/workflow-definition.md) | The definition schema v2: nodes, edges, bindings, triggers, harness profiles, loops, validation, deployment, the MCP authoring surface |
 | [architecture/repository-scripts.md](./architecture/repository-scripts.md) | The repository scripts config contract: named command groups, how a block selects them |
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
-| [architecture/integrations.md](./architecture/integrations.md) | Writing an integration from nothing to connected: capabilities, the connection and its pin, health checks, blocks, webhooks, pages, testing without production credentials, and what breaks if you do what it says not to |
+| [architecture/integrations.md](./architecture/integrations.md) | Writing an integration: "Start here" gives the decisions, the steps with their commands, the review checklist and the proof; the rest is reference on capabilities, the connection and its pin, health checks, blocks, webhooks, pages, testing without production credentials, and what breaks if you do what it says not to |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
 | [architecture/data-model.md](./architecture/data-model.md) | The worker's 77 SQL tables, ownership and principal callers |

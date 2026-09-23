@@ -46,6 +46,12 @@ const workflowPaths = [
 
 const CI = workflowPaths[0];
 const E2E = workflowPaths[1];
+/** The on-demand engine canary: its own workflow, never a dependency of `ci`. */
+const CANARY = ".github/workflows/engine-canary.yml";
+
+async function loadCanary(): Promise<Workflow> {
+  return parse(await readFile(CANARY, "utf8")) as Workflow;
+}
 
 async function loadWorkflows(): Promise<Array<[string, Workflow]>> {
   return Promise.all(
@@ -150,21 +156,35 @@ test("manual workflow exposes no operator-provided campaign identity", async () 
   );
 });
 
-test("only the guarded engine canary carries secrets or an environment in CI", async () => {
-  const source = await readFile(CI, "utf8");
-  const workflow = parse(source) as Workflow;
-
-  // Stage 5b deliberately joins one behavioural canary to the required CI
-  // aggregate. It is the only exception: its same-repository guard prevents
-  // fork pull requests from ever reaching the secret-bearing e2e environment.
+test("the required CI workflow carries no secret and no environment", async () => {
+  const workflow = parse(await readFile(CI, "utf8")) as Workflow;
+  // The engine canary left ci.yml on 2026-09-23 (ADR-004): nothing the
+  // required check runs may reach a secret or the e2e environment.
   for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-    assert.doesNotMatch(jobName, /e2e/, `${CI} must not define ${jobName}`);
+    assert.doesNotMatch(jobName, /e2e|canary/, `${CI} must not define ${jobName}`);
+    assert.equal(job.environment, undefined, `${jobName} must not name an environment`);
+    assert.doesNotMatch(
+      JSON.stringify(job),
+      /secrets\./u,
+      `${jobName} must not reference any secret`,
+    );
+  }
+});
+
+test("only the engine canary job carries secrets, and only a same-repository request reaches it", async () => {
+  const workflow = await loadCanary();
+  // The scope job is the guard: it starts only for workflow_dispatch or a
+  // same-repository pull request carrying the label, and the canary needs it
+  // to have succeeded, so a fork never reaches the secret-bearing environment.
+  const scope = workflow.jobs?.["engine-canary-scope"];
+  assert.match(
+    scope?.if ?? "",
+    /^github\.event_name == 'workflow_dispatch' \|\| \(github\.event\.pull_request\.head\.repo\.full_name == github\.repository && /u,
+  );
+  for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
     if (jobName === "engine-canary") {
       assert.equal(job.environment, "e2e");
-      assert.match(
-        job.if ?? "",
-        /^github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && /u,
-      );
+      assert.match(job.if ?? "", /^needs\.engine-canary-scope\.result == 'success' && /u);
       const secretNames = Array.from(
         JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/gu),
         (match) => match[1],
@@ -190,8 +210,8 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
   }
 });
 
-test("engine canary queues behind the shared fixtures and starts only three agents", async () => {
-  const [, workflow] = (await loadWorkflows())[0]!;
+test("engine canary queues behind the shared fixtures and runs the replay suite", async () => {
+  const workflow = await loadCanary();
   const canary = workflow.jobs?.["engine-canary"];
   assert.ok(canary);
   // Repository-wide, not per pull request: the three fixture tickets are
@@ -207,7 +227,7 @@ test("engine canary queues behind the shared fixtures and starts only three agen
 });
 
 test("engine canary waits for the target alias and runs against it", async () => {
-  const [, workflow] = (await loadWorkflows())[0]!;
+  const workflow = await loadCanary();
   const canary = workflow.jobs?.["engine-canary"];
   assert.ok(canary);
   const steps = canary.steps ?? [];
