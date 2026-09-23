@@ -13,7 +13,7 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 
 import type { DashboardSession } from "@/lib/auth/session";
 
-import { WorkerResponseError } from "../lib/api/worker-response-error.ts";
+import { WorkerResponseError } from "../lib/api/worker-errors.ts";
 
 const SUBJECT_KEY = "ticket:jira:AIW-177";
 const DOC_PATH = "ai-workflow/memory/AIW-177.md";

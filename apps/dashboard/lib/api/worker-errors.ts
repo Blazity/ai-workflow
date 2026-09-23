@@ -1,3 +1,10 @@
+/**
+ * What can go wrong between the dashboard and the worker, told apart in one
+ * place: the worker answering with a failure (`WorkerResponseError`,
+ * `isWorkerStatus`) and our own wait running out before it answered
+ * (`isWorkerTimeout`). Every route handler and data loader asks here rather
+ * than keeping its own copy of the check.
+ */
 import { errorPayloadMessage } from "./error-message";
 
 /**

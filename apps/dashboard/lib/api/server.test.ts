@@ -12,7 +12,7 @@ mock.module("next/headers", {
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { getJSON } = require("./server") as typeof import("./server");
 const { WorkerResponseError } =
-  require("./worker-response-error") as typeof import("./worker-response-error");
+  require("./worker-errors") as typeof import("./worker-errors");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 function stubFetch(t: TestContext, answer: (init: RequestInit | undefined) => Promise<Response>) {

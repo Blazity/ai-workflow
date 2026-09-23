@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { canEditSettings } from "@shared/contracts";
 import { getJSON, withQuery } from "@/lib/api/server";
-import { isWorkerStatus } from "@/lib/api/worker-response-error";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession, type DashboardSession } from "@/lib/auth/session";
 import { MemoryScreen } from "@/components/cockpit/screens/memory";

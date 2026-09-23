@@ -13,7 +13,7 @@
 import { INTEGRATION_ID } from "@shared/contracts";
 import { NextResponse } from "next/server";
 
-import { isWorkerTimeout } from "@/lib/api/worker-response-error";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 import { PROVIDER_CALL_CEILING_MS } from "@/lib/integrations/provider-wait";
 
 type WorkerProxy = (

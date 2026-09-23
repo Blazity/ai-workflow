@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { ForbiddenError, UnauthorizedError } from "@/lib/auth/errors";
 import { workerUrl } from "@/lib/auth/worker-core";
-import { WorkerResponseError } from "@/lib/api/worker-response-error";
+import { WorkerResponseError } from "@/lib/api/worker-errors";
 
 /** The wait for an ordinary read. A read that waits on a provider says so
  *  with `timeoutMs`, because the worker's own budget for it is longer. */

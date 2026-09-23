@@ -1,7 +1,7 @@
 import "server-only";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
-import { isWorkerTimeout } from "@/lib/api/worker-response-error";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 import { PROVIDER_CALL_CEILING_MS } from "@/lib/integrations/provider-wait";
 import type { IntegrationPageData } from "@integrations/registry/dashboard";
 

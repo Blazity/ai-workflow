@@ -10,7 +10,7 @@ import type {
 } from "@shared/contracts";
 
 import { getJSON, withQuery } from "@/lib/api/server";
-import { isWorkerStatus } from "@/lib/api/worker-response-error";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession } from "@/lib/auth/session";
 

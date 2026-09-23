@@ -5,7 +5,7 @@ import type {
 } from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
-import { isWorkerStatus } from "@/lib/api/worker-response-error";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { requireSession } from "@/lib/auth/session";
 import { readIntegrationsList } from "@/lib/integrations/list";
 import { blockAvailabilityOf, type CapabilitiesUnread } from "@/lib/integrations/presentation";

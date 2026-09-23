@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type IdRouteContext = { params: Promise<{ id: string }> };
@@ -377,15 +378,9 @@ async function forward(workerProxy: WorkerProxy, path: string, init: RequestInit
       headers,
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json({ error: "Worker request timed out" }, { status: 504 });
     }
     throw error;
   }
-}
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const maybeError = error as { code?: unknown; name?: unknown };
-  return maybeError.name === "TimeoutError" || maybeError.code === 23;
 }

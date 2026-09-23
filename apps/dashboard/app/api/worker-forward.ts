@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 export type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -20,12 +21,6 @@ export function badRequest(message: string) {
   );
 }
 
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
-}
-
 /** Forwards one request to the worker and hands its JSON body and status back
  *  verbatim; a worker that does not answer in time is a 504. A `body` is sent
  *  as the JSON it came in as: the worker owns what a body may say. */
@@ -45,7 +40,7 @@ export async function forward(
       headers: { "cache-control": "private, no-store" },
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         {

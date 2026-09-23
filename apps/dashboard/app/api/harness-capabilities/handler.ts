@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 const CAPABILITY_CACHE_TIMEOUT_MS = 5_000;
 
@@ -37,8 +38,7 @@ export async function handleHarnessCapabilitiesGet(
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    const candidate = error as { name?: unknown; code?: unknown };
-    if (candidate.name === "TimeoutError" || candidate.code === 23) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         {
           error:
