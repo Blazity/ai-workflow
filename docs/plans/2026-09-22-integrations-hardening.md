@@ -258,8 +258,17 @@ version control are served only by integrations
 (`INTEGRATION_SERVED_CAPABILITIES`), and `activeProviderOf` is the one answer
 to "which provider serves this `one` capability", used by the editor, the
 runtime, the capability overview and MCP. An integration block that requires
-`llm` goes through the same credential gate as Call LLM, one function for
-both.
+`llm` is offered and served by one rule, `integrationLlmTarget`
+(`engine/definition/integration-llm.ts`): the run's preferred provider when it
+has a key a direct call accepts, otherwise the other provider with the run's
+model for it, otherwise none. The block step asks it with the run's
+preference; the editor asks it with the default profile's, and gets the same
+yes or no, because the answer is null only when neither provider has a key.
+(Revised after the gate: the first version asked Call LLM's gate with the
+default profile's provider, Codex, while `ctx.llm` used the run's first
+agent's provider, so a Claude-only deployment was refused a block its runs
+could serve, and a Claude OAuth token went out as an API key.) Only the
+chosen provider's key is sent.
 
 **H1.4. Tracing follows its pin and never gates a run (first half of F124).**
 Tracing providers were already pinned at run start and never compared. Now
@@ -277,8 +286,12 @@ The preview now reads repository selection's own rule
 scope sets both lists) to leave out workflows, and runs, whose scope rules the
 provider out, and the dashboard says "Enabled workflows that may use" for a
 version control provider, because an unscoped workflow's next repository is
-not knowable before its ticket. Rejected: counting only runs whose selected
-repository is on the provider (that fact lives in the run's repository record
+not knowable before its ticket. The graph read is the version deployed now,
+so only a run on that version is narrowed by it; a run on any other version
+is counted when it pinned the provider at its start, or recorded no pins at
+all (revised after the gate: narrowing every run by today's scope counted 0
+for runs still on a workflow's GitHub version after it moved to GitLab).
+Rejected: counting only runs whose selected repository is on the provider (that fact lives in the run's repository record
 and is not read here; worth doing when the record is).
 
 **H1.6. One home for a capability's label.** `capabilityLabel` lives in the
