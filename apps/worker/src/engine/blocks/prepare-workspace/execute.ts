@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repositoryCatalogProviderSchema } from "@shared/contracts";
 import type {
   IntegrationConnectionPin,
   RunRepositoryAccess,
@@ -173,7 +174,7 @@ const approvedRepositoryScopeSchema = z.object({
   repositories: z
     .array(
       z.object({
-        provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+        provider: repositoryCatalogProviderSchema,
         repoPath: z.string().min(1),
         defaultBranch: z.string().min(1),
         researchBranch: z.string().min(1),

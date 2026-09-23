@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import Ajv from "ajv";
+import { PROVIDER_ID_PROBES } from "../../test-support/provider-id-probes.js";
 import {
   AGENT_SCHEMA,
   RESEARCH_SCHEMA,
@@ -269,6 +271,43 @@ describe("reviewThreads zod/JSON schema key parity", () => {
       expect(array.maxItems).toBe(20);
       expect(accepts(entries(array.maxItems))).toBe(true);
       expect(accepts(entries(array.maxItems + 1))).toBe(false);
+    });
+  }
+});
+
+/**
+ * The provider a research answer names is constrained twice: by the JSON
+ * schema the harness is handed, which is what the model is held to, and by the
+ * zod schema the answer is validated with. When the first admits a provider
+ * the second refuses, the model is steered into an answer the run then throws
+ * away, which is what `minLength: 1` against the id rule did. Checked with a
+ * real JSON Schema validator (draft-07, the dialect the Claude Agent SDK
+ * validates structured output with), on values at the edges of the id rule.
+ */
+describe("RESEARCH_SCHEMA provider parity", () => {
+  const ajv = new Ajv({ strict: false });
+  const repositoryProvider = (field: "repositories" | "writeRepositories") => {
+    const array = JSON.parse(RESEARCH_SCHEMA).properties[field].anyOf.find(
+      (option: { type?: string }) => option.type === "array",
+    );
+    return ajv.compile(array.items.properties.provider);
+  };
+  const zodAccepts = (field: "repositories" | "writeRepositories", provider: string) =>
+    researchOutputSchema.safeParse({
+      status: "repositories_needed",
+      [field]: [{ provider, repoPath: "acme/api", rationale: "Owns the code." }],
+    }).success;
+
+  for (const field of ["repositories", "writeRepositories"] as const) {
+    it(`holds the model to exactly the ${field} providers validation accepts`, () => {
+      const jsonAdmits = repositoryProvider(field);
+      for (const probe of PROVIDER_ID_PROBES) {
+        const admitted = jsonAdmits(probe);
+        // Validation trims and the pattern does not, so around whitespace the
+        // model is held tighter than the parser, never looser.
+        if (probe.trim() !== probe) expect(admitted, probe).toBe(false);
+        else expect(admitted, probe).toBe(zodAccepts(field, probe));
+      }
     });
   }
 });

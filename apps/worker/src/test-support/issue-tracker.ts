@@ -78,10 +78,6 @@ export function connectedIssueTracker(options: ConnectedIssueTrackerDouble = {})
     trackerIdentityOf: (trackerId: string, baseUrl: string) =>
       `${trackerId}\u0000${baseUrl.trim().toLowerCase()}`,
     ticketSubject: vi.fn(async (ticketKey: string) => ticketSubjectKey("jira", ticketKey)),
-    ticketSubjects: vi.fn(
-      async (ticketKeys: readonly string[]) =>
-        new Map(ticketKeys.map((key) => [key, ticketSubjectKey("jira", key)])),
-    ),
     trackerMoveTarget: vi.fn(
       async (columnName: string, which: "backlog" | "ai" | "aiReview") => {
         const transitionId =
@@ -117,7 +113,6 @@ export function noIssueTrackerConnected(
     trackerIdentityOf: (trackerId: string, baseUrl: string) =>
       `${trackerId}\u0000${baseUrl.trim().toLowerCase()}`,
     ticketSubject: vi.fn(refuse),
-    ticketSubjects: vi.fn(refuse),
     trackerMoveTarget: vi.fn(refuse),
   };
 }

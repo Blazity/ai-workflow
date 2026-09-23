@@ -199,7 +199,7 @@ function withoutIntegrationRenames(text: string): string {
     // live example takes the provider from the repositories the run is holding.
     // Only the provider is freed here, so the path, the file, the line and the
     // words around them stay pinned, and which provider it picks is proved by
-    // `engine/support/repository-path-example.test.ts`.
+    // `repository-map/repository-path-example.test.ts`.
     .replace(/`[a-z0-9-]+:acme\/api src\/auth\.ts:42/, "`<provider>:acme/api src/auth.ts:42");
 }
 

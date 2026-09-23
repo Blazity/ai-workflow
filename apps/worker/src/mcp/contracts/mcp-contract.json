@@ -1,5 +1,5 @@
 {
-  "contractHash": "01542b8772f96ac9201ed8fb0aacee5ae5b9fea1ceccd2c8818162dae56805cc",
+  "contractHash": "c7d39b415727496b77c04272f51c7d38f55a39f44e4da0c13159831ae888c690",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1091,7 +1091,7 @@
           },
           "provider": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_-]{2,31}$"
+            "pattern": "^[a-z][a-z0-9]{2,31}$"
           },
           "path": {
             "type": "string",

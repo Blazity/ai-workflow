@@ -8,7 +8,7 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
-import { exampleRepositoryPath } from "../support/repository-path-example.js";
+import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 import { replyThatDecidesCandidates } from "../support/clarification-comment-format.js";
 import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
 import {
@@ -16,6 +16,7 @@ import {
   workScopeUnnamedWhy,
 } from "../work-scope/refusal-sentence.js";
 import {
+  repositoryCatalogProviderSchema,
   repositoryKeySchema,
   type RepositoryKey,
   type WorkScopeActor,
@@ -33,7 +34,7 @@ const discoveryResultSchema = z
       .array(
         z
           .object({
-            provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+            provider: repositoryCatalogProviderSchema,
             repoPath: z.string().min(1),
             rationale: z.string().trim().min(1).max(500),
           })

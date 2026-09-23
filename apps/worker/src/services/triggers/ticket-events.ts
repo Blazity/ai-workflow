@@ -28,11 +28,12 @@ import { TriggerHttpError } from "../../infra/trigger-http-error.js";
  * bytes and says what happened to a ticket; everything below is the same for
  * the next issue tracker, and nothing in it names one.
  *
- * Every branch here is the branch that was there before, and the recorded
- * deliveries in
+ * Every branch here was carried over from that handler. The recorded Jira
+ * payloads in
  * `apps/worker/src/routes/webhooks/jira-ticket-webhook.characterisation.test.ts`
- * are what says so: that suite passed against the old handler unedited and
- * passes against this.
+ * pin what the route answers now; the suite was written with the rewrite, not
+ * committed before it, so nothing on record shows the old handler passing it
+ * ("S12 evidence" in `docs/plans/2026-09-18-integrations.md`).
  *
  * It answers rather than throws, except where the right answer is "ask me
  * again": a lookup that failed must not be read as "nothing to protect", so
@@ -480,6 +481,7 @@ async function cancelTrackedRun(
   // cancellation, so callers must not report it as "cancelled".
   const cancel = () =>
     cancelRunDetailed({
+      subjectKey,
       ticketKey,
       target: cancellationTarget,
       runRegistry: adapters.runRegistry,

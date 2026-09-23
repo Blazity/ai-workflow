@@ -1,5 +1,7 @@
 /**
- * What `POST /webhooks/jira` DOES, pinned across the S12 rewrite.
+ * What `POST /webhooks/jira` DOES, pinned from the S12 rewrite on. Written
+ * with that rewrite rather than committed before it, so it holds today's
+ * behaviour and does not prove the old route's.
  *
  * Every payload here is recorded bytes from a real Jira Cloud delivery, kept in
  * `integrations/jira/test-fixtures` with its source URL, its retrieval date and
@@ -581,6 +583,9 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
 
       expect(result.body).toMatchObject({ status: "cancelled", reason: "left_ai_column" });
       expect(state.cancel).toHaveBeenCalledWith({
+        // The claim it holds, named by the caller since H2.2 in
+        // docs/plans/2026-09-22-integrations-hardening.md.
+        subjectKey: "ticket:jira:TEST-1",
         ticketKey: "TEST-1",
         target: { ownerToken: "owner-1", runId: "run-1" },
         runRegistry: connected.runRegistry,

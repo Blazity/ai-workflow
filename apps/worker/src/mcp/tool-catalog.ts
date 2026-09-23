@@ -6,6 +6,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 // format and additionalProperties, so pin the catalog schemas to the same
 // Zod 3 dialect used by the committed contract artifact.
 import {
+  INTEGRATION_ID,
   MAX_CLARIFICATION_ANSWER_LENGTH,
   MEMORY_KEY_MAX_LENGTH,
   WORK_SCOPE_EDIT_CHANGES_MAX,
@@ -680,7 +681,9 @@ export const MCP_TOOL_CATALOG = {
     inputSchema: z
       .object({
         repositoryId: z.number().int().min(0).max(REPOSITORY_ID_MAX),
-        provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+        // The contract's id rule, rebuilt in this file's Zod 3 dialect rather
+        // than embedding `repositoryCatalogProviderSchema` (see the import note).
+        provider: z.string().trim().regex(INTEGRATION_ID),
         path: z.string().trim().min(1).max(REPOSITORY_LABEL_MAX_LENGTH),
         displayName: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),
         defaultBranch: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),

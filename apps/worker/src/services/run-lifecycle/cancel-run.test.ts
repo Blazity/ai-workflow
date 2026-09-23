@@ -182,6 +182,30 @@ describe("cancelRun", () => {
     expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
   });
 
+  it("cancels the subject the caller's claim holds, without resolving the tracker again", async () => {
+    // A claim written while another tracker was connected keeps that tracker's
+    // subject. Deriving the subject from the ticket key here named the current
+    // tracker's, so the cancel closed a claim nobody holds and left this one.
+    const claim = active({ subjectKey: "ticket:linear:PROJ-1" });
+    const runRegistry = registry(claim);
+    const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+    vi.mocked(runtime.ticketSubject).mockClear();
+
+    await expect(cancelRunDetailed({
+      subjectKey: claim.subjectKey,
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+    })).resolves.toMatchObject({ cancelled: true, released: true });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalledWith(
+      "ticket:linear:PROJ-1",
+      "owner-a",
+      "run-1",
+    );
+    expect(runtime.ticketSubject).not.toHaveBeenCalled();
+  });
+
   it("reports the already-terminal outcome and still releases the claim when the run had already failed", async () => {
     state.getRun.mockReturnValue({
       cancel: vi.fn().mockRejectedValue(new Error("run already terminal")),
@@ -189,6 +213,7 @@ describe("cancelRun", () => {
     });
     const runRegistry = registry();
     await expect(cancelRunDetailed({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -233,6 +258,7 @@ describe("cancelRun", () => {
     const beforeRelease = vi.fn().mockResolvedValue(undefined);
 
     await expect(cancelRunDetailed({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -1557,6 +1583,7 @@ describe("cancelling a run parked on a question", () => {
       const issueTracker = tracker();
 
       await expect(cancelRunDetailed({
+        subjectKey: "ticket:jira:PROJ-1",
         ticketKey: "PROJ-1",
         target: { ownerToken: "owner-a", runId: "run-1" },
         runRegistry: registry(),
@@ -1579,6 +1606,7 @@ describe("cancelling a run parked on a question", () => {
       const beforeRelease = vi.fn().mockResolvedValue(undefined);
 
       await expect(cancelRunDetailed({
+        subjectKey: "ticket:jira:PROJ-1",
         ticketKey: "PROJ-1",
         target: { ownerToken: "owner-a", runId: "run-1" },
         runRegistry: registry(),
@@ -1606,6 +1634,7 @@ describe("cancelling a run parked on a question", () => {
       const issueTracker = tracker();
 
       await expect(cancelRunDetailed({
+        subjectKey: "ticket:jira:PROJ-1",
         ticketKey: "PROJ-1",
         target: { ownerToken: "owner-a", runId: "run-1" },
         runRegistry: registry(),
@@ -1621,6 +1650,7 @@ describe("cancelling a run parked on a question", () => {
       const issueTracker = tracker();
 
       await expect(cancelRunDetailed({
+        subjectKey: "ticket:jira:PROJ-1",
         ticketKey: "PROJ-1",
         target: { ownerToken: "owner-a", runId: "run-1" },
         runRegistry: registry(),

@@ -9,7 +9,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^[a-z][a-z0-9_-]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [
@@ -45,7 +45,8 @@ export const DEFAULT_REVIEW_TRIGGER_STATES = [
 
 const paramsSchema = z
   .object({
-    providers: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/)).default([]),
+    // `INTEGRATION_ID`, copied: see `trigger-provider-rule-sync.test.ts`.
+    providers: z.array(z.string().trim().regex(/^[a-z][a-z0-9]{2,31}$/u)).default([]),
     on: z
       .array(z.enum(["changes_requested", "commented"]))
       .min(1)

@@ -28,9 +28,8 @@ import {
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
 import {
-  installTracingPlans,
+  applyTracingPlans,
   tracingEnvironmentLines,
-  tracingHookCommands,
   type HarnessHookEvents,
 } from "./tracing.js";
 
@@ -164,12 +163,15 @@ export class ClaudeAgentAdapter implements AgentAdapter {
     }
 
     // Whatever the connected tracing integrations asked for; nothing when none
-    // is connected.
-    if (opts.tracing && opts.tracing.length > 0) {
-      const ready = await installTracingPlans(sandbox, opts.tracing, this.kind, opts.runtime);
-      const hooks = tracingHookCommands(ready, CLAUDE_HOOK_EVENTS);
-      if (hooks.length > 0) await this.mergeSettings(sandbox, { hooks }, opts.runtime);
-    }
+    // is connected, and never a failed run when it cannot be applied.
+    await applyTracingPlans({
+      sandbox,
+      plans: opts.tracing ?? [],
+      harness: this.kind,
+      events: CLAUDE_HOOK_EVENTS,
+      registerHooks: (hooks) => this.mergeSettings(sandbox, { hooks }, opts.runtime),
+      runtime: opts.runtime,
+    });
   }
 
   async setCommitGuard(

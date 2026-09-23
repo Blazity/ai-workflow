@@ -360,6 +360,7 @@ export async function reconcileRuns(
       const stalled = await persistence.reconcileStalled({
         entry: boundEntry,
         runRegistry,
+        ...(board ? { trackerId: board.trackerId } : {}),
         issueTracker,
         // The snapshot only drives ordinary terminal/stuck cleanup. The stall
         // watchdog must receive the configured safe target for every ticket
@@ -491,6 +492,7 @@ export async function reconcileRuns(
     }
 
     const cancellationResult = await cancelRunDetailed({
+      subjectKey: entry.subjectKey,
       ticketKey,
       target: entry.runId,
       runRegistry,
@@ -634,6 +636,7 @@ async function disposeParkedSubjectWithMissingTicketCore(
   // GONE from the tracker, so there is no channel left to close the question on
   // and no settings snapshot down here to name a column with.
   const cancellation = await cancelRunDetailed({
+    subjectKey: entry.subjectKey,
     ticketKey,
     target: runId,
     runRegistry,
@@ -812,6 +815,7 @@ async function retryCancellingClaim(
     });
   };
   return cancelRunDetailed({
+    subjectKey: entry.subjectKey,
     ticketKey: entry.ticketKey,
     target,
     runRegistry,
@@ -1010,6 +1014,7 @@ async function cleanStuckTicketRun(
   if (!board) return 0;
 
   const result = await cancelRunDetailed({
+    subjectKey: entry.subjectKey,
     ticketKey,
     target: entry.runId,
     runRegistry,
