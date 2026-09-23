@@ -37,13 +37,21 @@ function deploymentCapabilities(): Omit<
       claude: Boolean(env.ANTHROPIC_API_KEY),
       codex: Boolean(env.CODEX_API_KEY || env.CODEX_CHATGPT_OAUTH_TOKEN),
     },
-    llmProviders: {
-      claude: Boolean(
-        env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat"),
-      ),
-      codex: Boolean(env.CODEX_API_KEY),
-    },
+    llmProviders: directLlmCredentials(),
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
+  };
+}
+
+/**
+ * Which providers this deployment can call a model on directly, with an API
+ * key. A Claude OAuth token (`sk-ant-oat`) is an agent harness's credential and
+ * is refused by the API, so it does not count. One home: the editor's gates and
+ * the integration block step both read it.
+ */
+export function directLlmCredentials(): { claude: boolean; codex: boolean } {
+  return {
+    claude: Boolean(env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat")),
+    codex: Boolean(env.CODEX_API_KEY),
   };
 }
 

@@ -50,8 +50,18 @@ export interface IntegrationBlockStepInput {
      */
     readonly state: IntegrationRunState | null;
   };
-  /** The run's default model, for a block that declared `requires.llm`. */
-  readonly llm: { readonly provider: "claude" | "codex"; readonly model: string };
+  /**
+   * The run's preferred provider and model for `ctx.llm`, and its model for
+   * each provider. Which one a block gets is `integrationLlmTarget`'s answer
+   * over this deployment's keys, asked here, where the keys are read.
+   * `models` is absent on a call recorded before it existed, which then falls
+   * back only to its own preference.
+   */
+  readonly llm: {
+    readonly provider: "claude" | "codex";
+    readonly model: string;
+    readonly models?: { readonly claude: string; readonly codex: string };
+  };
 }
 
 export type IntegrationBlockStepResult =
@@ -72,6 +82,11 @@ export type IntegrationBlockStepResult =
    * database that did not answer.
    */
   | { readonly kind: "unreadable"; readonly reason: string }
+  /**
+   * The block needs a model and this deployment has no key a direct model
+   * call accepts. Ours to configure, not the integration's failure.
+   */
+  | { readonly kind: "llm_unconfigured"; readonly message: string }
   /** The block threw, or core could not reach its connection values. */
   | { readonly kind: "error"; readonly message: string };
 
@@ -169,6 +184,23 @@ export async function runIntegrationBlockStep(
     };
   }
 
+  let llmTarget: { provider: "claude" | "codex"; model: string } | null = null;
+  if (block.requires?.llm === true) {
+    const { integrationLlmTarget, integrationLlmUnavailable } = await import(
+      "../definition/integration-llm.js"
+    );
+    const { directLlmCredentials } = await import("../definition/block-contract-environment.js");
+    const preferred = { provider: input.llm.provider, model: input.llm.model };
+    llmTarget = integrationLlmTarget(
+      preferred,
+      input.llm.models ?? { claude: preferred.model, codex: preferred.model },
+      directLlmCredentials(),
+    );
+    if (!llmTarget) {
+      return { kind: "llm_unconfigured", message: integrationLlmUnavailable(block.ui.label) };
+    }
+  }
+
   const invoke = executor as unknown as IntegrationBlockExecutor<
     IntegrationManifest,
     IntegrationBlockManifest
@@ -180,7 +212,7 @@ export async function runIntegrationBlockStep(
         ...context,
         run: input.run,
         capabilities: await integrationCapabilityAccess(block.requires?.capabilities ?? []),
-        ...(block.requires?.llm === true ? { llm: integrationLlm(input.llm) } : {}),
+        ...(llmTarget ? { llm: integrationLlm(llmTarget) } : {}),
       } as never,
     );
     if (outcome.kind === "next") {

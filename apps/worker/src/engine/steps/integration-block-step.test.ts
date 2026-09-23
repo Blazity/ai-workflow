@@ -17,6 +17,8 @@ const states = vi.hoisted(() => vi.fn());
 const stored = vi.hoisted(() => vi.fn());
 const executor = vi.hoisted(() => vi.fn());
 const runControl = vi.hoisted(() => vi.fn());
+const llmTargets = vi.hoisted(() => [] as unknown[]);
+const directCallKeys = vi.hoisted(() => ({ value: { claude: true, codex: false } }));
 
 const manifest: IntegrationManifest = {
   id: "acmenotify",
@@ -43,6 +45,20 @@ const manifest: IntegrationManifest = {
       },
       output: { properties: {}, statusVariants: ["sent"] },
     },
+    {
+      type: "acmenotify_digest",
+      paramsSchema: z.object({}).strict(),
+      contract: { ports: ["out"], allowsFailurePort: false },
+      ui: {
+        label: "Digest",
+        description: "Summarises with a model.",
+        glyph: "D",
+        color: "#445566",
+        softColor: "#EEF1F4",
+      },
+      output: { properties: {}, statusVariants: ["done"] },
+      requires: { llm: true },
+    },
   ],
   pages: [],
   health: [{ id: "reachable", label: "Reachable", description: "", critical: true }],
@@ -58,7 +74,10 @@ vi.mock("@integrations/registry/worker", () => ({
       ? {
           manifest,
           capabilities: {},
-          blocks: { acmenotify_announce: (...args: unknown[]) => executor(...args) },
+          blocks: {
+            acmenotify_announce: (...args: unknown[]) => executor(...args),
+            acmenotify_digest: (...args: unknown[]) => executor(...args),
+          },
         }
       : undefined,
 }));
@@ -78,7 +97,15 @@ vi.mock("../helpers/run-control-error.js", () => ({
 }));
 vi.mock("../support/integration-capabilities.js", () => ({
   integrationCapabilityAccess: () => ({}),
-  integrationLlm: () => ({ generateObject: () => Promise.reject(new Error("unused")) }),
+  integrationLlm: (target: unknown) => {
+    llmTargets.push(target);
+    return { generateObject: () => Promise.reject(new Error("unused")) };
+  },
+}));
+// Which providers take a direct model call is read from the environment in
+// one place; the test states it.
+vi.mock("../definition/block-contract-environment.js", () => ({
+  directLlmCredentials: () => directCallKeys.value,
 }));
 
 const { runIntegrationBlockStep } = await import("./integration-block-step.js");
@@ -127,6 +154,8 @@ function call(overrides: Partial<Parameters<typeof runIntegrationBlockStep>[0]> 
 }
 
 beforeEach(() => {
+  llmTargets.length = 0;
+  directCallKeys.value = { claude: true, codex: false };
   executor.mockReset();
   runControl.mockReset();
   runControl.mockReturnValue(false);
@@ -293,6 +322,50 @@ describe("running an integration block", () => {
     const result = await call({ integrationId: "goneaway" });
 
     expect(result).toMatchObject({ kind: "unavailable", reason: "disconnected" });
+    expect(executor).not.toHaveBeenCalled();
+  });
+});
+
+describe("the model a block reaches through ctx.llm", () => {
+  const digest = {
+    blockType: "acmenotify_digest",
+    configuration: {},
+    llm: {
+      provider: "claude" as const,
+      model: "claude-run-model",
+      models: { claude: "claude-run-model", codex: "gpt-run-model" },
+    },
+  };
+
+  it("is the run's own provider when that provider takes a direct call", async () => {
+    executor.mockResolvedValue({ kind: "next", output: { status: "done" } });
+
+    await call(digest);
+
+    expect(llmTargets).toEqual([{ provider: "claude", model: "claude-run-model" }]);
+  });
+
+  it("is the other provider, never a Claude OAuth token sent as an API key", async () => {
+    // Agents on Claude through an OAuth token, and a Codex API key: the run
+    // prefers Claude, which a direct call refuses, so Codex serves with the
+    // run's Codex model.
+    directCallKeys.value = { claude: false, codex: true };
+    executor.mockResolvedValue({ kind: "next", output: { status: "done" } });
+
+    await call(digest);
+
+    expect(llmTargets).toEqual([{ provider: "codex", model: "gpt-run-model" }]);
+  });
+
+  it("is refused before the block runs when no provider takes a direct call", async () => {
+    directCallKeys.value = { claude: false, codex: false };
+
+    const result = await call(digest);
+
+    expect(result).toEqual({
+      kind: "llm_unconfigured",
+      message: expect.stringContaining("neither a Claude nor a Codex API key is configured"),
+    });
     expect(executor).not.toHaveBeenCalled();
   });
 });

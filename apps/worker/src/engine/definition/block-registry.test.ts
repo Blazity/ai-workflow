@@ -848,11 +848,12 @@ describe("workflow block registry", () => {
     });
   });
 
-  it("asks an integration block that uses ctx.llm the same credential question Call LLM asks", () => {
-    // The block spends the run default provider's key directly, as Call LLM
-    // does. Offered without the question, it published on a deployment whose
-    // only Claude credential is an OAuth token, and the token was then sent
-    // as an API key at the block's first model call.
+  it("offers an integration block that uses ctx.llm exactly when some provider takes a direct call", () => {
+    // The block spends a key directly. Offered without a question, it published
+    // on a deployment whose only Claude credential is an OAuth token. Asked with
+    // the default profile's provider (Codex, the built-in default), it was
+    // refused on a deployment with only a Claude API key whose agents run on
+    // Claude, where the run works. The rule the step applies answers both.
     const summarize: IntegrationManifest = {
       id: "acmesummary",
       name: "Acme Summary",
@@ -882,26 +883,27 @@ describe("workflow block registry", () => {
       manifests: [summarize],
       states: new Map([["acmesummary", { usable: true, status: "connected" } as IntegrationState]]),
     });
-    const oauthOnly: WorkflowBlockRegistryContext = {
+    // What the editor really passes: the built-in default profile, on Codex.
+    const editor: WorkflowBlockRegistryContext = {
       ...context,
       agentProviders: { claude: true, codex: false },
       llmProviders: { claude: false, codex: false },
-      defaultAgent: { provider: "claude", model: "claude-test" },
+      defaultAgent: { provider: "codex", model: "gpt-5-codex" },
       integrations: deployment,
     };
-    const registry = buildWorkflowBlockRegistry(oauthOnly) as Record<
-      string,
-      { availability: unknown }
-    >;
+    const digest = (llmProviders: WorkflowBlockRegistryContext["llmProviders"]) =>
+      (buildWorkflowBlockRegistry({ ...editor, llmProviders }) as Record<
+        string,
+        { availability: unknown }
+      >).acmesummary_digest?.availability;
 
-    expect(registry.acmesummary_digest?.availability).toEqual({
+    expect(digest({ claude: false, codex: false })).toEqual({
       available: false,
-      unavailableReason: "Claude API credentials are not configured for Digest.",
+      unavailableReason:
+        "Digest calls a model directly, and neither a Claude nor a Codex API key is configured (a Claude OAuth token serves agents only).",
     });
-    expect(
-      (buildWorkflowBlockRegistry({ ...oauthOnly, llmProviders: { claude: true, codex: false } }) as
-        Record<string, { availability: unknown }>).acmesummary_digest?.availability,
-    ).toEqual({ available: true, unavailableReason: null });
+    expect(digest({ claude: true, codex: false })).toEqual({ available: true, unavailableReason: null });
+    expect(digest({ claude: false, codex: true })).toEqual({ available: true, unavailableReason: null });
   });
 
   it("uses runtime model inference for Call LLM across a different run default", () => {

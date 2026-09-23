@@ -1328,7 +1328,7 @@ async function agentWorkflowBody(
       // from before this shipped, which then compares nothing, exactly as it
       // did before.
       ...(plan.integrationPins ? { integrationPins: plan.integrationPins } : {}),
-      integrationLlmDefaults: { provider: runDefaultKind, model: defaultModel },
+      integrationLlmDefaults: { provider: runDefaultKind, model: defaultModel, models: modelDefaults },
       entry,
       ticket,
       ticketUrl: entry.ticketKey ? (ticket.url ?? "") : "",

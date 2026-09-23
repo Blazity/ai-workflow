@@ -87,8 +87,16 @@ export interface EngineCtx {
    * is exactly the behaviour it had before this shipped.
    */
   integrationPins?: readonly IntegrationConnectionPin[];
-  /** The provider and model an integration block reaches through `ctx.llm`. */
-  integrationLlmDefaults?: { provider: "claude" | "codex"; model: string };
+  /**
+   * The run's preferred provider and model for an integration block's
+   * `ctx.llm`, and its model for each provider; the block step picks with
+   * `integrationLlmTarget` (engine/definition/integration-llm.ts).
+   */
+  integrationLlmDefaults?: {
+    provider: "claude" | "codex";
+    model: string;
+    models?: { claude: string; codex: string };
+  };
   /**
    * The deployment settings this run started under, loaded once by
    * `loadRunStartSettingsStep` before any other step.

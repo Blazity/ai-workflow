@@ -111,10 +111,13 @@ export function integrationLlm(defaults: {
         ...(request.system === undefined ? {} : { system: request.system }),
         ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
         schema: zodSchema(request.schema as never).jsonSchema,
-        credentials: {
-          ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
-          ...(env.CODEX_API_KEY ? { codexApiKey: env.CODEX_API_KEY } : {}),
-        },
+        // Only the chosen provider's key: `integrationLlmTarget` chose a
+        // provider whose key a direct call accepts, and the other one (a
+        // Claude OAuth token, say) has no business on this request.
+        credentials:
+          defaults.provider === "claude"
+            ? (env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {})
+            : (env.CODEX_API_KEY ? { codexApiKey: env.CODEX_API_KEY } : {}),
       });
       // Parsed with the block's own schema rather than trusted: the SDK
       // promises the block output the schema accepted, and a model that

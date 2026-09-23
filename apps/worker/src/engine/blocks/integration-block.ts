@@ -127,6 +127,9 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
       });
     }
     if (result.kind === "unreadable") return settingsUnreadable(entry.block.ui.label, result.reason);
+    if (result.kind === "llm_unconfigured") {
+      return executionError(result.message, { category: "configuration", message: result.message });
+    }
     return executionError(result.message, { category: "provider" });
   } catch (error) {
     if (isRunControlError(error)) throw error;

@@ -12,6 +12,7 @@
  * is the only module that answers it from the process environment, so a test
  * binds a deployment it declares without loading the environment at all.
  */
+import { integrationLlmTarget, integrationLlmUnavailable } from "./integration-llm.js";
 import {
   BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
@@ -106,10 +107,19 @@ function availabilityFor(
   if (fromIntegration) {
     if (!fromIntegration.available) return fromIntegration;
     // The one credential rule core applies to an integration block: the model
-    // it reaches through `ctx.llm` is paid for with this deployment's key.
+    // it reaches through `ctx.llm` is paid for with this deployment's key. Asked
+    // through the rule the block step applies (`integration-llm.ts`), whose
+    // answer does not depend on the run's preferred provider, so the default
+    // profile standing in for the run here cannot make it disagree.
     const block = context.integrations.blocks.get(type)?.block;
-    const llmIssue = block?.requires?.llm === true ? directLlmIssue(block.ui.label, {}, context) : null;
-    return llmIssue ? unavailable(llmIssue) : fromIntegration;
+    if (block?.requires?.llm !== true) return fromIntegration;
+    const preferred = context.defaultAgent;
+    const target = integrationLlmTarget(
+      preferred,
+      { claude: preferred.model, codex: preferred.model },
+      context.llmProviders,
+    );
+    return target ? fromIntegration : unavailable(integrationLlmUnavailable(block.ui.label));
   }
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
@@ -197,9 +207,10 @@ function availabilityFor(
  * Why a block that calls a model directly (with an API key, rather than
  * through an agent's harness) cannot do so on this deployment, or null.
  *
- * THE ONE GATE for such a call, asked by `call_llm` and by every integration
- * block that declares `requires.llm`, whose `ctx.llm` spends the run default
- * provider's key (`integrationLlm`). A credential an agent harness accepts is
+ * Asked by `call_llm`, whose provider and model are its own parameters or the
+ * run's default. An integration block's `ctx.llm` has a rule of its own
+ * (`integration-llm.ts`), because it falls back to the other provider rather
+ * than fail. A credential an agent harness accepts is
  * not always one a direct call does (a Claude OAuth token, which
  * `llmProviders` leaves out), so a block offered without asking this would
  * publish a workflow whose first model call is refused. With no model named,
