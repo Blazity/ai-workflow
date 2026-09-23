@@ -12,10 +12,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-vi.mock("../../adapters/issue-tracker/jira.js", () => ({
-  JiraAdapter: vi.fn().mockImplementation((config) => ({ kind: "jira", config })),
-}));
-
 vi.mock("../../db/repositories/active-runs.js", () => ({
   createConnectedPostgresRunRegistry: vi.fn(() => ({ kind: "registry", db: "db" })),
 }));
