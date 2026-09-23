@@ -659,7 +659,7 @@ function withSettingAndWebhook() {
       env: "ACME_ALLOWED_USER_IDS",
     },
   ];
-  manifest.webhook = { requires: ["apiToken"] };
+  manifest.webhook = { requires: ["apiToken"], label: "/acme command" };
   runtime.webhook = { receive: async () => ({ kind: "refused", status: 401, reason: "unsigned" }) };
   return { manifest, runtime };
 }
@@ -723,6 +723,12 @@ test("webhook.requires names fields this connection has, and something to serve"
   const noWebhook = withSettingAndWebhook();
   delete noWebhook.runtime.webhook;
   hasIssue(noWebhook.manifest, noWebhook.runtime, "webhook_requires_invalid", "webhook.requires");
+
+  // The card names what is answered on part of the connection, so it has to
+  // have a name.
+  const unnamed = withSettingAndWebhook();
+  delete (unnamed.manifest.webhook as { label?: string }).label;
+  hasIssue(unnamed.manifest, unnamed.runtime, "webhook_requires_invalid", "webhook.label");
 });
 
 test("the fixture hands a refused token to core as the provider's answer, not as fatal", async () => {

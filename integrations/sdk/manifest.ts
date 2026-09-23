@@ -151,6 +151,13 @@ export interface IntegrationWebhookManifest {
    * VCS reading the pull request) must not be served by half a connection.
    */
   readonly requires?: readonly string[];
+  /**
+   * What this webhook answers, as the person who set it up calls it:
+   * `/ai-workflow slash command`. Required with `requires`, because that is
+   * when the integration's card has to say it is answered while the rest of
+   * the integration is not (or refused while the rest is Connected).
+   */
+  readonly label?: string;
 }
 
 /**

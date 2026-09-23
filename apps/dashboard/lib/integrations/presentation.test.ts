@@ -170,6 +170,84 @@ test("a fresh deployment is told what the integration needs, not that its values
   );
 });
 
+/** Slack on a deployment that set `SLACK_SIGNING_SECRET` and nothing else. */
+function commandOnlySlack(overrides: Partial<IntegrationDto> = {}): IntegrationDto {
+  return integration({
+    id: "slack",
+    name: "Slack",
+    capabilities: ["messaging"],
+    fields: [
+      { ...TOKEN_FIELD, key: "botToken", label: "Bot token", env: "CHAT_SDK_SLACK_TOKEN" },
+      { ...URL_FIELD, key: "channelId", label: "Channel id", env: "CHAT_SDK_CHANNEL_ID", format: "text" },
+      {
+        ...TOKEN_FIELD,
+        key: "signingSecret",
+        label: "Signing secret",
+        env: "SLACK_SIGNING_SECRET",
+        optional: true,
+        envSet: true,
+      },
+    ],
+    state: state({
+      integrationId: "slack",
+      source: "environment",
+      status: "failing",
+      connection: "failing",
+      usable: false,
+      environment: {
+        setVariables: ["SLACK_SIGNING_SECRET"],
+        missingVariables: ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"],
+        complete: false,
+      },
+      failure: {
+        reason: "environment_incomplete",
+        message: "Set CHAT_SDK_SLACK_TOKEN, CHAT_SDK_CHANNEL_ID on this deployment, or store the values from the dashboard",
+        missingVariables: ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"],
+      },
+    }),
+    webhook: { label: "/ai-workflow slash command", requires: ["signingSecret"], served: true },
+    ...overrides,
+  });
+}
+
+test("a deployment that registered only the slash command is told the command works and what the rest needs", () => {
+  // Failing is true of the connection (no bot token, no channel, so nothing is
+  // posted), and alone it would send the admin to fix a command that works.
+  const rendered = statusDetailLines(commandOnlySlack()).join(" ");
+  assert.match(rendered, /The \/ai-workflow slash command is still answered here: it needs only the Signing secret\./);
+  assert.match(rendered, /Everything else Slack does \(messaging\) waits until the rest of the connection works\./);
+  assert.match(rendered, /Not set here: CHAT_SDK_SLACK_TOKEN and CHAT_SDK_CHANNEL_ID\./);
+});
+
+test("a Connected Slack without its signing secret says the command is not answered", () => {
+  const rendered = statusDetailLines(
+    commandOnlySlack({
+      state: state({ integrationId: "slack", source: "environment" }),
+      webhook: { label: "/ai-workflow slash command", requires: ["signingSecret"], served: false },
+    }),
+  ).join(" ");
+  assert.match(rendered, /The \/ai-workflow slash command is not answered here: it needs the Signing secret, which is not set or cannot be read\./);
+});
+
+test("a webhook that agrees with the rest of the integration adds nothing to the card", () => {
+  for (const [usable, served, status] of [
+    [true, true, "connected"],
+    [false, false, "failing"],
+  ] as const) {
+    const rendered = statusDetailLines(
+      commandOnlySlack({
+        state: state({ integrationId: "slack", usable, status, connection: status }),
+        webhook: { label: "/ai-workflow slash command", requires: ["signingSecret"], served },
+      }),
+    ).join(" ");
+    assert.doesNotMatch(rendered, /slash command/, `${status}, served ${served}`);
+  }
+  const off = statusDetailLines(
+    commandOnlySlack({ state: state({ enabled: false, status: "disabled", usable: false }) }),
+  ).join(" ");
+  assert.doesNotMatch(off, /slash command/, "switched off says so once, above");
+});
+
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({

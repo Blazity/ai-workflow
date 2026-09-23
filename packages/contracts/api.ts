@@ -1306,6 +1306,24 @@ export interface IntegrationDto {
   readonly pages: readonly IntegrationPageSummary[];
   readonly fields: readonly IntegrationConnectionFieldDto[];
   readonly state: IntegrationState;
+  /**
+   * The webhook of an integration whose manifest says which connection fields
+   * it reads (`webhook.requires`), and whether this deployment answers it now.
+   * Decided by the same read the webhook route makes, so it is answered while
+   * the rest of the integration is not usable (Slack's slash command on its
+   * signing secret alone) and refused while the rest is Connected. Absent for
+   * an integration without such a webhook.
+   */
+  readonly webhook?: IntegrationWebhookDto;
+}
+
+export interface IntegrationWebhookDto {
+  /** What it answers, as a person calls it: `/ai-workflow slash command`. */
+  readonly label: string;
+  /** The connection field keys it reads. */
+  readonly requires: readonly string[];
+  /** Switched on, and every one of those fields read from the active source. */
+  readonly served: boolean;
 }
 
 /**

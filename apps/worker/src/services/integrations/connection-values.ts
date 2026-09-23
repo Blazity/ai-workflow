@@ -76,6 +76,54 @@ export function readConnectionValues(input: {
 }
 
 /**
+ * The part of a connection a webhook that declared what it reads
+ * (`webhook.requires`) is served on, read now.
+ *
+ * One question with two askers: the webhook route serves on the answer
+ * (through `resolveUsableIntegrations`), and the integration's card says from
+ * it whether the webhook is answered (`IntegrationDto.webhook`), so the card
+ * cannot call a command answered that the route refuses, or the other way
+ * round. Nothing else of the connection is asked for: Slack's slash command is
+ * answered on its signing secret alone.
+ *
+ * Not served with a failure: a declared field could not be read (a stored
+ * secret under another key, a value its field refuses). Without one: a declared
+ * field has no value in the active source. Whether the integration is switched
+ * on is each caller's first question, as it is for every other use.
+ */
+export function readWebhookConnection(input: {
+  readonly manifest: IntegrationManifest;
+  readonly requires: readonly string[];
+  readonly source: IntegrationSource;
+  readonly environment: IntegrationEnvironmentReader;
+  readonly active: StoredIntegrationVersion | null;
+  readonly secretsKey: IntegrationSecretsKeyMaterial;
+}):
+  | {
+      readonly served: true;
+      /** The manifest narrowed to the declared fields, which is what the
+       *  webhook's context is built from. */
+      readonly manifest: IntegrationManifest;
+      readonly values: Record<string, ConnectionValue>;
+    }
+  | { readonly served: false; readonly failure: IntegrationFailure | null } {
+  const manifest: IntegrationManifest = {
+    ...input.manifest,
+    connection: {
+      fields: input.manifest.connection.fields.filter((field) =>
+        input.requires.includes(field.key),
+      ),
+    },
+  };
+  const read = readConnectionValues({ ...input, manifest });
+  if (!read.ok) return { served: false, failure: read.failure };
+  if (input.requires.some((key) => read.values[key] === undefined)) {
+    return { served: false, failure: null };
+  }
+  return { served: true, manifest, values: read.values };
+}
+
+/**
  * One stored secret, or the failure that says what to do about it.
  *
  * Returns the failure object itself rather than throwing, because each of the

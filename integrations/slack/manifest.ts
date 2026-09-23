@@ -79,7 +79,7 @@ export const manifest = defineIntegration({
   // one-shot response_url Slack sends with it, so it needs neither the bot
   // token nor the channel: a deployment that registered only the command
   // answers it.
-  webhook: { requires: ["signingSecret"] },
+  webhook: { requires: ["signingSecret"], label: "/ai-workflow slash command" },
   health: [
     {
       id: "bot-auth",

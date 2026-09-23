@@ -36,10 +36,15 @@ vi.mock("../../db/repositories/settings.js", () => ({
 // The parsed environment is core's own and not what is under test; a variable
 // it does not declare (every integration setting's) is read off process.env.
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
+// Which database this deployment writes to, for the card's write access.
+vi.mock("../../db/repositories/system-health.js", () => ({
+  readConnectedDeploymentEnvironmentMarker: async () => null,
+}));
 
 const { resolveUsableIntegrations } = await import("./usable.js");
 const { integrationSecretDigest } = await import("./resolve.js");
 const { loadSettingsSnapshot } = await import("../settings/snapshot.js");
+const { listIntegrations } = await import("./authoring.js");
 
 const SIGNING_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 const SECRETS_KEY = "a".repeat(64);
@@ -169,6 +174,52 @@ describe("the slash command needs only what it uses", () => {
     });
 
     expect(resolved.readable && resolved.usable).toEqual([]);
+  });
+});
+
+/** Slack as the Integrations screen receives it. */
+async function slackCard() {
+  const card = (await listIntegrations()).integrations.find((integration) => integration.id === "slack");
+  if (!card) throw new Error("Slack is not listed");
+  return card;
+}
+
+describe("the card says what the route does with the command", () => {
+  // The admin reads the card to learn whether the command works; the card and
+  // the route ask one read (`readWebhookConnection`), and these hold that they
+  // give one answer in each of the three states that differ.
+  it("says the command is answered while the rest of Slack is not usable", async () => {
+    vi.stubEnv("SLACK_SIGNING_SECRET", SIGNING_SECRET);
+
+    const card = await slackCard();
+
+    expect(card.state.usable).toBe(false);
+    expect(card.webhook).toEqual({
+      label: "/ai-workflow slash command",
+      requires: ["signingSecret"],
+      served: true,
+    });
+    const resolved = await slackForWebhook();
+    expect(resolved.readable && resolved.slack?.manifest.id).toBe("slack");
+  });
+
+  it("says the command is refused while Slack is Connected without its signing secret", async () => {
+    vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-env");
+    vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C0ENV");
+
+    const card = await slackCard();
+
+    expect(card.state.usable).toBe(true);
+    expect(card.webhook?.served).toBe(false);
+    expect(await slackForWebhook()).toEqual({ readable: true, slack: null });
+  });
+
+  it("says the command is refused while Slack is switched off", async () => {
+    vi.stubEnv("SLACK_SIGNING_SECRET", SIGNING_SECRET);
+    state.connections.set("slack", { ...storedSlack(), enabled: false, source: "environment" });
+
+    expect((await slackCard()).webhook?.served).toBe(false);
+    expect(await slackForWebhook()).toEqual({ readable: true, slack: null });
   });
 });
 

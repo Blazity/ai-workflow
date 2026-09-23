@@ -387,6 +387,8 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     );
   }
   if (state.failure) lines.push(failureLine(state.failure));
+  const webhook = webhookLine(integration);
+  if (webhook) lines.push(webhook);
 
   const neverConfigured =
     state.connection === "not_connected" &&
@@ -415,6 +417,30 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     );
   }
   return lines;
+}
+
+/**
+ * What the card says about a webhook served on part of the connection, when
+ * its answer differs from the rest of the integration: answered while the rest
+ * is not usable (Slack's slash command on its signing secret alone), refused
+ * while the rest is Connected. The worker decided `served` with the read the
+ * webhook route makes; this only words it, and says nothing when the two
+ * agree, since the status above already said it.
+ */
+function webhookLine(integration: IntegrationDto): string | null {
+  const { webhook, state } = integration;
+  if (!webhook || state.status === "disabled") return null;
+  const needs = webhook.requires.map(
+    (key) => integration.fields.find((field) => field.key === key)?.label ?? key,
+  );
+  if (webhook.served && !state.usable) {
+    const rest = integration.capabilities.map((id) => capabilityLabel(id).toLowerCase());
+    return `The ${webhook.label} is still answered here: it needs only the ${andList(needs)}. Everything else ${integration.name} does${rest.length > 0 ? ` (${andList(rest)})` : ""} waits until the rest of the connection works.`;
+  }
+  if (!webhook.served && state.usable) {
+    return `The ${webhook.label} is not answered here: it needs the ${andList(needs)}, which ${needs.length === 1 ? "is" : "are"} not set or cannot be read.`;
+  }
+  return null;
 }
 
 /**

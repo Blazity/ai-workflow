@@ -291,7 +291,7 @@ const manifestSchema = z.object({
     .optional(),
   capabilities: z.array(z.string()),
   repositories: z.object({ host: z.string().optional(), nestedPaths: z.boolean().optional() }).optional(),
-  webhook: z.object({ requires: z.array(z.string()).optional() }).optional(),
+  webhook: z.object({ requires: z.array(z.string()).optional(), label: text.optional() }).optional(),
   blocks: z.array(
     z.object({
       type: z.string(),
@@ -520,6 +520,13 @@ function checkWebhookRequirements(manifest: ParsedManifest, runtime: Runtime, re
       "webhook_requires_invalid",
       "webhook.requires",
       "The manifest says what its webhook requires, and the runtime has no webhook. Delete webhook.requires, or implement runtime.webhook.",
+    );
+  }
+  if (manifest.webhook?.label === undefined) {
+    report(
+      "webhook_requires_invalid",
+      "webhook.label",
+      'A webhook served on part of the connection needs webhook.label, what it answers ("/ai-workflow slash command"): the card says whether it is answered, apart from the rest of the integration.',
     );
   }
   if (requires.length === 0) {

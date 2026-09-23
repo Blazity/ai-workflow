@@ -49,7 +49,10 @@ back to the `response_url` it was sent.
 The command needs only the signing secret (the manifest's
 `webhook.requires`): the answer goes to `response_url`, which takes no token,
 so a deployment that registered only the command answers it, with no bot token
-and no channel. Without the secret it answers 503.
+and no channel. Without the secret it answers 503. The card on the Integrations
+screen says both: on the secret alone Slack reads Failing, because nothing can
+be posted, and says the command is still answered; Connected without the
+secret says the command is not.
 
 An answer is posted for the whole channel. A command that failed on our side
 is answered to the person who typed it only, with a reference such as

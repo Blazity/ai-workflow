@@ -21,7 +21,8 @@ import {
   NESTED_ADAPTER_MEMBERS,
   type NestedAdapterRole,
 } from "@integrations/sdk";
-import type { IntegrationState } from "@shared/contracts";
+import type { IntegrationFailure, IntegrationState } from "@shared/contracts";
+import type { ConnectionValue } from "./connection-values.js";
 
 /** One integration this deployment can actually use right now. */
 export interface UsableIntegration {
@@ -145,9 +146,8 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
   // which re-exports this file: the boundaries gate reads that round trip as a
   // cycle, and it would be one.
   const { readIntegrationStatesFrom, secretsKeyMaterial } = await import("./authoring.js");
-  const { readConnectionValues, redactIntegrationText, secretValuesOf } = await import(
-    "./connection-values.js"
-  );
+  const { readConnectionValues, readWebhookConnection, redactIntegrationText, secretValuesOf } =
+    await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
   const { buildIntegrationContext, redactedError } = await import("./context.js");
   const { readConnectedIntegrationConnections } = await import(
@@ -189,34 +189,38 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
     if (!state?.enabled || (!state.usable && requires === undefined)) continue;
     const runtime = integrationRuntime(manifest.id);
     if (!runtime) continue;
-    const read =
-      requires === undefined
-        ? manifest
-        : {
-            ...manifest,
-            connection: {
-              fields: manifest.connection.fields.filter((field) => requires.includes(field.key)),
-            },
-          };
-    const values = readConnectionValues({
-      manifest: read,
+    const reading = {
       source: state.source,
       environment,
       active: stored.get(manifest.id)?.active ?? null,
       secretsKey,
-    });
-    if (!values.ok) {
-      // The card already says why, and this caller is doing something the run
-      // can go on without, so it is a line in the log rather than a failure.
-      logger.warn(
-        { integration: manifest.id, reason: values.failure.reason },
-        "integration_connection_unreadable",
-      );
-      continue;
+    };
+    // The card already says why a connection cannot be read, and this caller
+    // is doing something the run can go on without, so it is a line in the log
+    // rather than a failure.
+    const unreadable = (failure: IntegrationFailure) =>
+      logger.warn({ integration: manifest.id, reason: failure.reason }, "integration_connection_unreadable");
+    let read: IntegrationManifest;
+    let values: Record<string, ConnectionValue>;
+    if (requires === undefined) {
+      const whole = readConnectionValues({ manifest, ...reading });
+      if (!whole.ok) {
+        unreadable(whole.failure);
+        continue;
+      }
+      read = manifest;
+      values = whole.values;
+    } else {
+      // Served only when the declared part is there (no signing secret means
+      // nothing to verify a request with); the card reads the same answer.
+      const part = readWebhookConnection({ manifest, requires, ...reading });
+      if (!part.served) {
+        if (part.failure) unreadable(part.failure);
+        continue;
+      }
+      read = part.manifest;
+      values = part.values;
     }
-    // A webhook served on part of a connection is served only when that part
-    // is there: no signing secret means nothing to verify a request with.
-    if (requires?.some((key) => values.values[key] === undefined)) continue;
     let settings: Record<string, readonly string[]> | undefined;
     if (input.forWebhook && (manifest.settings?.length ?? 0) > 0) {
       try {
@@ -228,14 +232,14 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
         return { readable: false, reason };
       }
     }
-    const secrets = secretValuesOf(read, values.values);
+    const secrets = secretValuesOf(read, values);
     const redaction: IntegrationRedaction = {
       text: (text) => redactIntegrationText(text, secrets),
       error: (error) => redactedError(error, (text) => redactIntegrationText(text, secrets)),
     };
     const ctx = buildIntegrationContext({
       manifest: read,
-      values: values.values,
+      values,
       secrets,
       // One per context rather than one shared never-aborting signal, so
       // whatever a request joins onto it goes away with the context.

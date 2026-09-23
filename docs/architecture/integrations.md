@@ -870,12 +870,18 @@ with nothing dispatched when it is disabled, so the provider neither retries
 nor switches the webhook off.
 
 A webhook that reads less than the whole connection says so in the manifest:
-`webhook: { requires: ["signingSecret"] }`. Core then serves it while the
+`webhook: { requires: ["signingSecret"], label: "/ai-workflow slash command" }`.
+Core then serves it while the
 integration is enabled and those fields have values, even when the rest of the
 connection is incomplete or its test failed, and `ctx.connection` holds exactly
 those fields, each present. Slack's slash command is the case: it verifies with
 the signing secret and answers through Slack's `response_url`, so a deployment
-that registered only the command needs no bot token. Leave `requires` out when
+that registered only the command needs no bot token. The `label` is what the
+card calls it when its answer differs from the rest of the integration
+("still answered here" while the rest is not usable, "not answered here" while
+the rest is Connected), which conformance requires beside `requires`; the card
+and the route decide it with one read (`readWebhookConnection` in
+`services/integrations/connection-values.ts`). Leave `requires` out when
 your webhook goes on to call the provider: half a connection must not serve a
 tracker that reads the ticket.
 
