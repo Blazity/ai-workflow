@@ -28,4 +28,3 @@ export const STORED_LOGS: JsonValue = [
   { tail: JSON.stringify(creditEvent), stream: "stdout" },
   { tail: `${JSON.stringify(planEvent)}\n`, stream: "stdout" },
 ];
-
