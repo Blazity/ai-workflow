@@ -511,12 +511,30 @@ vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
 `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and
 `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
-### Behavioural PR gate (engine-canary)
+### Engine canary (on demand)
 
-The `engine-canary-scope` job runs on every same-repository pull request, holds
-no secrets, and decides whether the `engine-canary` job runs at all. The
-prefixes it selects on live in `scripts/ci/engine-canary-scope.ts`, which is the
-authority and carries the reason for each one. They are:
+The engine canary runs real workflow runs on the demo deployment, which shares
+the production database. It lives in `.github/workflows/engine-canary.yml`, it
+is not a required check, and `ci` does not wait for it (ADR-004, change log
+2026-09-23). It costs real model spend, so it starts only when somebody asks:
+
+- Add the `run-canary` label to a same-repository pull request. Adding the label
+  starts it, and every later push to that pull request runs it again while the
+  label stays. A pull request without the label starts no canary job at all.
+- Run the workflow by hand (`workflow_dispatch`). The `cases` input picks
+  `custom` (the default) or `all`.
+
+By default it runs one case: the custom Harness Profile fixture on Haiku
+(definition 38), which also carries the replay leg. `cases: all` adds the
+built-in Claude (Opus) and built-in Codex fixtures. The runner reads the choice
+from `ENGINE_CANARY_CASES` and refuses any value other than `custom` or `all`.
+
+Add the label when a pull request changes what the canary exists to catch:
+engine steps, a moved or renamed `"use step"` file, a workflow body, or a
+Workflow DevKit upgrade. The `engine-canary-scope` job prints whether the change
+touches the canary's surfaces. The prefixes it selects on live in
+`scripts/ci/engine-canary-scope.ts`, which is the authority and carries the
+reason for each one. They are:
 
 - The deployed surfaces the canary drives: `apps/worker/src/engine/**`,
   `apps/worker/src/db/**`, `apps/worker/src/mcp/**`,
@@ -529,51 +547,40 @@ authority and carries the reason for each one. They are:
   `apps/worker/src/services/` selects the canary.
 - The canary itself: `apps/worker/e2e/harness-profiles/**`,
   `apps/worker/e2e/replay/**`, the `scripts/ci/engine-canary*` scripts, and
-  `.github/workflows/ci.yml`.
+  `.github/workflows/engine-canary.yml`.
 - The dependency inputs of the deployed bundle: `pnpm-lock.yaml`,
   `pnpm-workspace.yaml`, and `apps/worker/package.json`. These three are on the
-  list because the two production failures this gate exists for arrived through
-  a dependency rather than through worker source, and no other job in the
-  repository can see that class.
+  list because the two production failures the canary was built for arrived
+  through a dependency rather than through worker source, and no other job in
+  the repository can see that class.
 
 `scripts/ci/engine-canary-docs.test.ts` holds this list level with the code: a
 prefix that the source selects on and this section does not name fails
 `test:ci`.
 
-`ci` requires the scope job to succeed and accepts a skipped
-`engine-canary` only when that job succeeded and said the canary is not needed;
-a failed or cancelled scope job turns `ci` red. With no
-`ENGINE_CANARY_TARGET`, the canary job fails with an error naming the variable:
-the job only starts when the scope job said this change needs the canary, so an
-unconfigured target is a refusal rather than an idle state. It used to exit
-green with a warning instead, which reported a success for a job that had run no
-behavioural gate at all, so deleting one repository variable or mistyping its
-name disarmed the gate with nothing red anywhere. Once a target is declared,
-missing configuration fails before deployment and a failed identity check stops
-the job before any canary write. A pull request that changes anything under
-`apps/worker/drizzle/**` skips the canary job with a warning from the scope job,
-because the target shares the production database with every migration; the
-canary runs only after that migration has merged and the shared database has
-been migrated.
+With no `ENGINE_CANARY_TARGET`, the canary job fails with an error naming the
+variable: the job only starts when somebody asked for the canary, so an
+unconfigured target is a refusal rather than an idle state. Once a target is
+declared, missing configuration fails before deployment and a failed identity
+check stops the job before any canary write. A change that touches anything
+under `apps/worker/drizzle/**` skips the canary job with a warning from the
+scope job, because the target shares the production database with every
+migration; the canary runs only after that migration has merged and the shared
+database has been migrated.
 
-**Cost per gate run.** One armed gate starts exactly three agent runs: the
-built-in Claude fixture, the built-in Codex fixture, and the custom profile
-fixture. Every fixture contains only the canary prompt in one `generic_agent`
-with `workspaceMode: "none"`. Replay verification reuses the custom fixture's
-run and starts no additional agent. The canary job's concurrency group
-is repository-wide, not per pull request, because all three fixtures share one
-permanent ticket each across every pull request: a second pull request's run
-queues behind the first instead of cancelling it or racing it onto the same
-tickets. Only the canary job sits in that group, so only pull requests that need
-the canary enter the queue. GitHub keeps one running and one pending run per
-group, so a third pull request that needs the canary, arriving while one runs
-and one waits, cancels the waiting run; that pull request shows a cancelled
-`engine-canary` and a failed `ci` until its job is re-run or it receives
-another push. A pull request that does not need the canary never waits in the
-queue and cannot be cancelled by it.
+**Cost per run.** The default run starts one agent run: the custom profile
+fixture on Haiku. `cases: all` starts three. Every fixture contains only the
+canary prompt in one `generic_agent` with `workspaceMode: "none"`. Replay
+verification reuses the custom fixture's run and starts no additional agent.
+The canary job's concurrency group is repository-wide, not per pull request,
+because every fixture shares one permanent ticket across every run: a second
+run queues behind the first instead of cancelling it or racing it onto the same
+tickets. GitHub keeps one running and one pending run per group, so a third run
+arriving while one runs and one waits cancels the waiting one; re-run it or push
+again.
 
-A canary job stopped mid run (a newer push cancels the pull request's
-workflow, or the job times out) can leave a live fixture run on the target,
+A canary job stopped mid run (somebody cancels it, a newer run displaces it,
+or the job times out) can leave a live fixture run on the target,
 where no cron settles it. The next job's sweep settles it: it asks
 `runs.cancel` again, under a fresh idempotency key each time, every 10 seconds
 for up to 5 minutes, until the answer is `already_terminal`, which releases the
@@ -591,7 +598,7 @@ that fixture run in the production Workflow world, where it finishes on its own
 and the production reconciler withdraws the ticket. The production startup
 watchdog can also close a canary claim whose run has not started within 10
 minutes. Both surface as a red canary and need no manual cleanup beyond
-checking that the three fixture tickets are out of the Ai column.
+checking that the fixture tickets are out of the Ai column.
 
 Arm the gate for the demo custom environment with these repository variables:
 

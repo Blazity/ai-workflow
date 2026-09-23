@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-23
 
 # ADR-004: Gates and required CI
 
@@ -130,6 +130,11 @@ ci") with exactly the shape above. AIW-313 is closed by it.
 
 ### 5. A behavioural gate joins `ci`, with its path filter on the job
 
+**Superseded in part, 2026-09-23 (see the change log below): the engine canary
+no longer joins `ci`.** It runs on demand, from its own workflow, and never
+gates a merge. The text of this section is kept as the record of the original
+decision.
+
 **Correction, 2026-09-17: stage 5b delivered this job, and this heading, which
 read "A behavioural gate is planned, not present", was renamed to state the
 decision instead of a state of the repository that stopped being true.** The
@@ -164,7 +169,8 @@ hand as their definition of done.
   bypass still exists; what changes is that using it leaves a trace.
 - Every new CI job that a stage adds must either join the aggregator's `needs`
   or be irrelevant to the merge decision. A job outside `needs` is
-  decoration.
+  decoration. Since 2026-09-23 the engine canary is such a job on purpose: it
+  is evidence somebody asks for, not a merge gate.
 - The aggregator's own timeout (5 minutes) is not a gate: it waits on jobs
   with 30-minute timeouts. A shard that hits its ceiling reports `failure` and
   the aggregator reports it by name.
@@ -205,3 +211,11 @@ use keeps the escape hatch and makes it visible.
 ordering that produces the failure the pre-mortem names: a non-reportable
 aggregator leaves every pull request on a permanent "Expected", and the bypass
 becomes the default path within a week.
+
+## Change log
+
+Changes to what `ci` requires after this ADR was accepted, newest first.
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-09-23 | The engine canary leaves `ci`. `engine-canary-scope` and `engine-canary` move from `.github/workflows/ci.yml` to `.github/workflows/engine-canary.yml`, and the `ci` aggregator's `needs` lists the four source jobs only. The canary starts only when a same-repository pull request carries the `run-canary` label or somebody runs the workflow by hand; by default it runs one case, the custom Harness Profile fixture on Haiku (definition 38), and `workflow_dispatch` with `cases: all` adds the built-in Claude (Opus) and Codex cases. The ruleset still requires `ci`, so no repository setting changes. | Owner decision. Every engine pull request paid real model spend for three agent runs; the target (demo) shares the production database, so every run wrote to production; and a required canary blocked a merge on a provider account's billing balance rather than on the code. Real production runs already exercise the same paths. Add the label to a pull request that changes engine steps, moves or renames a `"use step"` file, changes a workflow body, or upgrades the Workflow DevKit. |
