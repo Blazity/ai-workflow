@@ -582,6 +582,11 @@ export function buildSaveRequest(
  * Both facts come from the state the response carried, never from a guess made
  * here.
  */
+/** A Test of what is in use on a deployment reading its environment did not try
+ *  what is typed in the form, so it says which values failed. */
+const ENVIRONMENT_TEST_FAILED_LINE =
+  "What failed is this deployment's environment variables, not the values typed above. Change them on the deployment, or fill the values in above and save to use those instead.";
+
 export function testOutcomeLines(
   test: { readonly ok: true; readonly message?: string } | { readonly ok: false; readonly failure: IntegrationFailure },
   integration: IntegrationDto,
@@ -621,6 +626,16 @@ export function testOutcomeLines(
   // one of which cannot be sent at all), turns the connection Failing: those
   // values are what every run sends. Said before the generic advice, which
   // would tell this admin nothing changed.
+  if (origin === "test" && state.source === "environment" && state.connection === "failing") {
+    // The same stop as for stored values: the environment's variables are
+    // what every run sends. Saying only "change them on the deployment" left
+    // out that runs have already stopped.
+    lines.push(
+      `These are the values in use, and ${integration.name} refused them: the integration is now Failing, and runs that need it stop until the variables are corrected and a later Test passes.`,
+      ENVIRONMENT_TEST_FAILED_LINE,
+    );
+    return lines;
+  }
   if (origin === "test" && state.source === "stored" && state.connection === "failing") {
     lines.push(
       test.failure.reason === "value_malformed"
@@ -642,7 +657,7 @@ export function testOutcomeLines(
   // again sends them to edit values nothing is reading.
   lines.push(
     origin === "test" && state.source === "environment"
-      ? "What failed is this deployment's environment variables, not the values typed above. Change them on the deployment, or fill the values in above and save to use those instead."
+      ? ENVIRONMENT_TEST_FAILED_LINE
       : "Nothing was activated, so the integration is still not connected. Correct the values above and save again.",
   );
   return lines;

@@ -375,6 +375,25 @@ test("a required field holding only whitespace is missing", () => {
   assert.deepEqual(empty, ["Site URL"]);
 });
 
+test("a failed Test of the environment in use says runs that need it stop", () => {
+  const failing = integration({
+    state: state({
+      source: "environment",
+      status: "failing",
+      connection: "failing",
+      usable: false,
+      environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true },
+      failure: { reason: "credential_rejected", message: "401 unauthorised" },
+    }),
+  });
+  const rendered = testOutcomeLines(
+    { ok: false, failure: { reason: "credential_rejected", message: "401 unauthorised" } },
+    failing,
+    "test",
+  ).join(" ");
+  assert.match(rendered, /runs that need it stop until the variables are corrected/);
+});
+
 test("a refused credential leaves the working connection in place and says so", () => {
   const lines = testOutcomeLines(
     { ok: false, failure: { reason: "credential_rejected", message: "401 unauthorised" } },
