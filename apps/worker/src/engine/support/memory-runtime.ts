@@ -30,10 +30,11 @@ import type {
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
 import {
   KNOWN_SECRETS_UNREADABLE,
-  readKnownSecretCleaner,
+  knownSecretsReader,
   takeOutKnownSecrets,
   unscrubbedWrite,
   type KnownSecretCleaner,
+  type KnownSecretsReader,
 } from "../../memory/known-secrets.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import type {
@@ -272,6 +273,7 @@ export async function activeMemory(
     return wrap(only.manifest.id, only.manifest.name, adapter, {
       redaction: only.redaction,
       budget: memoryBudget(only.manifest.name, lifetime, MEMORY_CALL_BUDGET_MS),
+      knownSecrets: knownSecretsReader(),
     });
   } catch (error) {
     return refusing({
@@ -289,10 +291,15 @@ async function builtinActiveMemory(): Promise<ActiveMemory> {
     await import("../../memory/builtin/adapter.js");
   // No budget and nothing to redact: the built-in store is core's own
   // database, bounded where every other query is, and holds no connection.
-  return wrap(BUILTIN_MEMORY_PROVIDER_ID, BUILTIN_MEMORY_PROVIDER_NAME, builtinMemoryAdapter(), {
-    redaction: NOTHING_TO_REDACT,
-    budget: UNBOUNDED,
-  });
+  // One reader of the secret set for the wrapper and the store together, so
+  // cleaning what the store holds costs the step no second read.
+  const knownSecrets = knownSecretsReader();
+  return wrap(
+    BUILTIN_MEMORY_PROVIDER_ID,
+    BUILTIN_MEMORY_PROVIDER_NAME,
+    builtinMemoryAdapter(knownSecrets),
+    { redaction: NOTHING_TO_REDACT, budget: UNBOUNDED, knownSecrets },
+  );
 }
 
 function servesMemory(manifest: IntegrationManifest): boolean {
@@ -312,6 +319,8 @@ function servesMemory(manifest: IntegrationManifest): boolean {
 interface ProviderGuard {
   readonly redaction: Pick<IntegrationRedaction, "text">;
   readonly budget: MemoryBudget;
+  /** The step's one reader of the secret set (`knownSecretsReader`). */
+  readonly knownSecrets: KnownSecretsReader;
 }
 
 /** The built-in store's: it holds no connection, so it has no secret. */
@@ -342,21 +351,10 @@ function wrap(
   id: string,
   name: string,
   adapter: MemoryAdapter,
-  { redaction, budget }: ProviderGuard,
+  { redaction, budget, knownSecrets }: ProviderGuard,
 ): ActiveMemory {
   const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
   const spent = () => ({ ok: false, code: "unavailable", detail: budget.spentReason }) as const;
-  // The secret set, read once for this resolved memory, which lives one step:
-  // every call in the step cleans with the same set instead of reading the
-  // connection tables per document. A read that failed is tried again by the
-  // next call rather than remembered.
-  let cleaner: Promise<KnownSecretCleaner> | undefined;
-  const knownSecrets = async (): Promise<KnownSecretCleaner> => {
-    cleaner ??= readKnownSecretCleaner();
-    const read = await cleaner;
-    if (!read.ok) cleaner = undefined;
-    return read;
-  };
   return {
     id,
     name,

@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   /** Makes the secret source unavailable, which is the one way redaction fails
    * and `prepareMemoryContent` answers null. */
   redactionThrows: false,
+  /** How many times the step read the secret set. */
+  secretReads: 0,
   /**
    * Answers reads instead of the store, for the deadline case. A read that never
    * settles is what a database at the far end of a degraded link looks like from
@@ -77,6 +79,7 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   return {
     ...actual,
     knownSecretValues: async () => {
+      mocks.secretReads += 1;
       if (mocks.redactionThrows) {
         const { IntegrationSecretsUnreadableError } = await import(
           "../../services/integrations/secret-values.js"
@@ -598,6 +601,7 @@ beforeEach(async () => {
   mocks.beforeUpsert = null;
   mocks.readOverride = null;
   mocks.redactionThrows = false;
+  mocks.secretReads = 0;
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
   mocks.fetchExit = 128;
@@ -2342,6 +2346,25 @@ describe("distillRepoMemoryStep org promotion", () => {
     expect(await readOrgItems("github", OWNER)).toEqual([
       { text: "Package manager is pnpm", runId: "run_1" },
     ]);
+  });
+
+  it("reads this deployment's secret set once, however many documents it reads and writes", async () => {
+    // One step, one read: the port wrapper and the built-in store share the
+    // step's reader, so cleaning what the store holds before each merge costs
+    // no read of its own.
+    await storeFacts("github", REPO_PATH, ["Package manager is pnpm", "API uses fastify"]);
+    await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm", "Built with vite"]);
+    respond({
+      repositories: [
+        { repository: REPO_KEY, facts: ["Uses turborepo"], lessons: ["reran the flaky suite"] },
+        { repository: `github:${SIBLING_REPO_PATH}`, facts: ["Deploys on Fridays"], lessons: [] },
+      ],
+    });
+
+    const result = await distillRepoMemoryStep({ ...input, repositories: SIBLINGS });
+
+    expect(result.written).toBeGreaterThanOrEqual(3);
+    expect(mocks.secretReads).toBe(1);
   });
 
   it("leaves the repository documents untouched when it promotes", async () => {

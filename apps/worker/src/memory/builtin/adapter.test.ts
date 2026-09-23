@@ -31,7 +31,9 @@ import { renderRepoMemoryDocument } from "../repo-memory.js";
 import { builtinMemoryAdapter } from "./adapter.js";
 
 const SUBJECT = { key: "repo:github:acme/api", label: "acme/api" };
-const memory = builtinMemoryAdapter();
+/** One adapter per test, as a step gets one per resolution: it keeps the
+ *  secret set it read, so a case that changes the set needs a fresh one. */
+let memory: ReturnType<typeof builtinMemoryAdapter>;
 
 async function store(items: string[], runId = "run_0"): Promise<void> {
   await upsertMemoryDocument(mocks.db as never, {
@@ -57,6 +59,7 @@ function selectOf(db: unknown): unknown {
 beforeEach(async () => {
   mocks.db = await createTestDb();
   mocks.secrets = async () => [];
+  memory = builtinMemoryAdapter();
 });
 
 describe("recall", () => {
@@ -306,6 +309,36 @@ describe("a secret it learned after storing it", () => {
 
     expect(write).toMatchObject({ ok: false, code: "unavailable" });
     expect(await storedText()).toBe(before);
+  });
+});
+
+describe("a create-only write", () => {
+  it("answers already there without needing the secret set", async () => {
+    // Nothing held is merged into, so nothing held needs cleaning: a seed that
+    // finds a document says so even when the set cannot be read.
+    await store(["a fact a run distilled"]);
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    mocks.secrets = async () => {
+      throw new IntegrationSecretsUnreadableError(new Error("db down"));
+    };
+
+    const write = await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: {
+        kind: "items",
+        learned: ["Package manager is pnpm"],
+        refuted: [],
+        derived: true,
+        onlyIfEmpty: true,
+      },
+    });
+
+    expect(write).toEqual({ ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 });
   });
 });
 

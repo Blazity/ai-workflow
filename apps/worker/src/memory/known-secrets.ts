@@ -56,6 +56,26 @@ export async function readKnownSecretCleaner(): Promise<KnownSecretCleaner> {
   }
 }
 
+/** How a caller gets the set: one read, shared, for as long as it is kept. */
+export type KnownSecretsReader = () => Promise<KnownSecretCleaner>;
+
+/**
+ * The set, read at most once for as long as this reader is kept, which is one
+ * step: `activeMemory` makes one per resolution and hands the same reader to
+ * the port wrapper and to the built-in store, so a step reads the connection
+ * tables once whatever it recalls and writes. A read that failed is not kept:
+ * the next call tries again.
+ */
+export function knownSecretsReader(): KnownSecretsReader {
+  let cleaner: Promise<KnownSecretCleaner> | undefined;
+  return async () => {
+    cleaner ??= readKnownSecretCleaner();
+    const read = await cleaner;
+    if (!read.ok) cleaner = undefined;
+    return read;
+  };
+}
+
 /**
  * Hands `apply` the cleaner and returns what it built from cleaned text. A
  * throw from the cleaner inside `apply` is `unscrubbable`. The set is read

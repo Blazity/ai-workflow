@@ -48,7 +48,12 @@ import type {
   MemoryWrite,
 } from "@integrations/sdk";
 import { prepareMemoryContent, utf8Bytes } from "../content.js";
-import { takeOutKnownSecrets, unscrubbedWrite } from "../known-secrets.js";
+import {
+  knownSecretsReader,
+  takeOutKnownSecrets,
+  unscrubbedWrite,
+  type KnownSecretsReader,
+} from "../known-secrets.js";
 import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
@@ -97,10 +102,17 @@ const NOTEBOOK_DIR = "ai-workflow/memory";
 const LEGACY_NOTEBOOK_DIR = "blazebot/memory";
 
 /** The built-in provider, as core resolves it. */
-export function builtinMemoryAdapter(): MemoryAdapter {
+/**
+ * `knownSecrets` is the step's one reader of the secret set, shared with the
+ * port wrapper around this store (`activeMemory`), so cleaning what this store
+ * holds costs the step no second read.
+ */
+export function builtinMemoryAdapter(
+  knownSecrets: KnownSecretsReader = knownSecretsReader(),
+): MemoryAdapter {
   return {
     recall: builtinRecall,
-    observe: builtinObserve,
+    observe: (request) => builtinObserve(request, knownSecrets),
     store: builtinMemoryStore,
   };
 }
@@ -194,7 +206,10 @@ async function builtinRecall(request: MemoryRecallRequest): Promise<MemoryRecall
   }
 }
 
-async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrite> {
+async function builtinObserve(
+  request: MemoryObserveRequest,
+  knownSecrets: KnownSecretsReader,
+): Promise<MemoryWrite> {
   try {
     if (request.observation.kind === "document") {
       return await storeDocument(
@@ -213,7 +228,7 @@ async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrit
         detail: "the built-in store keeps a notebook as one document, so it takes no item observations",
       };
     }
-    return await storeItems(request, request.scope.kind, request.observation);
+    return await storeItems(request, request.scope.kind, request.observation, knownSecrets);
   } catch (error) {
     return { ok: false, code: writeFailureCode(error), detail: failureDetail(error) };
   }
@@ -295,16 +310,21 @@ async function storeItems(
   request: MemoryObserveRequest,
   kind: RepoMemoryDocKind,
   observation: Extract<MemoryObserveRequest["observation"], { kind: "items" }>,
+  knownSecrets: KnownSecretsReader,
 ): Promise<MemoryWrite> {
-  const { upsertConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
-  let held = await heldItems(request.subject.key, kind);
-  if (!held.ok) return held.refusal;
+  const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
+    "../../db/repositories/memory.js"
+  );
 
   if (observation.onlyIfEmpty) {
     // Create only. A document that appears between the read and the insert
     // belongs to whoever wrote it: what a run distilled is strictly better than
-    // what a deterministic seed derives, so it is never merged into.
-    if (held.exists) return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
+    // what a deterministic seed derives, so it is never merged into. Nothing
+    // held is merged into, so nothing held needs cleaning and the secret set
+    // is not needed to say "already there".
+    if (await getConnectedMemoryDocument(request.subject.key, kind)) {
+      return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
+    }
     const items: RepoMemoryItem[] = observation.learned.map((text) => ({
       text,
       runId: request.runId,
@@ -332,6 +352,8 @@ async function storeItems(
     };
   }
 
+  let held = await heldItems(request.subject.key, kind, knownSecrets);
+  if (!held.ok) return held.refusal;
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
     const existing = held.items;
     /**
@@ -406,7 +428,7 @@ async function storeItems(
         detail: `another writer won this document ${MAX_WRITE_ATTEMPTS} times, so this run's observation was not stored`,
       };
     }
-    held = await heldItems(request.subject.key, kind);
+    held = await heldItems(request.subject.key, kind, knownSecrets);
     if (!held.ok) return held.refusal;
   }
   // Unreachable: the loop returns on every path. Present so the function has
@@ -417,8 +439,6 @@ async function storeItems(
 type HeldItems =
   | {
       readonly ok: true;
-      /** Whether a document exists, empty or not. */
-      readonly exists: boolean;
       /** The items as stored, to tell whether a write changes anything. */
       readonly stored: readonly RepoMemoryItem[];
       /** The same items with the secrets this deployment knows now taken out:
@@ -440,19 +460,24 @@ type HeldItems =
  *
  * Nothing stored means nothing to clean, so the secret set is not read.
  */
-async function heldItems(subjectKey: string, kind: RepoMemoryDocKind): Promise<HeldItems> {
+async function heldItems(
+  subjectKey: string,
+  kind: RepoMemoryDocKind,
+  knownSecrets: KnownSecretsReader,
+): Promise<HeldItems> {
   const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
   const document = await getConnectedMemoryDocument(subjectKey, kind);
   const stored = document ? parseRepoMemoryDocument(document.content) : [];
   // `document?.version ?? 0` is the required idiom: the key may never be
   // present with an undefined value, and 0 is what means "create it".
   const version = document?.version ?? 0;
-  if (stored.length === 0) return { ok: true, exists: document !== null, stored, items: [], version };
-  const cleaned = await takeOutKnownSecrets((clean) =>
-    stored.map((item) => ({ ...item, text: clean(item.text) })),
+  if (stored.length === 0) return { ok: true, stored, items: [], version };
+  const cleaned = await takeOutKnownSecrets(
+    (clean) => stored.map((item) => ({ ...item, text: clean(item.text) })),
+    knownSecrets(),
   );
   if (!cleaned.ok) return { ok: false, refusal: unscrubbedWrite(cleaned.why) };
-  return { ok: true, exists: true, stored, items: cleaned.value, version };
+  return { ok: true, stored, items: cleaned.value, version };
 }
 
 /** What the items already stored render to, so a retraction is bounded by what
