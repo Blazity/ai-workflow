@@ -311,7 +311,7 @@ function servesMemory(manifest: IntegrationManifest): boolean {
  * RETURNS, and the budget its calls spend. (The secrets core takes out of the
  * text it sends and of the rendering it gets back are the same for every
  * provider and need no guard of their own: `withoutKnownSecrets` on every
- * observation, `renderingWithoutKnownSecrets` on every recall.) What a provider throws needs no
+ * observation, `recallWithoutKnownSecrets` on every recall.) What a provider throws needs no
  * redaction here: it comes from the runtime `usable.ts` built, which already
  * took the connection's secrets out of every error its adapters (and the
  * `store` inside them) throw.
@@ -365,7 +365,7 @@ function wrap(
         const answer = await budget.spend(() => adapter.recall(request));
         if (answer === SPENT) return spent();
         if (!answer.ok) return { ...answer, detail: redaction.text(answer.detail) };
-        return await renderingWithoutKnownSecrets(answer, knownSecrets());
+        return await recallWithoutKnownSecrets(answer, knownSecrets());
       } catch (error) {
         return {
           ok: false,
@@ -438,25 +438,34 @@ async function withoutKnownSecrets(
 }
 
 /**
- * The recalled `rendering` with every secret this deployment knows taken out,
- * before it reaches a prompt or a workspace. A provider can hold a value it
- * stored before that value became a known secret, and a hosted engine's
- * stored text is out of core's reach, so this is the last place it can be
- * stopped.
+ * What a recall hands back, `rendering` and every entry's `text`, with every
+ * secret this deployment knows taken out before it reaches a prompt, a
+ * workspace or the model that distils. A provider can hold a value it stored
+ * before that value became a known secret, and a hosted engine's stored text
+ * is out of core's reach, so this is the last place it can be stopped.
  *
- * `entries` are handed on exactly as the provider gave them: a run quotes an
- * entry back to retract it, and the provider matches that quote against what
- * it holds (core cleans the quote on its way back, in `withoutKnownSecrets`).
+ * Entries are cleaned as well, and that costs a retraction nothing: a run
+ * quotes the cleaned entry back, core cleans the quote again on its way to
+ * the provider (`withoutKnownSecrets`), and the built-in store matches it
+ * against its own items cleaned the same way. An engine that matches a quote
+ * against raw stored text misses it whether the quote was cleaned here or on
+ * the way back.
  *
- * FAILS CLOSED: a set that cannot be read, or a rendering the redaction cannot
+ * FAILS CLOSED: a set that cannot be read, or text the redaction cannot
  * process, is `unavailable`, which every caller of `recall` already answers by
  * going on without that memory.
  */
-async function renderingWithoutKnownSecrets(
+async function recallWithoutKnownSecrets(
   answer: Extract<MemoryRecall, { ok: true }>,
   cleaner: Promise<KnownSecretCleaner>,
 ): Promise<MemoryRecall> {
-  const cleaned = await takeOutKnownSecrets((clean) => clean(answer.rendering), cleaner);
+  const cleaned = await takeOutKnownSecrets(
+    (clean) => ({
+      rendering: clean(answer.rendering),
+      entries: answer.entries.map((entry) => ({ ...entry, text: clean(entry.text) })),
+    }),
+    cleaner,
+  );
   if (!cleaned.ok) {
     return {
       ok: false,
@@ -467,7 +476,7 @@ async function renderingWithoutKnownSecrets(
           : "the recalled text could not be scrubbed of this deployment's secrets, so it was not used",
     };
   }
-  return cleaned.value === answer.rendering ? answer : { ...answer, rendering: cleaned.value };
+  return { ...answer, ...cleaned.value };
 }
 
 function guardedStore(

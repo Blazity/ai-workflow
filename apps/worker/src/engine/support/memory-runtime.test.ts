@@ -781,27 +781,27 @@ describe("the secrets memory text carries in and out of this deployment", () => 
     });
   });
 
-  it("takes a secret out of what a recall renders, and hands the entries on as they were", async () => {
+  it("takes a secret out of everything a recall hands back, rendering and entries", async () => {
     // An engine can hold a value it stored before that value was a known
-    // secret. The rendering is what reaches a prompt and a workspace; the
-    // entries are what a run quotes back to retract one, and the engine
-    // matches that quote against what it holds.
+    // secret. The rendering reaches a prompt and a workspace, the entries reach
+    // the model that distils; a retraction still works, because the quote is
+    // cleaned again on its way back.
     knownSecretValues.mockResolvedValue([STORED_TOKEN]);
-    const entries = [{ text: `Deploy with ${STORED_TOKEN} in the header` }];
     const recall = vi.fn<MemoryAdapter["recall"]>(async () => ({
       ok: true,
       held: true,
-      entries,
+      entries: [{ text: `Deploy with ${STORED_TOKEN} in the header` }],
       rendering: `- Deploy with ${STORED_TOKEN} in the header`,
     }));
     readable(provider("Recall Engine", { recall, observe: vi.fn() }));
 
     const recalled = await (await activeMemory()).recall(RECALL);
 
+    expect(JSON.stringify(recalled)).not.toContain(STORED_TOKEN);
     expect(recalled).toEqual({
       ok: true,
       held: true,
-      entries,
+      entries: [{ text: "Deploy with [REDACTED:configured_secret] in the header" }],
       rendering: "- Deploy with [REDACTED:configured_secret] in the header",
     });
   });

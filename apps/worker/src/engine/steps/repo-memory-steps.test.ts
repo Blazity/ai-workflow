@@ -1677,6 +1677,21 @@ describe("distillRepoMemoryStep", () => {
     expect(items.some((text) => text.startsWith("The staging key is"))).toBe(false);
   });
 
+  it("never shows the distilling model a secret the store still holds", async () => {
+    // Held before it was a known secret and not rewritten since: the known
+    // list is the provider's recall, and it reaches a paid model.
+    const SECRET = "tok-2b8e5a1c9d";
+    await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
+    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    respond({ repositories: [{ repository: REPO_KEY, facts: [], lessons: [] }] });
+
+    await distillRepoMemoryStep(input);
+
+    expect(mocks.generateStructured).toHaveBeenCalled();
+    expect(promptOf()).not.toContain(SECRET);
+    expect(promptOf()).toContain("Deploys read [REDACTED:configured_secret] from the vault");
+  });
+
   it("removes a stored fact the run proved false", async () => {
     await storeRepoDocument("facts", ["Package manager is yarn", "Node 18 is required"]);
     respond({

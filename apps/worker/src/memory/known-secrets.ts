@@ -9,10 +9,11 @@
  *   `engine/support/memory-runtime.ts`). A provider cannot do this itself: a
  *   token an admin stored in the dashboard is decrypted from core's database
  *   and never reaches the environment.
- * - The port wrapper cleans every recalled `rendering` before it reaches a
- *   prompt or a workspace (`renderingWithoutKnownSecrets`, same file). A
- *   provider can hold a value stored before it became a known secret, and
- *   nothing else stands between it and the prompt.
+ * - The port wrapper cleans everything a recall hands back, the `rendering`
+ *   and every entry, before it reaches a prompt, a workspace or the model that
+ *   distils (`recallWithoutKnownSecrets`, same file). A provider can hold a
+ *   value stored before it became a known secret, and nothing else stands
+ *   between it and a model.
  * - The built-in store cleans the items it ALREADY holds before it merges into
  *   them (`heldItems` in `memory/builtin/adapter.ts`), so a value stored before
  *   it became a known secret leaves the row at the next write, which is what
