@@ -35,7 +35,7 @@ Provider and model changes belong on the Harness Profiles page. If no profile us
 Walk the user through https://console.anthropic.com/settings/keys to create an API key. Codex OAuth is documented in `references/oauth-alternative.md`.
 
 Collect:
-- `ANTHROPIC_API_KEY` (starts with `sk-ant-`)
+- `ANTHROPIC_API_KEY` (starts with `sk-ant-`; a Claude Code OAuth token `sk-ant-oat...` also works)
 
 Emit:
 
@@ -60,7 +60,7 @@ For deployments whose profiles use both providers, emit both credential lines. T
 
 ## Step 3: Done
 
-Tell the user to paste into Vercel Project Settings, Environment Variables for all three environments, save, and reply when done. No verification. The `init-env` end-of-flow validator catches missing or malformed values.
+Tell the user to paste into Vercel Project Settings, Environment Variables for all three environments, save, and reply when done. Credentials are not checked at boot: a missing one surfaces when an agent block using that provider runs, or when the scheduled capability refresh (`/cron/harness-capabilities`) reports discovery not ready. With no authored profile the built-in `builtin-codex` profile runs, so a Claude-only deployment needs a Claude profile pinned on its agent blocks.
 
 ## Don'ts
 

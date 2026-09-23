@@ -9,7 +9,7 @@ Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-tem
 
 The variables below still configure them, and a deployment that already sets them needs nothing done. The alternative, which needs no redeploy, is the **Integrations** page in the dashboard: open the GitHub or GitLab card, paste the same values, press **Test**. Either way the card is where an admin sees whether the provider is connected and reads its health checks.
 
-> **Canonical reference:** [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab) holds the facts and constraints for both providers. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+> **Canonical reference:** [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab) holds the facts and constraints for both providers, and the runbooks [GITHUB-APP-SETUP.md](../../../docs/runbooks/GITHUB-APP-SETUP.md) and [GITLAB-SETUP.md](../../../docs/runbooks/GITLAB-SETUP.md) hold each provider's permission, scope and webhook event lists. This skill is the procedure; when they disagree, those documents win and this skill gets updated.
 >
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles VCS.
 
@@ -36,11 +36,11 @@ Providers coexist: adding GitLab does NOT require removing `GITHUB_*` keys (and 
 
 GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; see [docs/runbooks/GITHUB-APP-SETUP.md](../../../docs/runbooks/GITHUB-APP-SETUP.md)). Collect:
 
-- `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (base64), `GITHUB_INSTALLATION_ID`
-- `GITHUB_OWNER` (org or user)
-- `GITHUB_REPO` (just the repo name)
-- The default branch, saved in the repository profile
-- `GITHUB_WEBHOOK_SECRET` (`openssl rand -hex 32`)
+- `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (the PEM or its base64), `GITHUB_INSTALLATION_ID`
+- `GITHUB_WEBHOOK_SECRET` (`openssl rand -hex 32`). Without it every delivery is refused with 503.
+- Optional `GITHUB_BOT_LOGIN` (usually `<app-slug>[bot]`), needed when a review trigger includes `commented`
+- The App subscribes to all five events in [GITHUB-APP-SETUP.md section 5](../../../docs/runbooks/GITHUB-APP-SETUP.md#5-subscribe-to-events). Confirm it with the user; a shorter list makes triggers silently never fire.
+- Repositories are imported on the Repositories page afterwards. Do not collect the legacy `GITHUB_OWNER`/`GITHUB_REPO`.
 
 Emit (paste into Vercel → Project Settings → Environment Variables, all three environments):
 
@@ -48,8 +48,6 @@ Emit (paste into Vercel → Project Settings → Environment Variables, all thre
 GITHUB_APP_ID=<value>
 GITHUB_APP_PRIVATE_KEY=<base64 PEM>
 GITHUB_INSTALLATION_ID=<value>
-GITHUB_OWNER=<value>
-GITHUB_REPO=<value>
 GITHUB_WEBHOOK_SECRET=<value>
 ```
 
@@ -59,15 +57,16 @@ GITHUB_WEBHOOK_SECRET=<value>
 Walk the user through `references/gitlab-pat.md` to mint a token. Then collect:
 
 - `GITLAB_TOKEN` (`glpat-...`)
-- `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/infra/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
-- The default branch, saved in the repository profile
+- `GITLAB_WEBHOOK_SECRET` (`openssl rand -hex 32`). Without it every delivery is refused with 503.
+- Optional `GITLAB_BOT_LOGIN` (the token account's username), needed when a review trigger includes `commented`
+- Repositories are imported on the Repositories page afterwards. Do not set the legacy `GITLAB_PROJECT_ID`: when set, webhooks from every other project are ignored (`integrations/gitlab/webhook.ts`).
 - `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`).
 
 Emit:
 
 ```
 GITLAB_TOKEN=<value>
-GITLAB_PROJECT_ID=<value>
+GITLAB_WEBHOOK_SECRET=<value>
 ```
 
 If self-hosted, append:
@@ -77,7 +76,7 @@ GITLAB_HOST=https://gitlab.example.com
 
 ## Step 3 — Done
 
-Tell the user to paste, save, and reply when done. No verification — `init-env`'s end-of-flow validator catches missing/malformed values.
+Tell the user to paste, save, and reply when done. Provider values are not checked at boot: after the next deploy, open the GitHub or GitLab card on the Integrations page and press **Test**; its health checks name any missing or refused value. Then register the webhook (SETUP.md section 8).
 
 If invoked from `init-env`, return control. If standalone, end.
 

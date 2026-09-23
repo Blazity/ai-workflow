@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-09
+Last-verified: 2026-09-23
 
 # AWS Self-Hosting Architecture
 
@@ -7,7 +7,13 @@ This is a draft proposal, not a deployed architecture. Nothing here is
 implemented: hosted and on-premise execution is planned work in
 [the roadmap](../product/roadmap-2026-08-27.md), and the document predates the
 move from Redis to Neon Postgres, so its run registry section describes a store
-the product no longer uses.
+the product no longer uses. Its environment table also predates the settings
+store and the integrations: `CLAUDE_MODEL`, `MAX_CONCURRENT_AGENTS`,
+`JOB_TIMEOUT_MS` and `COLUMN_*` are retired names the worker refuses to boot
+with, `GITHUB_TOKEN` and `WORKFLOW_POSTGRES_URL` are read by nothing, and the
+boot-required `DATABASE_URL`, `BETTER_AUTH_*` and `DASHBOARD_*` are missing.
+[SETUP.md section 5](../../SETUP.md#5-configure-environment-variables) is the
+current list.
 
 Self-hosted AWS deployment of ai-workflow. Docker containers on Fargate for agent sandboxes, ElastiCache Redis for run registry, RDS Postgres for workflow state. Target: up to 100 concurrent agents.
 

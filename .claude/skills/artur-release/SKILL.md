@@ -5,6 +5,8 @@ description: Run a production release of AI Workflow to the Arthur tenant (Blazi
 
 # Artur release playbook
 
+> **The Arthur pilot ended on 2026-09-22 and no tenant release is planned** ([docs/plans/2026-09-18-integrations.md](../../../docs/plans/2026-09-18-integrations.md), row R1). Do not dispatch any release workflow without the owner's explicit decision. `integrations/arthur` (the tracing provider) stays in the product; only the tenant release is gone. The procedure below is kept for that decision.
+
 Releases AI Workflow from `Blazity/ai-workflow` (source) to `Blazity/ai-workflow-arthur` (client deployment repo). Everything is automated by four GitHub Actions workflows; the human (Filip) makes exactly two decisions, each of which is an approval plus a merge.
 
 ## Authority and references
@@ -51,7 +53,7 @@ gh workflow run prepare-artur-release.yml --repo Blazity/ai-workflow \
 
 # 8. Verify (all must hold):
 curl -s -o /dev/null -w "%{http_code}" https://ai-workflow-arthur.vercel.app/health          # 200
-curl -s -o /dev/null -w "%{http_code}" https://ai-workflow-arthur.vercel.app/cron/poll       # 200  <- proves env validation boots; /health alone does NOT
+curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $CRON_SECRET" https://ai-workflow-arthur.vercel.app/cron/poll  # 200  <- proves env validation boots; /health alone does NOT (401 without the secret)
 curl -s -o /dev/null -w "%{http_code}" https://ai-workflow-arthur-dashboard.vercel.app/      # 3xx/200
 gh release view artur-v<VERSION> --repo Blazity/ai-workflow-arthur                            # tag + notes + manifest asset
 # manifest sourceCommit must equal the approved source SHA, destinationCommit the arthur merge SHA.
@@ -78,7 +80,7 @@ Other hard rules:
 - **Worker production build fails on `drizzle-kit migrate`**: check for journal/bookkeeping divergence. Root cause pattern: a hotfix migration applied directly in the arthur repo records a DIFFERENT journal `when` than the same migration in source; drizzle compares only the newest `created_at`, so it skips older unapplied migrations and re-applies the hotfix. Repair = one-time SQL on the production DB (apply skipped migrations, INSERT their bookkeeping rows, UPDATE the hotfix row's created_at to the source journal value), then `vercel redeploy <failed-deployment-url>`. **Prevention: any hotfix migration shipped to arthur must copy the source journal entry 1:1 (same `when`).**
 - **Publish failed or needs a re-run**: it has `workflow_dispatch` with `before`/`after` inputs (base and merge SHA of the release push): `gh workflow run publish-artur-release.yml --repo Blazity/ai-workflow-arthur -f before=<base> -f after=<merge>`. Tag/observe/manifest all target `after`.
 - **`vercel redeploy` after a failed prod build**: rebuilds the same commit; on success Vercel also updates the commit status that publish's observe step polls.
-- **Env validation crashes the whole worker** (`FUNCTION_INVOCATION_FAILED` on most routes while `/health` still returns 200): a provider credential pair is incomplete. `GITLAB_TOKEN` and `GITLAB_WEBHOOK_SECRET` must be added TOGETHER (same for GitHub App vars). Always curl `/cron/poll` after env changes plus redeploy - `/health` does not exercise env validation.
+- **Env validation crashes the whole worker** (`FUNCTION_INVOCATION_FAILED` on most routes while `/health` still returns 200): a core variable in `apps/worker/src/infra/runtime-env.ts` is missing or malformed, or a retired variable is still set. An incomplete provider credential set no longer crashes the worker: the provider's card on the Integrations page reads Failing and names the missing value. Always curl `/cron/poll` after env changes plus redeploy, and check the Integrations cards - `/health` does not exercise env validation.
 - **Drift guard blocks sync**: arthur main has an application commit not in source. Never commit app code directly to arthur; backport to source first (patch-identical), or the guard must legitimately flag it.
 
 ## Configuration reference (already in place)

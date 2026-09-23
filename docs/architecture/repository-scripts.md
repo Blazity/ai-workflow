@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-13
+Last-verified: 2026-09-23
 
 # Repository scripts: config reference
 
@@ -10,7 +10,7 @@ group, several, or all of them; the publication gate is just the block that,
 by default, requires every group.
 
 This document describes the config contract implemented by
-`apps/worker/src/pre-pr-checks/config.ts` (`repoScriptsConfigSchema`). The
+`apps/worker/src/engine/pre-pr-checks/config.ts` (`repoScriptsConfigSchema`). The
 contract is additive: the older pre-PR checks shape (`prePrCheckConfigSchema`,
 a flat `commands: string[]` per repository) still works, both as its own
 schema and as an input that `repoScriptsConfigSchema` accepts and normalizes.
@@ -416,8 +416,8 @@ The proposal comes back to the caller and dies there unless the admin saves it
 through the profile route, which is the only path that mints a version.
 
 **What the model reads.** A profile source
-(`apps/worker/src/adapters/vcs/repository-profile-source.ts`, with a GitHub and
-a GitLab implementation beside it) returns the default branch, the provider's
+(`apps/worker/src/adapters/vcs/repository-profile-source.ts`, implemented by
+`integrations/github/profile-source.ts` and `integrations/gitlab/profile-source.ts`) returns the default branch, the provider's
 description, the README, the root manifests it recognises, the NAMES of the
 lockfiles, the CI definitions and the languages. Lockfile content is never read:
 it is megabytes of hashes saying nothing the manifest beside it did not. The
@@ -543,7 +543,7 @@ token has lost access to, and the code cannot tell the two apart: GitHub and
 GitLab both answer 404 for a project the caller may not see, so a revoked scope,
 a rotated token and a deleted repository arrive as the same status
 (`RepositoryMissingAtProviderError`, thrown from
-`adapters/vcs/github/profile-source.ts` and `adapters/vcs/gitlab/profile-source.ts`).
+`integrations/github/profile-source.ts` and `integrations/gitlab/profile-source.ts`).
 Check the token before removing the row the code suggests removing.
 
 Every row of that table except the first two and `suggestion_rate_limited`

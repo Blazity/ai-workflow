@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Documentation index
 
@@ -37,8 +37,8 @@ checking the smaller set that is left (ADR-007).
 | [architecture/integrations.md](./architecture/integrations.md) | Writing an integration from nothing to connected: capabilities, the connection and its pin, health checks, blocks, webhooks, pages, testing without production credentials, and what breaks if you do what it says not to |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
-| [architecture/data-model.md](./architecture/data-model.md) | The worker's 75 SQL tables, ownership and principal callers |
-| [architecture/gates.md](./architecture/gates.md) | The delivery gate ladder, lint policy, and the stage 11 ratchets |
+| [architecture/data-model.md](./architecture/data-model.md) | The worker's 77 SQL tables, ownership and principal callers |
+| [architecture/gates.md](./architecture/gates.md) | Every gate script and what turns it red, and the lint policy |
 
 ## Decision records
 

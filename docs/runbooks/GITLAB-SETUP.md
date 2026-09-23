@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-21
+Last-verified: 2026-09-23
 
 # GitLab.com setup
 
@@ -24,7 +24,7 @@ Optional:
 
 ```bash
 GITLAB_HOST=<self-managed base URL, defaults to https://gitlab.com>
-GITLAB_PROJECT_ID=<namespace/project path, legacy single-repo default>
+GITLAB_PROJECT_ID=<legacy single-project filter; leave unset on a new deployment>
 ```
 
 Required when an enabled `trigger_pr_review` includes `commented`:
@@ -35,7 +35,7 @@ GITLAB_BOT_LOGIN=<token account username>
 
 `GITLAB_BOT_LOGIN` prevents review notes authored by the automation account from recursively triggering `trigger_pr_review`. The legacy `VCS_BOT_LOGIN` value is accepted only when GitLab is the sole configured VCS provider. A mixed GitHub/GitLab deployment requires `GITHUB_BOT_LOGIN` and `GITLAB_BOT_LOGIN` for the providers selected by a commented-review trigger.
 
-`GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook route keeps the old single-project filter.
+`GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook ignores merge requests from every other project with reason `other_project`, even projects enabled on the Repositories page (`integrations/gitlab/webhook.ts`), so leave it unset on a new deployment.
 
 The Repositories import records GitLab's default branch in the repository
 profile. Leave it unset to use the provider default, or edit the profile to
@@ -84,15 +84,17 @@ the same publisher and lease contract.
 
 ## Optional: set a legacy project ID
 
-Set `GITLAB_PROJECT_ID` to the GitLab project path in `namespace/project` form, for example:
+Only an older deployment that already relies on one project needs this. Set `GITLAB_PROJECT_ID` to that project, for example:
 
 ```bash
 GITLAB_PROJECT_ID=my-group/my-repo
 ```
 
-Numeric GitLab project IDs work for some GitLab REST APIs, but they are not supported for this legacy default because sandbox clone and push URLs need a namespace/project path. The app URL-encodes the path internally before calling the GitLab API.
+The value may be the numeric project id or the `namespace/project` path; the webhook compares it with either. Clone and push URLs come from the repository catalog, not from this value.
 
 ## Configure the webhook
+
+This section is the one list of the GitLab webhook settings; SETUP.md links here. GitLab has no health check for the webhook's event selection, so a missing event is silent.
 
 In the GitLab project, open **Project Settings -> Webhooks** and add:
 
@@ -101,16 +103,16 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 - Trigger: **Merge request events**, **Pipeline events**, and **Comments**
 - SSL verification: enabled
 
-**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives `trigger_pr_checks_failed`. That trigger requires at least one exact check name and defaults to the trusted `merge_request_event` pipeline source. Before dispatch, the worker verifies both `merge_request.last_commit.id` and the event pipeline ID against the merge request's current head and head pipeline. Without Pipeline events, the trigger never fires.
+**Merge request events** deliver the **Merge Request Hook**, which drives `trigger_pr_created`, `trigger_pr_updated`, `trigger_pr_ready` and `trigger_pr_merged`. **Pipeline events** deliver the **Pipeline Hook**, which drives `trigger_pr_checks_failed`. That trigger requires at least one exact check name and defaults to the trusted `merge_request_event` pipeline source. A Pipeline Hook carries no merge request head commit, so before dispatch the worker reads the merge request's current head pipeline and dispatches only when a failed check the event names is still failed there. Without Pipeline events, the trigger never fires.
 
-**Comments** deliver the **Note Hook** used by `trigger_pr_review`. The worker maps an eligible, external, non-system merge request note only to `commented`; internal/confidential notes are rejected at both the webhook route and normalizer. It does not infer reviewer state from the author's current reviewer record. GitLab does not emit a reliable event that distinguishes a new Request Changes transition, with or without a summary, so GitLab `changes_requested` triggers are unsupported until such an event exists. Any review-trigger configuration that includes GitLab must include `commented`, and every review trigger must retain at least one selected state.
+**Comments** deliver the **Note Hook** used by `trigger_pr_review`. The worker maps an eligible, external, non-system merge request note only to `commented`; internal and confidential notes are dropped by the normalizer (`integrations/gitlab/webhook.ts`). It does not infer reviewer state from the author's current reviewer record. GitLab does not emit a reliable event that distinguishes a new Request Changes transition, with or without a summary, so GitLab `changes_requested` triggers are unsupported until such an event exists. Any review-trigger configuration that includes GitLab must include `commented`, and every review trigger must retain at least one selected state.
 
 For webhook redelivery, the worker uses `webhook-id`, then `Idempotency-Key`. If neither header is present, it hashes `X-Gitlab-Event-UUID`, a NUL separator, and the raw request body. `X-Gitlab-Webhook-UUID` identifies the webhook configuration and is deliberately not used as a delivery ID.
 
 Use GitLab's **Secret token** field for now, not the newer **Signing token**
 flow. The worker currently verifies the `X-Gitlab-Token` header.
 
-Redeploy the worker after setting or rotating `GITLAB_WEBHOOK_SECRET`.
+Without `GITLAB_WEBHOOK_SECRET` every delivery is refused with 503. Redeploy the worker after setting or rotating it in the environment.
 
 ## Smoke checklist
 

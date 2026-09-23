@@ -1,12 +1,12 @@
 # Transitions — the second silent failure
 
-Single most-missed step in Jira setup. The adapter at `src/adapters/issue-tracker/jira.ts:86` finds a transition by **transition name** equal to the target column name:
+Single most-missed step in Jira setup. `findTransition` (`integrations/jira/issue-tracker.ts`) picks the transition in this order:
 
-```ts
-data.transitions.find(t => t.name.toLowerCase() === column.toLowerCase())
-```
+1. the configured transition id, when set (`JIRA_AI_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_BACKLOG_TRANSITION_ID`, or the same fields on Integrations → Jira → Connection);
+2. otherwise a transition whose destination status matches the target status;
+3. otherwise a transition whose **name** equals the target column name, ignoring case.
 
-So your workflow must have transitions whose **names** are exactly `AI`, `AI Review`, and `Backlog` (or whatever you renamed `COLUMN_*` to).
+Setting the three transition ids is the robust path, especially when Jira localizes transition names. Without them, name your transitions exactly `AI`, `AI Review`, and `Backlog` (or whatever you set as the AI, AI Review and Backlog column settings on the Settings page).
 
 ## Required transitions
 

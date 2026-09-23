@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-23
 
 # Workflow definitions (schema v2)
 
@@ -378,11 +378,15 @@ MCP read returns `NOT_FOUND` for it, matching the dashboard route.
 
 ## 13. Authoring over MCP
 
-`apps/worker/src/mcp/tools/workflow-authoring.ts` registers the authoring
-tools, and `apps/worker/src/mcp/tool-catalog.ts` is the contract that names
-them: `workflows.list`, `workflows.get_graph`, `workflows.create`,
-`workflows.save_draft`, `workflows.publish`, `workflows.set_enabled`,
-`workflows.dispatch_preflight` and `workflows.dispatch`.
+`apps/worker/src/mcp/tools/workflow-authoring.ts` registers
+`workflows.create`, `workflows.save_draft`, `workflows.publish`,
+`workflows.get_graph` and `workflows.set_enabled`; `tools/discovery.ts`
+registers `workflows.list`, `tools/workflows.ts` registers
+`workflows.dispatch_preflight` and `workflows.dispatch`, and
+`tools/briefings.ts` registers `workflows.node_briefing`. The published names
+are `FIRST_SLICE_TOOLS` in `packages/contracts/domain.ts`,
+`apps/worker/src/mcp/tool-catalog.ts` holds their schemas, and
+`apps/worker/src/mcp/contracts/mcp-contract.json` is the checked contract.
 
 Three properties matter to anyone authoring a graph through an agent:
 

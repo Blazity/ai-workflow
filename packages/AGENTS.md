@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-23
 
 # packages/AGENTS.md
 
@@ -34,16 +34,14 @@ and never application infrastructure. ADR-001 owns the tiers.
   `tsconfig.json`.
 - **The test scripts name the packages they run**, and they reach past
   `packages/` into `integrations/`. `pnpm run test:packages` runs `test` in
-  `agent-visibility`, `contracts`, `costs`, `harness`, `prompts`, `skills`,
-  `workflow-graph`, every integration that owns a suite (`arthur`, `github`,
-  `gitlab`, `jira`, `slack`, `host-ui`), `@integrations/sdk` and
-  `@integrations/registry`. `pnpm run test:packages:zod4` runs `test:zod4` in
-  `agent-visibility`, `contracts`, `workflow-graph`, the five provider
-  integrations, `@integrations/sdk` and `@integrations/registry`: the packages
-  that carry a runtime zod dependency, plus the registry, whose conformance
-  sweep parses every integration's schemas and so has to run under the zod
-  production loads. That sweep is also what covers the packages with no suite
-  of their own, the template and the fixtures. Both scripts name packages with
+  every shared package and every integration that owns a `test` script (the
+  template, `@integrations/example`, included), and `pnpm run
+  test:packages:zod4` runs `test:zod4` in the packages that carry a runtime
+  zod dependency, every provider integration, the template, the SDK and the
+  registry, whose conformance sweep parses every integration's schemas and so
+  has to run under the zod production loads. The `--filter` lists in the root
+  `package.json` are the one list; that sweep also covers the fixtures under
+  `integrations/_fixtures/`, which have no suite of their own. Both scripts name packages with
   `--filter` rather than selecting `./packages/*` with `--if-present`, which
   reported a package that owns no such script as a package that passed, so a
   run over seven packages proved two. `conditions` has no `test` script at all
@@ -64,4 +62,6 @@ matching file is read: `workflow-graph` (what may live in the package, its
 suites and gates), `contracts-requests` (request body schemas),
 `zod-bundle` (the zod the worker bundle really runs),
 `worker-settings` (the settings registry),
-`agent-visibility` (the record of what one send gave a model).
+`agent-visibility` (the record of what one send gave a model),
+`sandbox-agents` (`packages/prompts`), and in `integrations/`, `adapters`,
+`memory` (`mem0`) and `zod-bundle`.

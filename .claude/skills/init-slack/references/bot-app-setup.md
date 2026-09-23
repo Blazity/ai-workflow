@@ -17,11 +17,10 @@ In the app settings sidebar:
 2. Add these scopes:
    - `chat:write` — required. Lets the bot post messages.
    - `commands` — required. Lets Slack deliver `/ai-workflow` slash command invocations to the bot.
-   - `files:read` — required. Lets the bot read file uploads attached to messages and threads.
-   - `users:read` — required. Resolves user IDs to display names.
-   - `chat:write.public` — optional. Lets the bot post in public channels it isn't a member of. Skip if you'll always invite the bot.
+   - `channels:history`: only if a workflow's research (Investigate) block searches Slack messages. Invite the bot to every channel it should read; without the scope those channels are skipped as `missing_scope`.
+   - `chat:write.public`: optional. Lets the bot post in public channels it isn't a member of. Skip if you'll always invite the bot.
 
-The four above (`chat:write`, `commands`, `files:read`, `users:read`) are all required.
+The scope list lives in [SETUP.md section 2.3](../../../../SETUP.md#23-slack); the integration calls only `chat.*`, `auth.test` and `conversations.history` (`integrations/slack/`).
 
 ## Install the app to the workspace
 
@@ -36,7 +35,7 @@ In the Slack channel you want bot messages in:
 /invite @ai-workflow
 ```
 
-Without this, messages 403. (Workaround: add `chat:write.public` scope and skip the invite, but cleaner to just invite.)
+Without this, Slack answers `not_in_channel`. (Workaround: add `chat:write.public` scope and skip the invite, but cleaner to just invite.)
 
 ## Find the channel ID
 
