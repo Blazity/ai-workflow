@@ -1,6 +1,6 @@
 import { integrationManifest, integrationManifests } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
-import { type IntegrationManifest, readProviderFailure } from "@integrations/sdk";
+import { type IntegrationManifest, connectionFieldRequired, readProviderFailure } from "@integrations/sdk";
 import {
   DashboardAuthError,
   INTEGRATION_PROVIDER_WAIT_MS,
@@ -129,7 +129,9 @@ function fieldDtos(
     ...(field.description === undefined ? {} : { description: field.description }),
     env: field.env,
     secret: field.secret,
-    optional: field.optional === true,
+    // The form is where values are stored, so it asks for what stored values
+    // need, a field only stored values require included.
+    optional: !connectionFieldRequired(field, "stored"),
     format: field.format ?? "text",
     envSet: (environment.value(field.env) ?? "").trim().length > 0,
     // A secret's value is never here, under any source. The screen needs to know
@@ -451,6 +453,22 @@ export async function saveIntegrationConnection(
       const carriedDigest = previous?.secretDigests[field.key];
       if (carriedDigest) secretDigests[field.key] = carriedDigest;
     }
+  }
+
+  // A field only stored values must carry (a webhook secret) is refused here,
+  // before anything is tested or written: the test does not use it, so values
+  // without it would pass and activate. Any other missing field goes on to the
+  // test, whose refusal is remembered as values that are not in use.
+  const empty = manifest.connection.fields.filter(
+    (field) =>
+      field.requiredWhenStored === true &&
+      (field.secret ? secrets[field.key] : config[field.key]) === undefined,
+  );
+  if (empty.length > 0) {
+    throw new DashboardAuthError(
+      400,
+      `${empty.map((field) => field.label).join(" and ")} ${empty.length === 1 ? "is" : "are"} required in values stored here. Fill ${empty.length === 1 ? "it" : "them"} in and save again; nothing was saved`,
+    );
   }
 
   const candidate: StoredIntegrationVersion = {

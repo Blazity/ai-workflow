@@ -275,6 +275,7 @@ const manifestSchema = z.object({
         default: z.string().optional(),
         format: z.enum(["text", "multiline", "url", "integer"]).optional(),
         identity: z.boolean().optional(),
+        requiredWhenStored: z.boolean().optional(),
       }),
     ),
   }),

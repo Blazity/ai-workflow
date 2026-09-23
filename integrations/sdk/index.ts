@@ -70,6 +70,7 @@ export {
 } from "./pull-request-unreadable";
 
 export {
+  connectionFieldRequired,
   connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,

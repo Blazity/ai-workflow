@@ -1276,6 +1276,9 @@ export interface IntegrationConnectionFieldDto {
   readonly description?: string;
   readonly env: string;
   readonly secret: boolean;
+  /** Whether values stored here may leave it empty (`connectionFieldRequired`
+   *  for stored values): a webhook secret the environment may omit is still
+   *  required in the form. */
   readonly optional: boolean;
   readonly format: "text" | "multiline" | "url" | "integer";
   /** Whether this deployment's environment sets the variable. */

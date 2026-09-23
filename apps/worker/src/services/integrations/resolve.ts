@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { type ConnectionField, type IntegrationManifest, VCS_LEGACY_BOT_LOGIN_FIELD } from "@integrations/sdk";
+import {
+  type ConnectionField,
+  type IntegrationManifest,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+  connectionFieldRequired,
+} from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
   IntegrationConnectionStatus,
@@ -319,7 +324,7 @@ function resolveEnvironment(
     }
     // A default covers a field the source leaves unset, so it is never missing;
     // an optional field without one is simply absent.
-    if (field.optional === true || field.default !== undefined) continue;
+    if (!connectionFieldRequired(field, "environment")) continue;
     missingVariables.push(field.env);
   }
   return {
@@ -348,7 +353,7 @@ function resolveStored(
     for (const field of fields) {
       const value = field.secret ? active.secrets[field.key] : active.config[field.key];
       if (isSet(value)) continue;
-      if (field.optional === true || field.default !== undefined) continue;
+      if (!connectionFieldRequired(field, "stored")) continue;
       missingFields.push(field.key);
     }
   }

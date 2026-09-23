@@ -741,6 +741,12 @@ What each field property does, and what it costs to get wrong:
   connection shape is permanent once shipped.
 - **`optional`** and **`default`**: absent means required. `default` is used
   when the source leaves the field unset; a secret has none.
+- **`requiredWhenStored: true`** keeps a field optional on the environment and
+  requires it in values stored from the dashboard: a save without it is
+  refused, naming it. For a value deployments already run without, whose
+  absence breaks a path silently (GitHub's and GitLab's webhook secret: every
+  delivery refused while the card reads Connected). `connectionFieldRequired`
+  is the one rule the resolver, the save and the form read.
 - **`format`**: `text`, `multiline` (a PEM key), `url`, or `integer`, which
   reaches `ctx.connection` as a number. There is no `pem` format: GitHub reads
   both a raw PEM and its base64 form itself (`integrations/github/auth.ts`)
