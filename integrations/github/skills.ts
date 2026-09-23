@@ -16,6 +16,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import type {
+  IntegrationHttp,
   RepositorySkillSource,
   RepositorySkillTreeEntry,
 } from "@integrations/sdk";
@@ -83,9 +84,24 @@ const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
 
 /**
  * The whole repository snapshot GitHub hands back for one commit. Bounded
- * because the archive is buffered in memory before it is unpacked.
+ * because the archive is held in memory before it is unpacked, and counted
+ * while it arrives, so a larger one is stopped at the limit rather than read
+ * whole first.
  */
 const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * How long the snapshot download may take, from the request to its last byte.
+ *
+ * Longer than the context's 30 s attempt, which is sized for an API answer and
+ * not for a repository. Not longer than this: the import answers the dashboard
+ * within 60 s (`SKILL_IMPORT_TIMEOUT_MS` in its route), and a download allowed
+ * past that would only keep the worker busy after the person had been told the
+ * import failed. 50 s leaves room for the three reads before it and for the
+ * answer. Sent once for the same reason: a second try could not finish inside
+ * that budget either.
+ */
+const ARCHIVE_DOWNLOAD_DEADLINE_MS = 50_000;
 
 /**
  * Mirrors `HARNESS_SKILL_IMPORT_LIMITS.maxFileBytes` in `@shared/contracts`,
@@ -99,9 +115,13 @@ const MAX_SNAPSHOT_FILE_BYTES = 1024 * 1024;
 /**
  * The port, backed by the App installation this deployment is connected as,
  * through the adapter's own client (`buildOctokit`), which mints and
- * refreshes the installation token as it goes.
+ * refreshes the installation token as it goes. `http` is the same context's
+ * HTTP, which the snapshot download asks for a streamed body.
  */
-export function createGitHubSkillSource(octokit: Octokit): RepositorySkillSource {
+export function createGitHubSkillSource(
+  octokit: Octokit,
+  http: IntegrationHttp,
+): RepositorySkillSource {
   return {
     async getDefaultBranch(input) {
       const response = await gitHubCall(() =>
@@ -166,35 +186,67 @@ export function createGitHubSkillSource(octokit: Octokit): RepositorySkillSource
       };
     },
     async getFiles(input) {
+      // The body is read below, not by Octokit: Octokit reads a body that
+      // failed part way as an empty one, and a slow download came back as a
+      // 200 with zero bytes that then "could not be unpacked".
       const response = await gitHubCall(() =>
         octokit.repos.downloadTarballArchive({
           owner: input.owner,
           repo: input.repository,
           ref: input.commitSha,
+          request: {
+            parseSuccessResponseBody: false,
+            fetch: (url: string | URL | Request, init?: RequestInit) =>
+              http.fetch(url, {
+                ...init,
+                streamBody: true,
+                timeoutMs: ARCHIVE_DOWNLOAD_DEADLINE_MS,
+                retries: 0,
+              }),
+          },
         }),
       );
-      const archive = toArchiveBuffer(response.data);
-      if (archive.byteLength > MAX_REPOSITORY_ARCHIVE_BYTES) {
-        throw new SkillSourceError(
-          "GitHub repository snapshot exceeds the 50 MiB download limit",
-          413,
-        );
-      }
+      const archive = await readArchive(response.data as unknown);
       return extractRepositoryFiles(archive, new Set(input.paths));
     },
   };
 }
 
-function toArchiveBuffer(data: unknown): Buffer {
-  if (Buffer.isBuffer(data)) return data;
-  if (data instanceof ArrayBuffer) return Buffer.from(data);
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+/**
+ * The snapshot's bytes, counted as they arrive: past the ceiling the download
+ * is cancelled and refused at once. A body that stops arriving (the download's
+ * deadline, a dropped connection) is GitHub not being reached, the same answer
+ * as any other failure to reach it, never a snapshot that failed to unpack.
+ */
+async function readArchive(body: unknown): Promise<Buffer> {
+  if (!(body instanceof ReadableStream)) {
+    throw new SkillSourceError(
+      "GitHub returned a repository snapshot in an unsupported format",
+      422,
+    );
   }
-  throw new SkillSourceError(
-    "GitHub returned a repository snapshot in an unsupported format",
-    422,
-  );
+  const reader = (body as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_REPOSITORY_ARCHIVE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new SkillSourceError(
+          "GitHub repository snapshot exceeds the 50 MiB download limit",
+          413,
+        );
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof SkillSourceError) throw error;
+    throw new Error("GitHub could not be reached to read this repository", { cause: error });
+  }
+  return Buffer.concat(chunks, size);
 }
 
 /**

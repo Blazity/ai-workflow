@@ -37,6 +37,7 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
   const [owner = "", repo = ""] = target.repoPath.split("/");
   return new GitHubAdapter({
     octokit: octokitOf(ctx),
+    http: ctx.http,
     appId: ctx.connection.appId,
     owner,
     repo,

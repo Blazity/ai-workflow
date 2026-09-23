@@ -36,6 +36,7 @@ import {
   type PRReviewPublicationResult,
   type RichGateStatusCapableVCS,
   type RichGateStatusUpdate,
+  type IntegrationHttp,
   type IntegrationLogger,
   type PostRunFailureNoteInput,
   type PRComment,
@@ -65,6 +66,9 @@ import { createGitHubSkillSource } from "./skills";
 export interface GitHubConfig {
   /** The integration's one client, built from the context (`buildOctokit`). */
   octokit: Octokit;
+  /** The same context's HTTP, for the one download Octokit must not read
+   *  (a skill source's repository snapshot). */
+  http: IntegrationHttp;
   /** The App's id: a check run is ours when this App created it. */
   appId: number;
   owner: string;
@@ -479,7 +483,7 @@ export class GitHubAdapter
   }
 
   skillSource(): RepositorySkillSource {
-    return createGitHubSkillSource(this.octokit);
+    return createGitHubSkillSource(this.octokit, this.config.http);
   }
 
   async createBranchIfMissing(

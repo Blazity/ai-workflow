@@ -74,6 +74,8 @@ function ghAdapter(
 ) {
   return new GitHubAdapter({
     octokit: mockOctokit as never,
+    // Only a skill source's snapshot download reaches the context directly.
+    http: { fetch: () => Promise.reject(new Error("no direct request expected")) },
     appId: 1,
     owner: "test-org",
     repo: "test-repo",
