@@ -458,8 +458,10 @@ function webhookLine(integration: IntegrationDto): string | null {
  */
 export function sourceInUse(state: IntegrationState, source: "environment" | "stored"): boolean {
   if (state.source !== source) return false;
+  // A variable set that does not connect anything (a VCS_BOT_LOGIN both
+  // version control providers read) is not a source in use.
   return source === "environment"
-    ? state.environment.setVariables.length > 0
+    ? state.environment.setVariables.length > 0 && state.connection !== "not_connected"
     : state.stored.activeVersion !== null;
 }
 
@@ -480,8 +482,15 @@ export function availabilityInsteadOfSwitch(integration: IntegrationDto): string
  * The line under Availability when nothing is stored to disconnect.
  */
 export function nothingToDisconnectLine(integration: IntegrationDto): string {
-  return sourceInUse(integration.state, "environment")
-    ? "This connection lives in the deployment's environment variables, so it is changed by changing them and switched off with the control above."
+  const { state } = integration;
+  // "The control above" only where the switch is drawn: a provider switched on
+  // and not connected gets a sentence in its place (`availabilityInsteadOfSwitch`).
+  const control = availabilityInsteadOfSwitch(integration) === null ? " and switched off with the control above" : "";
+  if (sourceInUse(state, "environment")) {
+    return `This connection lives in the deployment's environment variables, so it is changed by changing them${control}.`;
+  }
+  return state.environment.setVariables.length > 0
+    ? `There is nothing to disconnect: the environment variables set here do not connect ${integration.name} yet.`
     : `There is nothing to disconnect: nothing configures ${integration.name} on this deployment yet.`;
 }
 
@@ -502,6 +511,12 @@ function scanDisagreementLine(
   scan: SystemHealthResponse | null,
 ): string | null {
   if (!scan || integration.state.status !== "connected") return null;
+  // A Test that passed after the scan is the newer observation, and the card
+  // already says it passed.
+  const verification = integration.state.verification;
+  if (verification.state === "passed" && Date.parse(verification.at) > Date.parse(scan.generatedAt)) {
+    return null;
+  }
   const entry = scan.integrations.find((candidate) => candidate.id === integration.id);
   if (!entry || !(entry.mode in SCAN_DISAGREES)) return null;
   const failing = entry.checks.find((check) => check.mode in SCAN_DISAGREES && check.message);

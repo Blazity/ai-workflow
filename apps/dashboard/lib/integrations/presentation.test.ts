@@ -24,6 +24,9 @@ import {
   sourceSwitchRefusal,
   statusChip,
   statusDetailLines,
+  nothingToDisconnectLine,
+  availabilityInsteadOfSwitch,
+  sourceInUse,
   testOutcomeLines,
   testRefusal,
   unlocksLines,
@@ -298,6 +301,48 @@ test("a Connected card says when the latest health scan found it down, naming th
     rendered,
     /The health scan of Sep 23, 2026, 9:00:00 AM UTC found Demo down \(Auth: timeout after 4005 ms\)\. The status here comes from the values in use and the last test; press Test to check again\./,
   );
+});
+
+// Red when: the warning stays after a Test that passed later than the scan,
+// beside "The provider accepted these values" (review of #511).
+test("a Test that passed after the scan outranks it, one that passed before does not", () => {
+  const down = scanWith("down", [{ label: "Auth", mode: "down", message: "timeout" }]);
+  const testedAfter = integration({
+    state: state({ verification: { state: "passed", at: "2026-09-23T10:00:00.000Z" } }),
+  });
+  assert.doesNotMatch(statusDetailLines(testedAfter, down).join(" "), /health scan/);
+  const testedBefore = integration({
+    state: state({ verification: { state: "passed", at: "2026-09-23T08:00:00.000Z" } }),
+  });
+  assert.match(statusDetailLines(testedBefore, down).join(" "), /The health scan of .* found Demo down/);
+});
+
+// Red when: with only a variable that connects nothing set (VCS_BOT_LOGIN),
+// the page says "switched off with the control above" where no switch is
+// drawn, and calls the environment in use (review of #511).
+test("a variable that connects nothing claims no source in use and points at no missing control", () => {
+  const botLoginOnly = integration({
+    name: "GitLab",
+    fields: [{ ...TOKEN_FIELD, storedSecretSet: false }],
+    state: state({
+      source: "environment",
+      status: "not_connected",
+      connection: "not_connected",
+      usable: false,
+      environment: { setVariables: ["VCS_BOT_LOGIN"], missingVariables: ["DEMO_API_TOKEN"], complete: false },
+      stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+    }),
+  });
+  assert.equal(sourceInUse(botLoginOnly.state, "environment"), false);
+  assert.notEqual(availabilityInsteadOfSwitch(botLoginOnly), null);
+  const line = nothingToDisconnectLine(botLoginOnly);
+  assert.doesNotMatch(line, /control above/);
+  assert.equal(line, "There is nothing to disconnect: the environment variables set here do not connect GitLab yet.");
+
+  const configured = integration({
+    state: state({ source: "environment", environment: { setVariables: ["DEMO_API_TOKEN"], missingVariables: [], complete: true } }),
+  });
+  assert.match(nothingToDisconnectLine(configured), /switched off with the control above\.$/);
 });
 
 test("a scan that agrees, or a card that is not Connected, adds no line", () => {
