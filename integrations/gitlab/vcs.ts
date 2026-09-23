@@ -1575,7 +1575,6 @@ export class GitLabAdapter implements
   }
 }
 
-/** GitLab timestamps carry an offset that varies by instance, so compare instants. */
 /** The merge request's head commit: `diff_refs.head_sha` when GitLab has
  *  computed the diff, its `sha` before then. */
 function headShaOf(mr: GitLabMRHead, prId: number): string {
@@ -1584,6 +1583,7 @@ function headShaOf(mr: GitLabMRHead, prId: number): string {
   return headSha;
 }
 
+/** GitLab timestamps carry an offset that varies by instance, so compare instants. */
 function parseTimestamp(value: string | undefined): number {
   const parsed = Date.parse(value ?? "");
   return Number.isNaN(parsed) ? 0 : parsed;
