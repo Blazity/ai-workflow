@@ -202,4 +202,29 @@ describe("v2 prompt runtime boundaries", () => {
       );
     });
   });
+
+  describe("the ticket link in a pull request body", () => {
+    it("shows the key without a link when the run has no link for its ticket", () => {
+      // A tracker that gives no links, or a run resumed across the deploy that
+      // moved the link onto the ticket snapshot: `[AIW-124]()` renders as a
+      // link to the pull request itself.
+      const vars = { ticket_key: "AIW-124", ticket_url: "", change_summary: "Renamed it." };
+      expect(resolveOpenPrBody({}, {}, vars)).toBe(
+        "**Ticket:** AIW-124\n\n## What changed\nRenamed it.",
+      );
+      expect(resolveOpenPrBody({ body: "See [AIW-124]() and [docs](https://docs.example)." }, {}, vars))
+        .toBe("See AIW-124 and [docs](https://docs.example).");
+    });
+
+    it("keeps the link when there is one", () => {
+      const vars = {
+        ticket_key: "AIW-124",
+        ticket_url: "https://tracker.example/t/AIW-124",
+        change_summary: "Renamed it.",
+      };
+      expect(resolveOpenPrBody({}, {}, vars)).toBe(
+        "**Ticket:** [AIW-124](https://tracker.example/t/AIW-124)\n\n## What changed\nRenamed it.",
+      );
+    });
+  });
 });

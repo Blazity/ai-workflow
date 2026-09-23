@@ -250,9 +250,12 @@ export interface EngineCtx {
   /** The run's subject: a fetched ticket, or the ticket-shaped snapshot core
    *  gave a run that has none. `subjectTextIsPlaceholder` tells them apart. */
   ticket: WorkflowTicket;
-  /** Ticket URL in the issue tracker (JIRA_BASE_URL/browse/<key>); empty when the
-   *  run has no ticket. Backs the {{ticket_url}} prompt variable so open_pr and
-   *  comment templates can link back to the ticket. */
+  /** The page the tracker links for the run's ticket, recorded when the run
+   *  read it (`WorkflowTicket.url`); empty when the run has no ticket, when the
+   *  tracker gives no link, and for a run resumed across the deploy that moved
+   *  the link onto the ticket snapshot. Backs the {{ticket_url}} prompt
+   *  variable; open_pr's body shows the key without a link when it is empty
+   *  (`withoutEmptyLinks`). */
   ticketUrl: string;
   /** Summary of what the agent changed, carried from the implementation phase.
    *  Backs {{change_summary}} for the open_pr description; empty until the

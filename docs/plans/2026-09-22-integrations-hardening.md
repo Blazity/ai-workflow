@@ -225,6 +225,17 @@ path inside core (the rule stays in core and a second tracker still gets Jira
 URLs); a required port member (breaks every tracker written against the
 current SDK).
 
+**H1.1a. The transition for runs resumed across the deploy.** A run that
+started on a build before H1.1 and resumes on a build after it replays a
+ticket snapshot recorded without a link. Declared, not hidden: such a run's
+`{{ticket_url}}` is empty for the rest of it, and open_pr's body shows the key
+without a link rather than `[KEY]()` (`withoutEmptyLinks`); its stored
+`runs.ticket_url` is kept, because a null write no longer erases it
+(`recordRunUsage`), and every view still links the ticket through the tracker
+in force. Filling the link inside the run would need a new step on the
+resumed path, which changes the step sequence of runs already suspended, so
+it was not done.
+
 **H1.2. Unreadable is not "none" (F61, F128, F112, second half of F124).**
 `usableIntegrations` turned "the settings could not be read" into an empty
 list, which every caller then read as "nothing is connected". It is deleted;

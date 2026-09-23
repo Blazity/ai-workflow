@@ -301,7 +301,11 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         durationSec: durationFromStart(),
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
         ticketTitle: sql`excluded.ticket_title`,
-        ticketUrl: sql`excluded.ticket_url`,
+        // Never erased by a later null. A run resumed on a build that records
+        // the link on its ticket snapshot replays a snapshot recorded before
+        // that, which carries none, and its first write here would wipe the
+        // link the run started with.
+        ticketUrl: keepIfNull(workflowRuns.ticketUrl, workflowRuns.ticketUrl),
         model: sql`excluded.model`,
         costUsd: sql`excluded.cost_usd`,
         costKnown: sql`excluded.cost_known`,

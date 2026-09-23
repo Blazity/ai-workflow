@@ -193,6 +193,14 @@ describe("recordRunUsage", () => {
     expect((await row("wrun_1")).statusReason).toBe("Implementation phase timed out");
   });
 
+  it("keeps the ticket link the run started with when a later write carries none", async () => {
+    // A run resumed across the deploy that moved the link onto the ticket
+    // snapshot replays a snapshot with no link, and writes null.
+    await recordRunUsage(db, usage());
+    await recordRunUsage(db, usage({ ticketUrl: null }));
+    expect((await row("wrun_1")).ticketUrl).toBe("https://jira/browse/PROJ-1");
+  });
+
   it("leaves the code null for a failure that has none, which is every failure today", async () => {
     // Null is "this failure carries no code", never "unknown failure". Every
     // run that failed before the column existed reads exactly like this one,
