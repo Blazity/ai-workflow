@@ -10,8 +10,9 @@ import type { AgentTracingSetup } from "@integrations/sdk";
  * that is never merged into the harness settings, or a key that lands in the
  * agent's environment or in a command the sandbox records and a screen shows.
  */
+const logged = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../../infra/logger.js", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  logger: { info: vi.fn(), warn: logged.warn, error: vi.fn(), debug: vi.fn() },
 }));
 
 const { ClaudeAgentAdapter } = await import("./claude.js");
@@ -117,5 +118,47 @@ describe.each([
 
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(command).not.toContain(KEY);
+  });
+
+  // Tracing watches the work; it is not the work. The SDK promises a provider
+  // that cannot be installed never fails the run (`AgentTracingSetup`), so the
+  // sandbox refusing a tracer's file, or the harness refusing its hooks, has to
+  // leave a configured, untraced agent rather than a failed run.
+  it("still configures the agent when the sandbox refuses the tracer's files", async () => {
+    const { sandbox, commands } = fakeSandbox();
+    const agentWrites = sandbox.writeFiles.getMockImplementation()!;
+    sandbox.writeFiles.mockImplementation(async (written) => {
+      if (written.some((file) => file.path.startsWith("/tmp/aiw-tracing-"))) {
+        throw new Error("sandbox file API unavailable");
+      }
+      return agentWrites(written);
+    });
+    logged.warn.mockClear();
+
+    await expect(configure(sandbox)).resolves.toBeUndefined();
+    expect(logged.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: "acmetrace" }),
+      "agent_tracing_files_failed",
+    );
+    // No hook points at a tracer that never landed.
+    expect(commands.some((command) => command.includes("tracer.py"))).toBe(false);
+  });
+
+  it("still configures the agent when the harness refuses the tracing hooks", async () => {
+    const { sandbox } = fakeSandbox();
+    sandbox.runCommand.mockImplementation(async (bin: string, args: string[] = []) => {
+      const line = [bin, ...args].join(" ");
+      // The settings merge (a node script) that carries the provider's hook
+      // exits non-zero; the install and the move before it succeed.
+      const exitCode = line.includes("--input-type=module") && line.includes("tracer.py") ? 1 : 0;
+      return { exitCode, stdout: async () => "", stderr: async () => "settings locked" };
+    });
+    logged.warn.mockClear();
+
+    await expect(configure(sandbox)).resolves.toBeUndefined();
+    expect(logged.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ integrations: ["acmetrace"], reason: "hooks_failed" }),
+      "agent_tracing_off",
+    );
   });
 });
