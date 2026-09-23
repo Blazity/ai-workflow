@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
   findTickets: vi.fn(),
   searchMessages: vi.fn(),
+  resolveActiveIssueTracker: vi.fn(),
   /** Configured secrets the retrieval step redacts with. Fixed here so the test
    *  does not depend on the machine's environment. */
   secrets: [] as string[],
@@ -22,6 +23,11 @@ vi.mock("../../../engine/support/adapters.js", () => ({
 vi.mock("../../../run-observability/configured-secrets.js", () => ({
   configuredReplaySecrets: () => mocks.secrets,
 }));
+// Which tracker is connected, asked only to find the rule a query template is
+// judged by. The search itself goes through createAdapters above.
+vi.mock("../../support/issue-tracker-runtime.js", () => ({
+  resolveActiveIssueTracker: mocks.resolveActiveIssueTracker,
+}));
 
 import {
   classifyTrackerFailure,
@@ -29,6 +35,8 @@ import {
   execute,
 } from "./execute.js";
 import { manifest } from "./manifest.js";
+import { integrationRuntime } from "@integrations/registry/worker";
+import { logger } from "../../../infra/logger.js";
 import {
   expectOutputConformsToRegistry,
   makeCtx,
@@ -94,6 +102,36 @@ const CHAT_EVIDENCE = {
   timestamp: "2025-07-31T22:13:20.000Z",
   link: "https://slack.example/p/1",
 };
+
+/**
+ * Jira as a run reaches it: the adapter its own runtime builds, over a fetch
+ * that records every URL, so a test reads the JQL Jira would receive.
+ */
+function connectedJira() {
+  const requests: string[] = [];
+  const fetch = vi.fn(async (input: unknown) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
+    if (url.includes("/rest/api/3/search/jql")) return Response.json({ issues: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  const adapter = integrationRuntime("jira")!.capabilities.issue_tracker!({
+    connection: { baseUrl: "https://acme.atlassian.net", apiToken: "token", projectKey: "OPS" },
+    http: { fetch },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    signal: new AbortController().signal,
+  } as never) as { findTickets(input: unknown): Promise<unknown> };
+  return {
+    adapter,
+    resolved: { ok: true, id: "jira", name: "Jira", adapter, wiring: { projectKey: "OPS", baseUrl: "https://acme.atlassian.net" } },
+    /** The JQL of every search sent, decoded the way Jira reads it. */
+    searchedJql: () =>
+      requests
+        .filter((url) => url.includes("/rest/api/3/search/jql"))
+        .map((url) => new URL(url).searchParams.get("jql")),
+  };
+}
 
 function mockHappyPath() {
   mocks.generateStructured
@@ -204,6 +242,8 @@ describe("investigate execute", () => {
     mocks.generateStructured.mockReset();
     mocks.findTickets.mockReset();
     mocks.searchMessages.mockReset();
+    mocks.resolveActiveIssueTracker.mockReset();
+    mocks.resolveActiveIssueTracker.mockResolvedValue(connectedJira().resolved);
     mocks.secrets = [];
   });
 
@@ -305,6 +345,95 @@ describe("investigate execute", () => {
       keywords: ["login failure", "błąd logowania"],
       limit: 10,
       providerQuery: "labels = support",
+    });
+  });
+
+  it("asks the tracker nothing when the block has no query template", async () => {
+    mockHappyPath();
+
+    await execute(makeNode("investigate", { chatChannels: ["C1"] }), {}, makeCtx());
+
+    // Resolving the tracker reads the deployment's integrations: a run with no
+    // template to judge must not pay for it.
+    expect(mocks.resolveActiveIssueTracker).not.toHaveBeenCalled();
+  });
+
+  describe("a query template the tracker would not run", () => {
+    // `labels = 'backend` never closes its quote. Jira's adapter drops such a
+    // fragment rather than send a query that fails; the run has to say so, or
+    // the person reading the theory takes a keyword search for the one the
+    // block's author wrote.
+    const REFUSED = "labels = 'backend";
+
+    it("searches by the keywords alone and says why in the theory, and in the log", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mockHappyPath();
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+      const warn = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+      onTestFinished(() => warn.mockRestore());
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: REFUSED }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([
+        '(project = "OPS") AND (text ~ "login failure" OR text ~ "błąd logowania")',
+      ]);
+      expect(result.output?.theory).toBe(
+        "Matches AWT-9.\n\nJira would not run this block's query template, so the issue tracker was searched by the ticket's keywords alone. The value opened with ' at character 10 is never closed.",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        { tracker: "jira", problem: "The value opened with ' at character 10 is never closed.", searched: true },
+        "investigate_query_template_not_run",
+      );
+      expectOutputConformsToRegistry("investigate", result.output!);
+    });
+
+    it("does not search the whole project when the ticket gave no keywords either", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mocks.generateStructured
+        .mockResolvedValueOnce({ ...KEYWORDS_RESULT, object: { keywords: [] } })
+        .mockResolvedValueOnce({ ...THEORY_RESULT, object: { ...THEORY_RESULT.object, classification: "insufficient_data", evidenceRefs: [] } });
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+      const warn = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+      onTestFinished(() => warn.mockRestore());
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: REFUSED }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([]);
+      expect(result.output).toMatchObject({
+        evidence: [],
+        partial: [],
+        theory: expect.stringMatching(
+          /\n\nJira would not run this block's query template and the ticket gave no keywords, so the issue tracker was not searched\. The value opened with ' at character 10 is never closed\.$/u,
+        ),
+      });
+    });
+
+    it("sends a template the tracker runs, and adds nothing to the theory", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mockHappyPath();
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: "summary ~ 'fix)'" }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([
+        '(project = "OPS") AND (summary ~ \'fix)\') AND (text ~ "login failure" OR text ~ "błąd logowania")',
+      ]);
+      expect(result.output?.theory).toBe("Matches AWT-9.");
     });
   });
 

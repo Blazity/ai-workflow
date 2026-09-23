@@ -338,6 +338,34 @@ async function searchTrackerSource(adapters: Adapters, input: {
 }
 
 /**
+ * Why the connected tracker would not run the block's query template, or null
+ * when it would or when there is no one tracker to ask.
+ *
+ * The tracker's adapter drops a template its own rule refuses rather than
+ * send a query that fails, and says nothing, so this asks the same rule first
+ * and the run can say what it searched with. A save refuses such a template
+ * only when an author writes it; one that was live before the rule existed
+ * still reaches here, and so does one saved while no single tracker was
+ * usable. With no tracker resolved the search itself reports that as its gap,
+ * so this stays out of the way rather than fail the block.
+ */
+async function queryTemplateRefusal(
+  template: string,
+): Promise<{ trackerId: string; trackerName: string; problem: string } | null> {
+  try {
+    const { resolveActiveIssueTracker } = await import("../../support/issue-tracker-runtime.js");
+    const tracker = await resolveActiveIssueTracker();
+    if (!tracker.ok) return null;
+    const { integrationRuntime } = await import("@integrations/registry/worker");
+    const problem = integrationRuntime(tracker.id)?.issueTrackerQueryRule?.problem(template.trim()) ?? null;
+    return problem === null ? null : { trackerId: tracker.id, trackerName: tracker.name, problem };
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    return null;
+  }
+}
+
+/**
  * What people said, through the `messaging` capability.
  *
  * The capability answers rather than throws, and a provider that cannot search
@@ -386,8 +414,39 @@ async function blockInvestigateRetrievalStep(input: {
     lookbackDays: number;
     maxResults: number;
   } | null;
-}): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
+}): Promise<{
+  evidence: InvestigateEvidence[];
+  gaps: RetrievalGap[];
+  /** Set when the tracker would not run the query template. Absent on a
+   *  journal written before it existed, which ran every template it had. */
+  queryTemplateNote?: string;
+}> {
   "use step";
+  // A template the tracker would not run is left out here, in view, rather
+  // than dropped by its adapter unseen. Without it the search narrows by the
+  // keywords alone; with no keywords either there is nothing to narrow by,
+  // and a whole-project search would hand the theory unrelated tickets as
+  // evidence, so the tracker is not searched (the same rule the block applies
+  // to a ticket that yields no keywords and has no template).
+  const refusal =
+    input.issueTracker?.template === undefined
+      ? null
+      : await queryTemplateRefusal(input.issueTracker.template);
+  let trackerSearch = input.issueTracker;
+  let queryTemplateNote: string | undefined;
+  if (refusal !== null && input.issueTracker !== null) {
+    const { keywords, maxResults } = input.issueTracker;
+    trackerSearch = keywords.length > 0 ? { keywords, maxResults } : null;
+    queryTemplateNote =
+      trackerSearch === null
+        ? `${refusal.trackerName} would not run this block's query template and the ticket gave no keywords, so the issue tracker was not searched. ${refusal.problem}`
+        : `${refusal.trackerName} would not run this block's query template, so the issue tracker was searched by the ticket's keywords alone. ${refusal.problem}`;
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { tracker: refusal.trackerId, problem: refusal.problem, searched: trackerSearch !== null },
+      "investigate_query_template_not_run",
+    );
+  }
   // The issue tracker scopes its own search from its connection; no block
   // param can widen what it is allowed to reach. The chat side has no
   // credential to fetch: it goes through the messaging capability, which
@@ -401,13 +460,13 @@ async function blockInvestigateRetrievalStep(input: {
   // neither would use; on a deployment that cannot resolve one, that threw
   // between investigate's two model calls and the second send never happened.
   const adapters =
-    input.issueTracker === null && input.chat === null
+    trackerSearch === null && input.chat === null
       ? null
       : await (await import("../../support/adapters.js")).createAdapters();
   const [issueTracker, chat] = await Promise.all([
-    input.issueTracker === null || adapters === null
+    trackerSearch === null || adapters === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
-      : searchTrackerSource(adapters, input.issueTracker),
+      : searchTrackerSource(adapters, trackerSearch),
     input.chat === null || adapters === null
       ? Promise.resolve<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>>({
           status: "disabled",
@@ -446,6 +505,7 @@ async function blockInvestigateRetrievalStep(input: {
       excerpt: redactConfiguredSecretsInText(item.excerpt, secrets),
     })),
     gaps,
+    ...(queryTemplateNote === undefined ? {} : { queryTemplateNote }),
   };
 }
 blockInvestigateRetrievalStep.maxRetries = 0;
@@ -617,10 +677,12 @@ export const execute: BlockExecuteFn = async (
 
     // The gaps go into the prose too, not only the structured field: the human
     // deciding on this theory usually reads it through human_question, which
-    // renders the theory and nothing else.
-    const gapNote = describeRetrievalGaps(gaps);
-    const theory =
-      gapNote === "" ? theoryResult.theory : `${theoryResult.theory}\n\n${gapNote}`;
+    // renders the theory and nothing else. So does a query template the
+    // tracker would not run: without it the evidence is not what the block's
+    // author asked to be searched.
+    const theory = [theoryResult.theory, retrieval.queryTemplateNote ?? "", describeRetrievalGaps(gaps)]
+      .filter((part) => part !== "")
+      .join("\n\n");
 
     return {
       kind: "next",
