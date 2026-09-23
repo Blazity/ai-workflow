@@ -95,14 +95,18 @@ test("the collapsed rail names every entry it can only draw as a mark", (t) => {
     assert.ok(item.props.title, `an entry in the rail with no tooltip: ${item.props["aria-label"]}`);
     assert.equal(item.props.title, item.props["aria-label"]);
   }
-  // A monogram rather than a letter, so GitHub and GitLab are not both G.
+  // An integration's own mark where its manifest declares one, so GitHub and
+  // GitLab are not both G; a monogram rather than a letter where it does not.
   const marks = new Set(
     rail
       .flatMap((node) => node.findAll(() => true))
       .flatMap((node) => node.children.filter((child) => typeof child === "string")),
   );
-  assert.ok(marks.has("DE"), "Demo is drawn as DE");
-  assert.ok(marks.has("GL"), "GitLab is drawn as GL");
+  assert.ok(marks.has("DE"), "Demo, which declares no icon, is drawn as DE");
+  const gitlabMark = rail
+    .flatMap((node) => node.findAll((child) => child.props["data-integration-icon"] === "gitlab"))
+    .at(0);
+  assert.ok(gitlabMark?.findAll((child) => child.type === "path").length, "GitLab is drawn with its own glyph");
   // No headings in the rail: there is no room and nothing to read them by.
   assert.equal(groupHeaders(root).length, 0);
 });

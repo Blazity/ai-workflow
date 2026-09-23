@@ -11,6 +11,8 @@ export const manifest = defineIntegration({
   description:
     "Keeps what runs learn in your Mem0 project instead of the built-in memory, which stays as it was: nothing is copied either way.",
   docsUrl: "https://docs.mem0.ai/platform/quickstart",
+  // No license-safe mark is published for Mem0, so its name's mark on a neutral tile.
+  icon: { monogram: "M0", color: "#181B20" },
   connection: {
     fields: [
       {

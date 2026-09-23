@@ -1,4 +1,5 @@
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import { sandboxCreateRefusal } from "../../sandbox/create-refusal.js";
 import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
 import {
   AgentRuntimeError,
@@ -82,6 +83,8 @@ async function blockProvisionAgentSandboxStep(
     // workspace, which is exactly the kind of difference nobody would look for
     // when the checks die halfway.
     timeout: sandboxLifetimeMs(jobTimeoutMs, checksCeilingMs),
+  }).catch((error: unknown) => {
+    throw sandboxCreateRefusal(error) ?? error;
   });
 
   try {

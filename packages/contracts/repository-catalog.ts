@@ -286,8 +286,11 @@ export function pinnedRepositoriesNotEnabledSentence(
  * allowlist compares `repoPath.toLowerCase()`), and a catalog that answered
  * "not enabled" for `Acme/Api` because the row says `acme/api` would be a new
  * way to lose a repository. The STORED path keeps the operator's casing: it is
- * what the composed check configuration carries, and the workspace matches
- * check configuration on the exact string, as it always has.
+ * what the composed check configuration carries, so the workspace, which holds
+ * the provider's casing, matches check configuration on this key and never on
+ * the exact string (an exact match skipped every `blazity/*` repository whose
+ * GitHub name is `Blazity/...`). GitHub and GitLab both resolve paths without
+ * regard to case, so one key serves both providers.
  */
 export function repositoryCatalogKey(
   repository: { provider: string; path: string },
@@ -295,9 +298,10 @@ export function repositoryCatalogKey(
   return `${repository.provider}:${repository.path.toLowerCase()}`;
 }
 
-// The engine spells the same field `repoPath`. There is no second helper for
-// it: the one place a `repoPath` reaches the catalog adapts it at the call
-// site, so there is exactly one definition of what this key is.
+// The engine spells the same field `repoPath`. There is no second definition
+// for it: `repositoryKey` in apps/worker/src/engine/support/repository-access.ts
+// adapts the spelling and calls this, so there is exactly one definition of
+// what this key is.
 
 /**
  * Which repositories a run may touch, frozen at its start.

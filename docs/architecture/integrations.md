@@ -466,7 +466,7 @@ context and returns the port's adapter.
 
 | Capability | Port (in `integrations/sdk`) | Providers at once | Served today by | Read first |
 |---|---|---|---|---|
-| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. The optional `ticketUrl(key)` is the page a person opens for a ticket: core records it on the run and never spells a tracker's URL itself, so a tracker without it gets no links rather than wrong ones. |
+| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. The optional `ticketUrl(key)` is the page a person opens for a ticket: core records it on the run and never spells a tracker's URL itself, so a tracker without it gets no links rather than wrong ones. The optional `relatedTickets` on a read ticket (parent, subtasks, links, as key, title, status and the phrase for this ticket's side) is what planning is told about the work's shape; leave it absent when your tracker cannot say, and core shows nothing rather than "none". |
 | `vcs` | `VCSAdapter` (`vcs.ts`), plus the optional surfaces in `vcs-extensions.ts` | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host, whether paths nest, and in `changeRequest` what a person calls a change request and how one is referenced) and the connection field for its automation account's login (below). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
 | `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core; Mem0 | "Memory" below, which states every rule an engine needs. `integrations/mem0`: a hosted engine that only adds, reconciled by its adapter (dedup, delete by id, notebook replacement), with its namespace on every call and the admin half. The built-in store (`apps/worker/src/memory/builtin/adapter.ts`) is core's own. |
@@ -1581,6 +1581,16 @@ are the same generic route, which is why an integration's id can never
 change once a provider has been told where to send.
 
 ## Dashboard pages
+
+Your mark comes first. `manifest.icon` is drawn beside the name on the
+Integrations list, the connection screen and the sidebar: either a `glyph`
+(one SVG path on a 24 by 24 grid, drawn white on your `color`) or a
+`monogram` of one or two characters on it, with `color` as `#RRGGBB`. A brand
+mark is somebody's trademark, so take a glyph only from a source that licenses
+it (Simple Icons publishes its glyphs as CC0 and records where each came from)
+and follow the brand's guidelines; with no license-safe mark, use a monogram.
+Without an icon the dashboard draws your name's initials on a neutral tile.
+Conformance refuses anything but path data and a hex colour.
 
 An integration with something to show declares pages in `manifest.pages`,
 ships one component per page in `dashboard.tsx`, and gives each page that

@@ -12,6 +12,7 @@ import type {
   ResearchRepository,
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
+import type { PreviousBranchGone } from "../../../sandbox/context.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import { WORKSPACE_NARROWING_CEILING } from "../../pre-sandbox/types.js";
 import type { TicketTextReading } from "../../work-scope/context.js";
@@ -27,6 +28,8 @@ import { isIntegrationSettingsUnreadableError } from "../../helpers/integration-
 import {
   catalogRefusalExecutionOptions,
   isRepositoryCatalogRefusal,
+  isSameRepository,
+  repositoryKey,
 } from "../../support/repository-access.js";
 import {
   isChecksCeilingExceededError,
@@ -220,16 +223,13 @@ async function blockApprovedRepositoryScopeStep(
   });
   const available = filterRunRepositories(repositories, listing.repositories);
   const byKey = new Map(
-    available.map((repository) => [
-      `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-      repository,
-    ]),
+    available.map((repository) => [repositoryKey(repository), repository]),
   );
   const owned = await listConnectedWorkflowOwnedBranchesForTicket(ticketKey);
   const seen = new Set<string>();
   const selected: SelectedRepository[] = [];
   for (const approved of scope.repositories) {
-    const key = `${approved.provider}:${approved.repoPath.toLowerCase()}`;
+    const key = repositoryKey(approved);
     if (seen.has(key)) {
       throw new Error(`Approved repository scope duplicates ${key}; replan required`);
     }
@@ -291,11 +291,7 @@ async function blockApprovedRepositoryScopeStep(
     if (currentSha !== approved.researchBaseSha) {
       throw new Error(`Approved repository ${key} moved after research; replan required`);
     }
-    const ownership = owned.find(
-      (record) =>
-        record.provider === current.provider &&
-        record.repoPath.toLowerCase() === current.repoPath.toLowerCase(),
-    );
+    const ownership = owned.find((record) => isSameRepository(record, current));
     selected.push({
       provider: current.provider,
       repoPath: current.repoPath,
@@ -314,6 +310,58 @@ async function blockApprovedRepositoryScopeStep(
   return selected;
 }
 blockApprovedRepositoryScopeStep.maxRetries = 0;
+
+/**
+ * The sentence the ticket gets when an earlier run's branch was deleted: which
+ * branch, in which repository, and where this run starts instead.
+ */
+function freshStartComment(
+  starts: ReadonlyArray<{
+    repository: Pick<SelectedRepository, "provider" | "repoPath" | "defaultBranch">;
+    gone: PreviousBranchGone;
+  }>,
+): string {
+  const lines = starts.map(({ repository, gone }) => {
+    const pr = gone.pr ? ` Pull request #${gone.pr.id} (${gone.pr.url}) is not reused.` : "";
+    return `- ${repository.repoPath}: branch ${gone.branchName} no longer exists, so this run starts from ${repository.defaultBranch}.${pr}`;
+  });
+  return [
+    "Starting fresh: the branch from an earlier attempt on this ticket was deleted.",
+    ...lines,
+  ].join("\n");
+}
+
+/** Best effort: a tracker that refuses the comment must not stop a run that
+ *  can do its work, so the failure is logged and swallowed. No retries, so a
+ *  slow tracker cannot post the same notice twice. */
+async function blockAnnounceFreshStartStep(
+  ticketId: string,
+  body: string,
+  owner: import("../../../db/repositories/active-runs.js").ActiveRunOwner,
+): Promise<void> {
+  "use step";
+  const { logger } = await import("../../../infra/logger.js");
+  try {
+    const { assertConnectedActiveRunOwner } = await import(
+      "../../../db/repositories/active-runs.js"
+    );
+    const { createAdapters } = await import("../../support/adapters.js");
+    const { issueTrackerIfConnected } = await import(
+      "../../support/connected-issue-tracker.js"
+    );
+    const tracker = issueTrackerIfConnected(await createAdapters());
+    if (!tracker) return;
+    await assertConnectedActiveRunOwner(owner);
+    await tracker.postComment(ticketId, body);
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    logger.warn(
+      { ticketId, err: err instanceof Error ? err.message : String(err) },
+      "fresh_start_comment_failed",
+    );
+  }
+}
+blockAnnounceFreshStartStep.maxRetries = 0;
 
 async function blockPrepareWorkspaceProvisionStep(
   subjectKey: string,
@@ -987,7 +1035,7 @@ export async function ensureWorkspace(
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
-          `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+          repositoryKey(repository),
           repository.researchBaseSha,
         ]),
       );
@@ -1277,9 +1325,7 @@ export async function ensureWorkspace(
       const narrowedTo =
         ctx.workScope?.narrowingAnswered === true
           ? selected.filter((repository) =>
-              personSelectedKeys(ctx.workScope).includes(
-                `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-              ),
+              personSelectedKeys(ctx.workScope).includes(repositoryKey(repository)),
             )
           : null;
       if (narrowedTo === null) {
@@ -1315,12 +1361,38 @@ export async function ensureWorkspace(
     const repositoryContexts = await blockFetchPrContextsStep(
       selected,
       ctx.repositories,
-      { integrationPins: ctx.integrationPins },
+      {
+        integrationPins: ctx.integrationPins,
+        // A ticket re-run whose earlier branch a person deleted starts from the
+        // default branch instead of dying on a checkout of a branch that is
+        // gone. A pull request run is about its branch and keeps the old read.
+        ...(ctx.entry.kind !== "pr_trigger" ? { dropMissingOwnedBranches: true } : {}),
+      },
     );
+    // Said on the ticket before the workspace exists, so the person reads why
+    // this run is not continuing their earlier pull request even if a later
+    // step fails. Absent on every journal from before the probe existed, so a
+    // replayed run never reaches the comment step.
+    const freshStarts = repositoryContexts.flatMap((context) =>
+      context.previousBranchGone
+        ? [{ repository: context.repository, gone: context.previousBranchGone }]
+        : [],
+    );
+    if (freshStarts.length > 0) {
+      await blockAnnounceFreshStartStep(
+        ctx.ticket.identifier,
+        freshStartComment(freshStarts),
+        {
+          subjectKey: ctx.entry.subjectKey,
+          ownerToken: ctx.entry.ownerToken,
+          runId: ctx.runId,
+        },
+      );
+    }
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
         const expectedResearchBaseSha = approvedBaselineByKey?.get(
-          `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
+          repositoryKey(context.repository),
         );
         return {
           ...context.repository,
@@ -1337,9 +1409,7 @@ export async function ensureWorkspace(
           // repository carrying this run's own branch is already in the
           // selection and so is never taken as a neighbour; if that ever
           // changes, read-only is the safe side of the disagreement.
-          ...(relatedReadOnlyKeys.has(
-            `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
-          )
+          ...(relatedReadOnlyKeys.has(repositoryKey(context.repository))
             ? { access: "read" as const }
             : {}),
           ...(expectedResearchBaseSha ? { expectedResearchBaseSha } : {}),
@@ -1532,6 +1602,16 @@ export async function ensureWorkspace(
         // configuration edited later in the run must not be able to hand a
         // batch a longer bound than its sandbox will live.
         checksCeilingMs,
+        ...(freshStarts.length > 0
+          ? {
+              freshStarts: freshStarts.map(({ repository, gone }) => ({
+                repository: `${repository.provider}:${repository.repoPath}`,
+                deletedBranch: gone.branchName,
+                startedFrom: repository.defaultBranch,
+                previousPullRequest: gone.pr?.id ?? null,
+              })),
+            }
+          : {}),
       },
     };
   } catch (err) {
@@ -1603,14 +1683,12 @@ export async function promoteWorkspaceWrites(
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
-        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+        repositoryKey(repository),
         repository,
       ]),
     );
     ctx.selectedRepositories = ctx.selectedRepositories.map((repository) => {
-      const promoted = manifestByKey.get(
-        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-      );
+      const promoted = manifestByKey.get(repositoryKey(repository));
       return promoted?.workflowOwnedBranch
         ? { ...repository, workflowOwnedBranch: promoted.workflowOwnedBranch }
         : repository;

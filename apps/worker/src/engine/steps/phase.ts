@@ -1,4 +1,5 @@
 /* eslint-disable max-lines, max-lines-per-function */
+import { sandboxCreateRefusal } from "../../sandbox/create-refusal.js";
 import type { AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput } from "../../sandbox/agents/types.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import { isAgentRuntimeError } from "../../sandbox/agents/runtime-error.js";
@@ -810,6 +811,8 @@ async function attachResearchRepositoriesStep(
     ...getSandboxCredentials(),
     runtime: "node24",
     timeout: jobTimeoutMs,
+  }).catch((error: unknown) => {
+    throw sandboxCreateRefusal(error) ?? error;
   });
   const { createAdapters } = await loadAdaptersPort();
   const { stopSandboxAndConfirm } = await import(
