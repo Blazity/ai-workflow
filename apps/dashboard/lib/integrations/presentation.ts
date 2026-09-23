@@ -1149,7 +1149,7 @@ export const NO_INTEGRATIONS_LINE =
 
 /** What the core ticket-to-PR flow needs, in capabilities rather than names. */
 export const CORE_CAPABILITIES_LINE =
-  "The ticket-to-PR flow needs an issue tracker, version control and a coding agent. Blocks that need a capability nobody provides stay unavailable in the editor and say which one is missing.";
+  "The ticket-to-PR flow needs an issue tracker and version control; the coding agents it runs are set up as harness profiles, not here. Blocks that need a capability nobody provides stay unavailable in the editor and say which one is missing.";
 
 /**
  * Why a page an integration contributes is not being shown, or null when it is.

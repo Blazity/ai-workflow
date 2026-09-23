@@ -204,7 +204,7 @@ function CapabilitiesSection({
           Capabilities
         </h3>
         <p className="m-0 font-body text-[12px] text-neutral-600">
-          What core asks a provider for, and which one answers on this deployment.
+          What the product asks a provider for, and which one answers on this deployment.
         </p>
       </div>
       {typeof capabilities === "string" ? (

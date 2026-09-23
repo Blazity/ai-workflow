@@ -243,7 +243,7 @@ export function SettingsGroupForm({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="m-0 font-display text-[15px] font-medium text-coal">{title}</h3>
           <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-            {stored} of {saved.length} stored
+            {stored} of {saved.length} {saved.length === 1 ? "setting" : "settings"} here stored
           </span>
         </div>
         <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">

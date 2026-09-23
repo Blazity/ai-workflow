@@ -143,6 +143,9 @@ test("an environment-configured deployment is told so and asked to do nothing", 
   assert.match(rendered, /Connected/);
   assert.match(rendered, /Values come from this deployment's environment variables/);
   assert.match(rendered, /Nothing has ever tested these values/);
+  // No capability the list does not have, and none of the codebase's words.
+  assert.doesNotMatch(rendered, /a coding agent\./);
+  assert.doesNotMatch(rendered, /\bcore\b/);
   assert.doesNotMatch(
     rendered,
     /\bNot connected\b/,

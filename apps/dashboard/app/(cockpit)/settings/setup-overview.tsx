@@ -117,7 +117,7 @@ export function SetupOverview({
                       : "font-mono text-neutral-500"
                   }
                 >
-                  {row.stored}/{row.total}
+                  {row.stored} of {row.total} stored
                 </span>
               </span>
             ))}

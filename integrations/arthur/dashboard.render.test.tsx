@@ -61,6 +61,16 @@ test("an engine that graded nothing says so, and is not an outage", () => {
   assert.doesNotMatch(text, /could not be read|did not answer/);
 });
 
+// Red when: the sentence renders in pieces and a reader sees "received1
+// trace" (QA, production).
+test("the count of traces reads as one sentence, singular for one", () => {
+  const text = screen({
+    status: "ok",
+    value: { ...graded, traceCount: 1, spansGraded: 0, spansFailed: 0, score: 0 },
+  });
+  assert.match(text, /The engine received 1 trace; grading them is configured on the engine, not here\./);
+});
+
 test("real failures show as failures next to the pass rate", () => {
   const text = screen({ status: "ok", value: graded });
   assert.match(text, /90\.0%/);

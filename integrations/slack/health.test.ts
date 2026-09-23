@@ -145,6 +145,23 @@ test("the token check names the workspace, and names the refusal when it fails",
  * and answers a rate limit with HTTP 429. The test used to read every one of
  * those, and a delivery check that timed out, as a refused token or channel.
  */
+// Red when: Test reads as a pure read while it schedules a message in the
+// channel and deletes it (QA): the admin is told what it did.
+test("a passing test says a message was scheduled and deleted, as the check's description does", async () => {
+  const { ctx } = contextWith((method) =>
+    method === "auth.test"
+      ? { ok: true, team: "Blazity" }
+      : method === "chat.scheduleMessage"
+        ? { ok: true, scheduled_message_id: "Q1" }
+        : { ok: true },
+  );
+  const result = await runtime.testConnection(ctx);
+  assert.equal(result.ok, true);
+  assert.match(String(result.ok && result.message), /a message was scheduled there and deleted before it was sent/);
+  const description = manifest.health.find((check) => check.id === "channel")?.description ?? "";
+  assert.match(description, /^Schedules a message in the configured channel and deletes it before it is sent/);
+});
+
 test("a token Slack refuses fails the connection test, naming Slack's reason", async () => {
   const { ctx } = contextWith(() => ({ ok: false, error: "invalid_auth" }));
 
