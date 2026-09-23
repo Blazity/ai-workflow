@@ -25,7 +25,6 @@
  */
 import type {
   IntegrationConnectionPin,
-  IntegrationState,
   IntegrationUnavailableReason,
 } from "@shared/contracts";
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
@@ -177,7 +176,9 @@ export async function activeMemory(
     // (`memoryProviderChoice`), read off the resolver's own states and never
     // derived here a second time.
     const { integrationManifests } = await import("@integrations/registry");
-    const { memoryProviderChoice } = await import("../definition/integration-availability.js");
+    const { memoryNotServedReason, memoryProviderChoice } = await import(
+      "../definition/integration-availability.js"
+    );
     const choice = memoryProviderChoice(
       integrationManifests.map((manifest) => ({
         id: manifest.id,
@@ -201,7 +202,10 @@ export async function activeMemory(
       // silent pick, and it moves the day the other one recovers.
       return refusing({
         code: "ambiguous",
-        detail: ambiguousReason(choice.ids.map((id) => manifestOf(id)?.name ?? id)),
+        detail: memoryNotServedReason({
+          kind: "ambiguous",
+          names: choice.ids.map((id) => manifestOf(id)?.name ?? id),
+        }),
         providers: choice.ids,
       });
     }
@@ -217,7 +221,11 @@ export async function activeMemory(
       // told. The run goes on without memory and says why.
       return refusing({
         code: "unavailable",
-        detail: failingReason(selected, selected && resolved.states.get(selected.id)),
+        detail: memoryNotServedReason({
+          kind: "failing",
+          name: selected?.name ?? "The memory integration",
+          failure: selected ? resolved.states.get(selected.id)?.failure?.message : undefined,
+        }),
         providers: selected ? [selected.id] : [],
       });
     }
@@ -279,22 +287,6 @@ async function builtinActiveMemory(): Promise<ActiveMemory> {
 
 function servesMemory(manifest: IntegrationManifest): boolean {
   return manifest.capabilities.includes("memory");
-}
-
-function failingReason(
-  manifest: IntegrationManifest | undefined,
-  state: IntegrationState | undefined,
-): string {
-  const failure = state?.failure ? ` (${state.failure.message})` : "";
-  return `${manifest?.name ?? "The memory integration"} is switched on for memory and its connection is failing${failure}, so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory`;
-}
-
-function ambiguousReason(names: readonly string[]): string {
-  const listed =
-    names.length === 2
-      ? `${names[0]} and ${names[1]} both provide`
-      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
-  return `${listed} memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page`;
 }
 
 /**

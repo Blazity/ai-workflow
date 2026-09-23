@@ -358,23 +358,44 @@ export function memoryProviderChoice(
     : { kind: "failing", id: only.id };
 }
 
+/**
+ * Why memory is not served on this deployment, in the one wording the
+ * palette and a run's refusal both use: the refusal's, which the capability
+ * report and MCP already quote. Without a full stop, because a screen that
+ * quotes a refusal adds its own. `failure` is the connection's own message,
+ * when it has one.
+ */
+export function memoryNotServedReason(
+  problem:
+    | { readonly kind: "ambiguous"; readonly names: readonly string[] }
+    | { readonly kind: "failing"; readonly name: string; readonly failure?: string | undefined },
+): string {
+  if (problem.kind === "ambiguous") {
+    const { names } = problem;
+    const listed =
+      names.length === 2
+        ? `${names[0]} and ${names[1]} both provide`
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
+    return `${listed} memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page`;
+  }
+  const failure = problem.failure ? ` (${problem.failure})` : "";
+  return `${problem.name} is switched on for memory and its connection is failing${failure}, so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory`;
+}
+
 /** The palette's sentence for the memory rule above, or null when runs here remember. */
 function memoryIssue(integrations: DeploymentIntegrations): string | null {
   const choice = memoryProviderChoice(integrations.byId.values());
   if (choice.kind === "builtin" || choice.kind === "integration") return null;
   const nameOf = (id: string) => integrations.byId.get(id)?.name ?? id;
-  if (choice.kind === "ambiguous") {
-    const names = choice.ids.map(nameOf);
-    const listed =
-      names.length === 2
-        ? `${names[0]} and ${names[1]} both provide`
-        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
-    return `${listed} memory on this deployment. Disable all but one of them on the Integrations page.`;
-  }
-  const failure = integrations.byId.get(choice.id)?.failure?.message;
-  return `${nameOf(choice.id)} provides memory on this deployment and its connection is failing${
-    failure ? ` (${failure})` : ""
-  }, so runs go without memory. Fix it on the Integrations page, or disable it there to use the built-in memory.`;
+  const reason =
+    choice.kind === "ambiguous"
+      ? memoryNotServedReason({ kind: "ambiguous", names: choice.ids.map(nameOf) })
+      : memoryNotServedReason({
+          kind: "failing",
+          name: nameOf(choice.id),
+          failure: integrations.byId.get(choice.id)?.failure?.message,
+        });
+  return `${reason}.`;
 }
 
 /** The SDK's word for how many providers of a capability serve at once. */
