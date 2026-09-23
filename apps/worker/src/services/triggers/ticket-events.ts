@@ -7,6 +7,7 @@ import { logger } from "../../infra/logger.js";
 import { resumeConnectedClarificationFromComments } from "../clarifications/index.js";
 import { dispatchTicket } from "../dispatch/index.js";
 import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
+import { webhookLeftColumnReason } from "../../engine/support/ticket-left-column.js";
 import { cancelRunDetailed } from "../run-lifecycle/index.js";
 import { maxConcurrentAgents, ticketBoardSettings } from "../settings/index.js";
 import {
@@ -97,7 +98,12 @@ export async function actOnTicketEvent(
         adapters,
         board.aiColumn,
         active,
-        `Ticket left the AI column (${board.aiColumn} → ${event.statusChange.name ?? "unknown"}) via ${board.trackerName} webhook`,
+        webhookLeftColumnReason({
+          aiColumn: board.aiColumn,
+          movedTo: event.statusChange.name ?? null,
+          trackerName: board.trackerName,
+        }),
+        event.statusChange.name ?? null,
       );
       if (cancellation === "unconfirmed") {
         throw new TriggerHttpError(503, "Cancellation not confirmed");
@@ -306,7 +312,14 @@ export async function actOnTicketEvent(
       undefined,
       prematureAiReviewTransition
         ? prematureAiReviewCancellationReason(board.trackerName)
-        : `Ticket left the AI column (${board.aiColumn} → ${event.status}) via ${board.trackerName} webhook`,
+        : webhookLeftColumnReason({
+          aiColumn: board.aiColumn,
+          movedTo: event.status,
+          trackerName: board.trackerName,
+        }),
+      // The column this delivery reported, the same one the reason names, so
+      // the run's record and the ticket's comment say the same thing.
+      event.status,
     );
     if (cancellation === "unconfirmed") {
       logger.warn(
@@ -471,6 +484,9 @@ async function cancelTrackedRun(
    *  before them would cancel a run that ended while they ran. */
   observedEntry?: Awaited<ReturnType<Adapters["runRegistry"]["get"]>>,
   reason?: string,
+  /** Where the person moved the ticket, as the tracker named it, for the one
+   *  comment that tells the ticket its run stopped. */
+  movedTo: string | null = null,
 ): Promise<"cancelled" | "not_active" | "unconfirmed" | "already_terminal"> {
   const entry = observedEntry ?? (await adapters.runRegistry.get(subjectKey));
   if (!entry) return "not_active";
@@ -488,6 +504,7 @@ async function cancelTrackedRun(
       issueTracker: adapters.issueTracker,
       ...(reason ? { reason } : {}),
       clarificationNotice: { aiColumnName },
+      leftColumn: { movedTo },
     });
 
   // A claim with an explicitly NULL run id is a run that never reached the

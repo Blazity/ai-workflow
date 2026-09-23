@@ -49,6 +49,7 @@ import {
   type ConnectedIssueTracker,
 } from "../../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { POLL_LEFT_COLUMN_REASON } from "../../engine/support/ticket-left-column.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const NON_TERMINAL_STATUSES = new Set(["pending", "running"]);
@@ -501,8 +502,9 @@ export async function reconcileRuns(
       reason:
         reviewDestination && board
           ? prematureAiReviewCancellationReason(board.trackerName)
-          : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+          : POLL_LEFT_COLUMN_REASON,
       clarificationNotice: { aiColumnName: settings.COLUMN_AI },
+      leftColumn: { movedTo: departure.trackerStatus },
     });
     if (
       await finalizeTicketCancellation({
@@ -762,7 +764,7 @@ async function retryCancellingClaim(
 ): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const reason = entry.runId
-    ? "Orphaned run cancelled by reconciler: ticket no longer in the AI column"
+    ? POLL_LEFT_COLUMN_REASON
     : "In-flight claim cancelled by reconciler: ticket left the AI column before a run was bound";
   // Cancel the subject this claim actually holds. Deriving one from the ticket
   // key was the same string while every run was ticket-keyed; a pull request run

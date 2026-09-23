@@ -23,6 +23,7 @@ import {
 import {
   activeRuns,
   clarificationRequests,
+  oauthClient,
   user,
   workflowRuns,
 } from "../../db/schema.js";
@@ -1116,10 +1117,64 @@ describe("answerClarificationAndResume: what arrived, and from where", () => {
     // The person, not only the client id: the round says who answered.
     expect(delivery).toMatchObject({
       surface: "mcp",
-      authorDisplay: "Filip Maszota (MCP fBEUskClient)",
+      authorDisplay: "Filip Maszota (MCP client fBEUskClient)",
     });
     expect(tracker.postComment.mock.calls[0]![1]).toContain(
       "Filip Maszota answered the clarification through the MCP client fBEUskClient; the run is resuming.",
+    );
+  });
+
+  // Production P2.6 (AWP-274, 2026-09-23): the answer came through Codex from a
+  // signed-in person, and the ticket read "The MCP client
+  // gzXPDYPnGDsSeRbVXzIitqrbefDUCSsl answered". That person's account, like
+  // every account the bootstrap and invite paths create without a name, has
+  // its email address as its name, which the old rule refused, and the client
+  // was named by its OAuth id although it registered a name.
+  it("names the person behind the token by their email when that is all the account has, and the client by its name", async () => {
+    await db.insert(user).values({ id: "user_owner", name: "owner@example.com", email: "owner@example.com" });
+    await db.insert(oauthClient).values({
+      id: "oc_1",
+      clientId: "gzXPDYPnGDsSeRbVXzIitqrbefDUCSsl",
+      name: "Codex",
+      redirectUris: ["http://127.0.0.1:49597/callback"],
+    });
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "github:acme/api", {
+      actor: { id: "user_owner", label: "MCP gzXPDYPnGDsSeRbVXzIitqrbefDUCSsl" },
+      surface: { kind: "mcp", clientId: "gzXPDYPnGDsSeRbVXzIitqrbefDUCSsl", userId: "user_owner" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const comment = tracker.postComment.mock.calls[0]![1] as string;
+    expect(comment).toContain(
+      "owner@example.com answered the clarification through the MCP client Codex; the run is resuming.",
+    );
+    expect(comment).not.toContain("gzXPDY");
+    // The run's own record of who answered is the person too: it is what the
+    // resumed agent is told and what runs.answer_clarification hands back.
+    const stored = await getHookClarification(db, row.id);
+    expect(stored?.answeredByLabel).toBe("owner@example.com");
+  });
+
+  it("falls back to the client's name only when nobody is behind the token", async () => {
+    await db.insert(oauthClient).values({
+      id: "oc_2",
+      clientId: "svcClientId000000000000000000000",
+      name: "Nightly triage",
+      redirectUris: ["http://127.0.0.1:1/callback"],
+    });
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "github:acme/api", {
+      actor: { id: "svcClientId000000000000000000000", label: "MCP svcClientId000000000000000000000" },
+      surface: { kind: "mcp", clientId: "svcClientId000000000000000000000", userId: null },
+    });
+
+    expect(tracker.postComment.mock.calls[0]![1]).toContain(
+      "An MCP client (Nightly triage) answered the clarification; the run is resuming.",
     );
   });
 

@@ -1163,6 +1163,29 @@ describe("live clarification park status", () => {
     expect(r.durationSec).toBeNull(); // no start to measure from, no fabricated zero
   });
 
+  // The cancel path, for a run it stopped itself (production run
+  // wrun_01M375BB1PC0CG3F8KR0DGEWJ6): the row read "running" beside its stop
+  // reason until the next cron snapshot, three minutes on that run.
+  it("markRunBlockedOnCancel settles a running row the cancel stopped, and says it did", async () => {
+    await seed("wrun_stopped_live", "running");
+    await expect(
+      markRunBlockedOnCancel(db, "wrun_stopped_live", { fromRunning: true }),
+    ).resolves.toBe(true);
+    const r = await row("wrun_stopped_live");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+  });
+
+  it("markRunBlockedOnCancel never rewrites a run that closed its own row, and says so", async () => {
+    for (const status of frozen) {
+      await seed(`wrun_stopped_frozen_${status}`, status);
+      await expect(
+        markRunBlockedOnCancel(db, `wrun_stopped_frozen_${status}`, { fromRunning: true }),
+      ).resolves.toBe(false);
+      expect((await row(`wrun_stopped_frozen_${status}`)).status).toBe(status);
+    }
+  });
+
   // A workflow step can be re-executed after a worker restart, so every writer
   // has to survive being called twice with the same argument.
   it("repeating any of the three writes changes nothing", async () => {

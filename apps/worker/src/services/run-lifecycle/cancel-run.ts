@@ -76,6 +76,10 @@ export interface ClarificationCancelNotice {
   /** The board column the comment tells a person to move the ticket back to, so
    *  it reads the same as the questions comment it answers. */
   aiColumnName: string;
+  /** Present when the cancel exists because a person moved the ticket out of
+   *  that column, and names where to, when the tracker said. The ticket then
+   *  hears why its run stopped even when no question was open. */
+  leftColumn?: { movedTo: string | null };
 }
 
 /**
@@ -162,6 +166,17 @@ export interface CancelRunDetailedInput {
    * exist.
    */
   clarificationNotice?: { aiColumnName: string };
+  /**
+   * Set this when the cancel exists because a person moved the ticket out of
+   * the trigger column, with the column it went to when the tracker said. A run
+   * this call stops then leaves one short comment on the ticket saying it
+   * stopped, when and why (production run wrun_01M375BB1PC0CG3F8KR0DGEWJ6 left
+   * none, so the ticket's last word was "picked this ticket up"). Needs
+   * `issueTracker` and `clarificationNotice`, whose column the comment names,
+   * and says nothing a second time when the cancel already closed a question
+   * on the ticket, because that comment says the run stopped too.
+   */
+  leftColumn?: { movedTo: string | null };
 }
 
 /**
@@ -194,7 +209,11 @@ export async function cancelRunDetailed(
     input.beforeRelease ?? confirmTicketMove,
     input.reason,
     issueTracker && input.clarificationNotice
-      ? { issueTracker, aiColumnName: input.clarificationNotice.aiColumnName }
+      ? {
+        issueTracker,
+        aiColumnName: input.clarificationNotice.aiColumnName,
+        ...(input.leftColumn ? { leftColumn: input.leftColumn } : {}),
+      }
       : undefined,
   );
 }
@@ -975,13 +994,18 @@ async function cancelOwnedSubject(
     }
     retiredPublishedQuestion = retiredPublishedQuestion || postDrain.retiredPublished;
 
-    await settleCancelledPark(subjectKey, closed.runId);
+    const stoppedHere = await settleCancelledRun(subjectKey, closed.runId, {
+      stoppedLiveRun: !alreadyTerminal,
+    });
 
     // Ahead of the ticket move and the claim release on purpose: both of those
     // can decline and leave the caller to retry, and a retry finds the question
-    // already retired and would say nothing at all.
+    // already retired and would say nothing at all. The same holds for the
+    // stop comment: a retry finds the run terminal and the row settled.
     if (retiredPublishedQuestion) {
       await announceRetiredClarification(subjectKey, closed, closed.runId, notice);
+    } else if (stoppedHere) {
+      await announceLeftColumnStop(subjectKey, closed, closed.runId, notice);
     }
   }
 
@@ -1027,30 +1051,60 @@ async function persistCancelReason(
 }
 
 /**
- * Best-effort settling of a run cancelled while it was parked on a
- * clarification. That park writes a live "awaiting" the run itself clears when
- * it resumes, which a cancelled run never does, and the cron never downgrades a
- * frozen status: without this the row shows awaiting input forever. Guarded on
- * "awaiting" inside, so it is a no-op for every run that was not parked, and
- * like the cancel reason it must never affect the cancel outcome.
+ * Best-effort settling of the run row, and of its open block attempts, once the
+ * cancel has torn the run down. Both must never affect the cancel outcome.
+ *
+ * A run cancelled while it was parked on a clarification carries a live
+ * "awaiting" the run itself clears when it resumes, which a cancelled run never
+ * does, and the cron never downgrades a frozen status: without this the row
+ * shows awaiting input forever. That settle happens whoever ended the run.
+ *
+ * A run THIS call stopped mid-flight (`stoppedLiveRun`) also leaves "running"
+ * for "blocked" here, with its completion time, and its attempts that were still
+ * open are closed. Before, "blocked" was left to the next cron snapshot of the
+ * Workflow world, so for minutes the row said "running" beside a recorded stop
+ * reason, and the attempt that was executing never got a completion time
+ * (production run wrun_01M375BB1PC0CG3F8KR0DGEWJ6, AWP-280). A run that ended on
+ * its own is left alone: its own end-of-run write owns its outcome.
+ *
+ * The answer is whether the row now records the stop this call made: false for
+ * a row the run had already closed itself (its own failure move can race a
+ * cancel), so nothing goes on to describe a failed run as a stop.
  *
  * Must stay behind the step-drain barrier. Cancelling wakes the parked body,
  * whose own error path flips the run back to "running" on its way out; running
  * this before the drain would let that flip land last and leave the cancelled
  * run reading as in flight. After the barrier no step of the body can write
- * again.
+ * again, which is also what makes closing its attempts safe.
  */
-async function settleCancelledPark(subjectKey: string, runId: string): Promise<void> {
+async function settleCancelledRun(
+  subjectKey: string,
+  runId: string,
+  input: { stoppedLiveRun: boolean },
+): Promise<boolean> {
+  let settled = false;
   try {
     const { markConnectedRunBlockedOnCancel } =
       await import("../../db/repositories/runs/telemetry.js");
-    await markConnectedRunBlockedOnCancel(runId);
+    settled = await markConnectedRunBlockedOnCancel(runId, { fromRunning: input.stoppedLiveRun });
   } catch (error) {
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },
       "cancel_run_awaiting_status_unconfirmed",
     );
   }
+  if (!input.stoppedLiveRun) return false;
+  try {
+    const { closeConnectedOpenBlockAttempts } =
+      await import("../../db/repositories/runs/run-observability.js");
+    await closeConnectedOpenBlockAttempts({ runId, outcomeStatus: "run_cancelled" });
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, error: (error as Error).message },
+      "cancel_run_open_attempts_unclosed",
+    );
+  }
+  return settled;
 }
 
 /**
@@ -1169,6 +1223,50 @@ async function announceRetiredClarification(
     logger.warn(
       { subjectKey, runId, ticketKey, error: (error as Error).message },
       "cancel_run_clarification_label_unconfirmed",
+    );
+  }
+}
+
+/**
+ * Tell the ticket its run stopped because a person moved it, once.
+ *
+ * Only for a cancel whose caller said that is why (`notice.leftColumn`), only
+ * for a run this cancel stopped, and never beside the clarification-closed
+ * comment, which already says the run stopped. Best effort like every tracker
+ * write on this path: the run is already torn down, and a tracker that refuses
+ * a comment must not turn a cancel into a failure. The marker lookup is the
+ * second line of defence, for a post whose reply was lost after the tracker had
+ * already written it.
+ */
+async function announceLeftColumnStop(
+  subjectKey: string,
+  closed: ActiveRunEntry,
+  runId: string,
+  notice: ClarificationCancelNotice | undefined,
+): Promise<void> {
+  const ticketKey = closed.ticketKey;
+  if (!notice?.leftColumn || !ticketKey) return;
+  const { issueTracker, aiColumnName, leftColumn } = notice;
+  try {
+    const { formatRunStoppedComment, runStoppedCommentMarker } =
+      await import("../../engine/support/ticket-left-column.js");
+    const alreadyPosted = issueTracker.findCommentByMarker
+      ? (await issueTracker.findCommentByMarker(ticketKey, runStoppedCommentMarker(runId))) !== null
+      : false;
+    if (alreadyPosted) return;
+    await issueTracker.postComment(
+      ticketKey,
+      formatRunStoppedComment({
+        runId,
+        aiColumnName,
+        movedTo: leftColumn.movedTo,
+        stoppedAt: new Date(),
+      }),
+    );
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, ticketKey, error: (error as Error).message },
+      "cancel_run_stop_comment_unconfirmed",
     );
   }
 }

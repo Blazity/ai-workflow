@@ -324,9 +324,23 @@ describe("formatClarificationAnswerComment", () => {
       formatClarificationAnswerComment({
         answeredByLabel: "MCP fBEUsk",
         answer: "github:acme/api",
+        surface: { kind: "mcp", clientId: "fBEUsk", clientName: "Codex", person: "jane@example.com" },
+      }),
+    ).toContain("jane@example.com answered the clarification through the MCP client Codex; the run is resuming.");
+    expect(
+      formatClarificationAnswerComment({
+        answeredByLabel: "MCP fBEUsk",
+        answer: "github:acme/api",
+        surface: { kind: "mcp", clientId: "fBEUsk", clientName: "Codex", person: null },
+      }),
+    ).toContain("An MCP client (Codex) answered the clarification; the run is resuming.");
+    expect(
+      formatClarificationAnswerComment({
+        answeredByLabel: "MCP fBEUsk",
+        answer: "github:acme/api",
         surface: { kind: "mcp", clientId: "fBEUsk", person: null },
       }),
-    ).toContain("The MCP client fBEUsk answered the clarification; the run is resuming.");
+    ).toContain("An MCP client (fBEUsk) answered the clarification; the run is resuming.");
   });
 });
 

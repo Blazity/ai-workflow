@@ -124,17 +124,20 @@ export function formatClarificationNudgeComment(input: {
  */
 export type ClarificationAnswerSurfaceComment =
   | { kind: "dashboard" }
-  /** `person` is whoever is behind the client, when the deployment knows and
-   *  the label is a name rather than an address. */
-  | { kind: "mcp"; clientId: string; person: string | null };
+  /** `person` is whoever signed in behind the client, when the deployment
+   *  knows them. `clientName` is the name the client registered ("Codex"),
+   *  which a person recognises where its OAuth id means nothing; the id stands
+   *  in only when there is no name. */
+  | { kind: "mcp"; clientId: string; clientName?: string | null; person: string | null };
 
 function answeredWhere(label: string, surface: ClarificationAnswerSurfaceComment): string {
   if (surface.kind === "dashboard") {
     return `${label} answered the clarification in the dashboard; the run is resuming.`;
   }
+  const client = surface.clientName || surface.clientId;
   return surface.person
-    ? `${surface.person} answered the clarification through the MCP client ${surface.clientId}; the run is resuming.`
-    : `The MCP client ${surface.clientId} answered the clarification; the run is resuming.`;
+    ? `${surface.person} answered the clarification through the MCP client ${client}; the run is resuming.`
+    : `An MCP client (${client}) answered the clarification; the run is resuming.`;
 }
 
 /**
