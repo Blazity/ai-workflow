@@ -165,6 +165,8 @@ const isCi = (path: string) =>
   path.startsWith(".github/") ||
   path.startsWith(".githooks/") ||
   path.startsWith("scripts/ci/") ||
+  // test:ci runs the changelog and release scripts' tests as well.
+  path.startsWith("scripts/changelog/") ||
   // A gate's own tests live under scripts/ci/, so editing a gate without
   // running them is how a gate stops testing what it says it tests.
   path.startsWith("scripts/gates/") ||

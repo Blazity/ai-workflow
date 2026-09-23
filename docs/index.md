@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Documentation index
 
@@ -151,5 +151,5 @@ have no status header and the docs gate skips them.
 | `docs/releases/artur/YYYY.MM.PATCH.md` | The release pipeline copies the reviewed note into the tenant repository |
 | `docs/example-skill/SKILL.md` | The example agent skill referenced from SETUP.md |
 | `docs/example-workflows/loop-branch-workflow.json` | An importable example definition |
-| `CHANGELOG.md` | The daily collation workflow (`.github/workflows/changelog.yml`) writes it; readers consume it directly |
+| `CHANGELOG.md` | The daily collation workflow (`.github/workflows/changelog.yml`) writes one `vYYYY.MM.N` section per release; readers consume it directly, and the release job renders the GitHub Release from the newest section (`changelog/README.md`, Releases) |
 | `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them; the CI completeness check (`scripts/ci/changelog-entry-gate.ts`) reads them too, to see whether a pull request's entry yields a bullet |

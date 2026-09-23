@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-23
 
 # Delivery gates
 
@@ -201,6 +201,9 @@ that boundary; record and verify cleanup before G5 can pass.
   [worker package scripts](../apps/worker/package.json).
 - CI and E2E: [source gate](../.github/workflows/ci.yml) and
   [nightly and manual E2E](../.github/workflows/e2e.yml).
+- Product releases (`vYYYY.MM.N` tags and GitHub Releases, one per daily
+  changelog collation, independent of deployment):
+  [changelog/README.md](../changelog/README.md), section Releases.
 - Artur release: [release runbook](releases/artur/README.md),
   [upgrade preflight](releases/artur/upgrade-preflight.md), and
   [rehearsal runbook](releases/artur/rehearsals/README.md).

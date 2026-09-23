@@ -2,7 +2,8 @@
 
 This file lists what changed for people using AI Workflow, newest first.
 Entries are written in the pull request that ships the change and collected
-automatically from `changelog/unreleased/` once a day; see `changelog/README.md`.
+automatically from `changelog/unreleased/` once a day into a numbered release
+(`vYYYY.MM.N`), also published as a GitHub Release; see `changelog/README.md`.
 
 ## 2026-09-21
 
