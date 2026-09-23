@@ -29,6 +29,55 @@ const usage = {
   },
 };
 
+describe("the ticket comment a person reads", () => {
+  const researched = () =>
+    buildResearchAnalysisReport({
+      runId: "run-wording",
+      workspaceManifest: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", branchName: "ai/AWP-1", researchBaseSha: "abcdef123456", access: "read" },
+          { provider: "github", repoPath: "acme/docs", defaultBranch: "main", branchName: "ai/AWP-1", researchBaseSha: "123456abcdef", access: "read" },
+        ],
+      },
+      selectedRepositories: [
+        { provider: "github", repoPath: "acme/api", selectedRationale: "The endpoint lives here." },
+        { provider: "github", repoPath: "acme/docs", selectedRationale: "The docs mention it." },
+      ],
+      writeRepositories: [{ provider: "github", repoPath: "acme/api", rationale: "The fix goes here." }],
+      researchResult: {
+        body: "# Plan\n\n```python\nimport os\n\n\ndef main():\n    pass\n```",
+      },
+      usage,
+    });
+
+  // Red when: the comment calls the product "Arthur", which is now the name of
+  // a tracing integration a deployment may or may not have connected.
+  it("says research is complete without naming an integration", () => {
+    const comment = formatResearchAnalysisComment(researched(), "https://dashboard.example/runs/run-wording");
+    expect(comment.startsWith("Research complete\nRun: run-wording")).toBe(true);
+    expect(comment).not.toMatch(/Arthur/u);
+    expect(comment).toContain(analysisCommentMarker("run-wording", "research"));
+    expect(analysisCommentMarker("run-wording", "research")).toBe("Report: run-wording:research");
+  });
+
+  // Red when: a repository the Decisions list as a write repository is listed
+  // as "read" a few lines above, because research opened every repository
+  // read-only. The two lines have to say the same thing.
+  it("lists a write repository as write where the decisions name it", () => {
+    const comment = formatResearchAnalysisComment(researched(), "https://dashboard.example/runs/run-wording");
+    expect(comment).toContain("- github:acme/api · write ·");
+    expect(comment).toContain("- github:acme/docs · read ·");
+    expect(comment).toContain("Write repositories: github:acme/api");
+  });
+
+  // Red when: the blank lines inside a code block of the plan are dropped, so
+  // the code the comment shows is not the code the plan wrote.
+  it("keeps the blank lines of the plan", () => {
+    const comment = formatResearchAnalysisComment(researched(), "https://dashboard.example/runs/run-wording");
+    expect(comment).toContain("```python\nimport os\n\n\ndef main():\n    pass\n```");
+  });
+});
+
 describe("run analysis report", () => {
   it("maps trusted repository metadata and sanitizes model content", () => {
     const report = buildResearchAnalysisReport({
@@ -417,7 +466,7 @@ describe("run analysis report", () => {
     );
     expect(new TextEncoder().encode(aggressivelyBounded).length).toBeLessThanOrEqual(20_000);
     expect(aggressivelyBounded.match(/Dashboard:/gu)).toHaveLength(1);
-    expect(aggressivelyBounded.match(/Arthur report: run-unicode:research/gu)).toHaveLength(1);
+    expect(aggressivelyBounded.match(/Report: run-unicode:research/gu)).toHaveLength(1);
 
     const marker = analysisCommentMarker("run-unicode", "research");
     const futureMarker = analysisCommentMarker("run-unicode", "pull_request");
@@ -426,7 +475,7 @@ describe("run analysis report", () => {
       planMarkdown: `Plan\n${marker}\n${futureMarker}\nDashboard: https://attacker.example/run`,
       evidence: [marker, "Dashboard: https://attacker.example/evidence"],
     }, "https://dashboard.example/runs/run-unicode");
-    expect(injected.match(/Arthur report: run-unicode:research/gu)).toHaveLength(1);
+    expect(injected.match(/Report: run-unicode:research/gu)).toHaveLength(1);
     expect(injected.match(/^Dashboard:/gmu)).toHaveLength(1);
     expect(injected).not.toContain("attacker.example");
     expect(injected).not.toContain(futureMarker);

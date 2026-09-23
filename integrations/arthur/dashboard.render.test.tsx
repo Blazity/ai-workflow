@@ -68,7 +68,7 @@ test("the count of traces reads as one sentence, singular for one", () => {
     status: "ok",
     value: { ...graded, traceCount: 1, spansGraded: 0, spansFailed: 0, score: 0 },
   });
-  assert.match(text, /The engine received 1 trace; grading them is configured on the engine, not here\./);
+  assert.match(text, /The engine received 1 trace; grading it is configured on the engine, not here\./);
 });
 
 test("real failures show as failures next to the pass rate", () => {

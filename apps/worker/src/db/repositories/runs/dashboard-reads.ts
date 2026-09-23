@@ -1,12 +1,13 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "../../client.js";
 import { approvalRequests, clarificationRequests, workflowRuns } from "../../schema.js";
+import { runWorkflowLabel } from "./workflow-label.js";
 
 export function listAwaitingRunRows(db: Db = getDb()) {
   return db.select({
     runId: workflowRuns.runId,
     workflowId: workflowRuns.workflowId,
-    workflowName: workflowRuns.workflowName,
+    workflowName: runWorkflowLabel,
     ticketKey: workflowRuns.ticketKey,
     ticketTitle: workflowRuns.ticketTitle,
     ticketUrl: workflowRuns.ticketUrl,

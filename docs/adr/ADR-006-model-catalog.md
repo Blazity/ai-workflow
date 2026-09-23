@@ -1,9 +1,9 @@
-Status: current
+Status: superseded-by docs/adr/ADR-011-harness-profiles-pick-from-the-capability-catalog.md
 Last-verified: 2026-09-11
 
 # ADR-006: Model catalog
 
-Decision status: Accepted
+Decision status: Superseded by ADR-011
 
 Source: decision D6 and assumption A6 of
 [docs/plans/2026-09-09-architecture-restructure.md](../plans/2026-09-09-architecture-restructure.md).

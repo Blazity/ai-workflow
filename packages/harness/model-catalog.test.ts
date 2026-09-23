@@ -6,7 +6,6 @@ import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   DEFAULT_MODELS,
   builtinHarnessProfileReference,
-  isRecognisedModel,
   recognised,
   resolveModelDefaults,
   resolveBuiltinHarnessProfile,
@@ -79,10 +78,11 @@ test("selectable preserves advertisement order and removes duplicates", () => {
   );
 });
 
-test("unknown stored IDs are not recognised but remain ordinary strings", () => {
-  const historicalId = "claude-retired-custom";
-  assert.equal(isRecognisedModel("claude", historicalId), false);
-  assert.equal(historicalId, "claude-retired-custom");
+test("an id outside the policy is never offered", () => {
+  assert.deepEqual(
+    selectable({ provider: "claude", modelIds: ["claude-retired-custom"] }),
+    [],
+  );
 });
 
 test("built-in compatibility manifests and helpers use catalog defaults", () => {

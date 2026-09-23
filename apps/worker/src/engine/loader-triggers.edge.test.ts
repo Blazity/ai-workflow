@@ -54,6 +54,7 @@ vi.mock("../db/repositories/definitions/connected.js", () => ({
     mockGetDeployedVersion(...args),
   getConnectedWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getConnectedWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
+  getConnectedWorkflowDefinitionName: async () => ({ name: "Edge case workflow" }),
   getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
     mockGetEnabled(...args),
 }));

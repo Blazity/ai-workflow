@@ -1,11 +1,12 @@
-import { eq } from "drizzle-orm";
+import { eq, getTableColumns } from "drizzle-orm";
 import type { Db } from "../../client.js";
 import { getDb } from "../../client.js";
 import { workflowRuns } from "../../schema.js";
+import { runWorkflowLabel } from "./workflow-label.js";
 
 export async function readRunDetailRow(db: Db, runId: string) {
   const rows = await db
-    .select()
+    .select({ ...getTableColumns(workflowRuns), workflowName: runWorkflowLabel })
     .from(workflowRuns)
     .where(eq(workflowRuns.runId, runId))
     .limit(1);

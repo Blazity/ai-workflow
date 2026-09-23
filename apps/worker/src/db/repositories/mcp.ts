@@ -13,6 +13,7 @@ import {
   workflowDefinitionVersions,
   workflowRuns,
 } from "../schema.js";
+import { runWorkflowLabel } from "./runs/workflow-label.js";
 
 function affectedRowCount(result: unknown): number {
   const value = (result as { rows?: Array<{ deleted?: number | string }> }).rows?.[0]?.deleted;
@@ -220,7 +221,7 @@ export async function listMcpTicketRunPage(db: Db, ticketKey: string, limit: num
     .select({
       runId: workflowRuns.runId,
       workflowId: workflowRuns.workflowId,
-      workflowName: workflowRuns.workflowName,
+      workflowName: runWorkflowLabel,
       status: workflowRuns.status,
       ticketKey: workflowRuns.ticketKey,
       createdAt: workflowRuns.createdAt,

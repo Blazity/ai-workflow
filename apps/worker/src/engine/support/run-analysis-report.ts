@@ -617,7 +617,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * The line that makes a run's comment findable again, so a retried post finds
+ * the one it made instead of posting a second.
+ *
+ * Neutral on purpose: "Arthur" is the name of a tracing integration now, and a
+ * comment that called every run's report Arthur's named a provider the
+ * deployment may not use. Comments posted before this carry
+ * {@link legacyAnalysisCommentMarker}, which the poster still looks for.
+ */
 export function analysisCommentMarker(runId: string, stage: "research" | "pull_request"): string {
+  return `Report: ${runId}:${stage}`;
+}
+
+/** The marker comments carried before {@link analysisCommentMarker} was renamed. */
+export function legacyAnalysisCommentMarker(runId: string, stage: "research" | "pull_request"): string {
   return `Arthur report: ${runId}:${stage}`;
 }
 
@@ -656,9 +670,25 @@ function usageLines(snapshot: RunAnalysisUsageSnapshot): string[] {
  * success comment in May, finds a pull request short one repository, and has
  * nowhere to learn that their own decision is why.
  */
+/**
+ * The access a repository line states: the one the Decisions section below
+ * gives it. Research opens every repository read-only, so the manifest says
+ * "read" for a repository the run decided to write, and the comment used to
+ * state both about the same repository.
+ */
+function accessDecided(
+  report: RunAnalysisReport,
+  repo: RunAnalysisReport["repositories"][number],
+): "read" | "write" {
+  const writes = report.writeRepositories.some(
+    (request) => request.provider === repo.provider && request.repoPath === repo.repoPath,
+  );
+  return writes ? "write" : repo.access;
+}
+
 function repositoryLines(report: RunAnalysisReport): string[] {
   const worked = report.repositories.length > 0
-    ? report.repositories.map((repo) => `- ${repo.provider}:${repo.repoPath} · ${repo.access} · ${repo.researchBranch}@${repo.researchBaseSha ? repo.researchBaseSha.slice(0, 8) : "unknown SHA"} · ${repo.rationale}`)
+    ? report.repositories.map((repo) => `- ${repo.provider}:${repo.repoPath} · ${accessDecided(report, repo)} · ${repo.researchBranch}@${repo.researchBaseSha ? repo.researchBaseSha.slice(0, 8) : "unknown SHA"} · ${repo.rationale}`)
     : ["- No repository manifest was retained."];
   return [
     ...worked,
@@ -760,20 +790,22 @@ function scrubComment(text: string): string {
 }
 
 function withoutReservedCommentLines(value: string, marker: string): string {
-  return value
-    .split("\n")
+  const original = value.split("\n");
+  return original
     .map((line) => line
       .replaceAll(marker, "")
-      .replace(/Arthur report:\s+[^\s]+:(?:research|pull_request)/giu, "")
+      .replace(/(?:Arthur )?report:\s+[^\s]+:(?:research|pull_request)/giu, "")
       .replace(/Dashboard:\s+\S+/giu, ""))
-    .filter((line) => line.trim().length > 0)
+    // Only a line this emptied goes: a blank line the text already had is
+    // part of it (a code block in the plan keeps its blank lines).
+    .filter((line, index) => line.trim().length > 0 || original[index]!.trim().length === 0)
     .join("\n");
 }
 
 export function formatResearchAnalysisComment(report: RunAnalysisReport, dashboardUrl: string): string {
   const marker = analysisCommentMarker(report.runId, "research");
   const sections = [
-    `Arthur research complete\nRun: ${report.runId}`,
+    `Research complete\nRun: ${report.runId}`,
     // NOT "analyzed". The section carries the repositories this run left out as
     // well as the ones it opened, and a heading that calls all of them analyzed
     // says the opposite of the lines under it: a person reading that a
@@ -795,7 +827,7 @@ export function formatPublishedAnalysisComment(report: RunAnalysisReport, dashbo
   const marker = analysisCommentMarker(report.runId, "pull_request");
   const publication = report.publication;
   const sections = [
-    `Arthur pull requests ready\n${publication?.prs.map((pr) => `- ${pr.provider}:${pr.repoPath} ${pr.url}`).join("\n") || "No pull requests were published."}`,
+    `Pull requests ready\n${publication?.prs.map((pr) => `- ${pr.provider}:${pr.repoPath} ${pr.url}`).join("\n") || "No pull requests were published."}`,
     `Implemented\n${publication?.changeSummary || "No implementation summary was retained."}`,
     `Repositories\n${repositoryLines(report).join("\n")}`,
     `Evidence\n${report.evidence.slice(0, 10).map((item) => `- ${item}`).join("\n") || "No evidence items were captured."}${report.evidence.length > 10 ? `\n- ${OMITTED}` : ""}`,
@@ -836,6 +868,6 @@ function fitFormattedComment(sections: string[], dashboardUrl: string, marker: s
       ? `\n\n${OMITTED}. This comment was too long to post in full, so these sections were left out: ${droppedHeadings.join(", ")}.\n\n`
       : `\n\n${OMITTED}\n\n`;
   const budget = COMMENT_MAX_BYTES - utf8Bytes(tail) - utf8Bytes(separator);
-  const heading = sliceUtf8(mutable[0] ?? "Arthur report", Math.max(0, budget), "head");
+  const heading = sliceUtf8(mutable[0] ?? "Report", Math.max(0, budget), "head");
   return `${heading}${separator}${tail}`;
 }

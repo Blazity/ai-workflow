@@ -217,6 +217,8 @@ export interface PostRunFailureNoteForRunInput {
   pushedHead?: string | null;
   /** Threads settlement already replied in; absent counts as zero. */
   answeredCount?: number;
+  /** The workflow the run ran; see {@link buildRunFailureNote}. */
+  workflowName?: string;
 }
 
 /**
@@ -234,6 +236,7 @@ export async function postRunFailureNoteForRun(
     ...(input.workItems ? { workItems: input.workItems } : {}),
     ...(input.pushedHead === undefined ? {} : { pushedHead: input.pushedHead }),
     ...(input.answeredCount === undefined ? {} : { answeredCount: input.answeredCount }),
+    ...(input.workflowName ? { workflowName: input.workflowName } : {}),
   });
   try {
     await input.adapter.postRunFailureNote({

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import type {
+  ActiveRunEntry,
   ManualDispatchInput,
   ManualDispatchPreflightResponse,
   ManualDispatchRequest,
@@ -12,6 +13,10 @@ import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
 import { issueTrackerWiring } from "../../engine/support/issue-tracker-runtime.js";
 import type { Db } from "../../db/types.js";
+import {
+  findConnectedRunOutcomeByRunId,
+  findRunOutcomeByRunId,
+} from "../../db/repositories/runs/runs-read.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 import { agentWorkflow } from "../../engine/index.js";
@@ -99,6 +104,42 @@ const connectedExecutionStore: ManualExecutionStore = {
  * asking a person to paste a token into a chat (ADR-010, decision 15). The
  * verdict is the same either way; only the wording differs.
  */
+type RunOutcome = { status: string | null; completedAt: Date | null } | null;
+
+const FINISHED_RUN_STATUSES = new Set(["success", "failed", "blocked"]);
+
+/**
+ * What the preflight says about a subject whose claim is still held.
+ *
+ * A run that finished does not give up its claim at once: the reconcile pass
+ * releases it once the run's steps have drained and the claim is five minutes
+ * old, and that pass runs every fifteen minutes (`/cron/poll`). Releasing it
+ * from the run itself was not taken: the run's last step is still executing
+ * when it could do so, and a second run started on the same subject then would
+ * race the first one's finalisation, which is what the wait exists to prevent.
+ * So the claim stays and the answer says what it is: the run finished, and the
+ * reservation goes shortly, instead of "already has an active run" about a run
+ * that is over.
+ */
+async function activeRunBlocker(
+  active: ActiveRunEntry,
+  findOutcome: (runId: string) => Promise<RunOutcome>,
+): Promise<{ code: "active_run"; message: string }> {
+  const outcome = active.runId ? await findOutcome(active.runId).catch(() => null) : null;
+  if (outcome?.status && FINISHED_RUN_STATUSES.has(outcome.status)) {
+    return {
+      code: "active_run",
+      message:
+        `The last workflow run on this ticket or pull request (${active.runId}) has finished (${outcome.status}), ` +
+        "but its reservation is still held; it is released automatically within about 20 minutes of the run ending. Try again then.",
+    };
+  }
+  return {
+    code: "active_run",
+    message: "This ticket or pull request already has an active workflow run.",
+  };
+}
+
 async function preflightIntegrationBlocker(
   blockTypes: readonly string[],
   integrations?: DeploymentIntegrations,
@@ -166,10 +207,9 @@ export async function preflightManualDispatch(input: {
     runnable: !active && !atCapacity && !integrationBlocker,
     ...(active
       ? {
-          blocker: {
-            code: "active_run" as const,
-            message: "This ticket or pull request already has an active workflow run.",
-          },
+          blocker: await activeRunBlocker(active, (runId) =>
+            findRunOutcomeByRunId(input.db, runId),
+          ),
         }
       : atCapacity
         ? {
@@ -226,7 +266,7 @@ export async function preflightConnectedManualDispatch(
     steps: resolved.steps,
     runnable: !active && !atCapacity && !integrationBlocker,
     ...(active
-      ? { blocker: { code: "active_run" as const, message: "This ticket or pull request already has an active workflow run." } }
+      ? { blocker: await activeRunBlocker(active, findConnectedRunOutcomeByRunId) }
       : atCapacity
         ? { blocker: { code: "at_capacity" as const, message: "All workflow execution slots are currently in use." } }
         : integrationBlocker

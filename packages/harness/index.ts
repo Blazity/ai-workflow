@@ -9,7 +9,6 @@ export {
   DEFAULT_MODELS,
   REPO_MEMORY_DISTILL_MODEL_CODEX,
   builtinHarnessProfileReference,
-  isRecognisedModel,
   recognised,
   resolveModelDefaults,
   resolveBuiltinHarnessProfile,

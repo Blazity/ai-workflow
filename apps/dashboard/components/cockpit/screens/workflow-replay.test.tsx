@@ -743,3 +743,40 @@ test("run_checks is treated as a script block, so its output gets the humanized 
   const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
   assert.match(html, />Passed</);
 });
+
+test("a graph nobody placed is laid out rather than stacked in the corner", () => {
+  // What every definition seeded through the API looks like: each block at
+  // 0,0. Drawn as stored they land on one another, and since the block painted
+  // last sits on top it takes every click, so no other block can be opened.
+  const unplaced: WorkflowRunReplayResponse = {
+    ...response,
+    snapshot: {
+      ...response.snapshot!,
+      graph: {
+        ...response.snapshot!.graph,
+        nodes: [
+          { id: "trigger", type: "trigger_ticket_ai", name: "Ticket received", x: 0, y: 0 },
+          { id: "review", type: "review_agent", name: "Review changes", x: 0, y: 0 },
+        ],
+      },
+    },
+  };
+  const html = renderToStaticMarkup(
+    <WorkflowReplay runId="wrun_1" initialResponse={unplaced} />,
+  );
+  const places = [...html.matchAll(/left:(-?\d+)px;top:(-?\d+)px/g)].map(
+    (match) => `${match[1]},${match[2]}`,
+  );
+  assert.equal(places.length, 2, "expected both blocks to be drawn");
+  assert.equal(new Set(places).size, 2, "both blocks were drawn on the same point");
+});
+
+test("a graph somebody placed keeps the places they gave it", () => {
+  const html = renderToStaticMarkup(
+    <WorkflowReplay runId="wrun_1" initialResponse={response} />,
+  );
+  // The fixture puts the two blocks 260 apart; nothing may move them.
+  const lefts = [...html.matchAll(/left:(-?\d+)px;top:(-?\d+)px/g)].map((match) => Number(match[1]));
+  assert.equal(lefts.length, 2);
+  assert.equal(Math.abs(lefts[1]! - lefts[0]!), 260);
+});

@@ -1,0 +1,2 @@
+- A workflow run started by a pull request now reports a failure on that pull request, naming the workflow, and leaves its linked ticket where it is on the board; the ticket comment names the pull request and the workflow.
+- Runs are named after the workflow definition and version they ran (for example "Autofix PR checks v3") in runs.stats, runs.get, tickets.list_runs and on the ticket page, and a manual dispatch preview says when a held reservation belongs to a run that already finished.
