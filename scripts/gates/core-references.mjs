@@ -17,14 +17,16 @@
  * there: scripts/gates/core-references.json, and ADR-010.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import {
   parseOptions,
   printTable,
+  readDirectoryIfPresent,
   readJson,
+  readTextIfPresent,
   repositoryRoot,
   requireAnchor,
   requireScan,
@@ -230,7 +232,7 @@ export function coreFiles(root, config) {
 
   const found = [];
   const visit = (directory) => {
-    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+    for (const entry of readDirectoryIfPresent(join(root, directory))) {
       if (["node_modules", ".next", ".output", ".nitro", ".vercel", "dist"].includes(entry.name)) continue;
       const path = `${directory}/${entry.name}`;
       if (entry.isDirectory()) visit(path);
@@ -249,7 +251,11 @@ export function coreFiles(root, config) {
 export function coreMentions(root, config, ids) {
   const pairs = [];
   for (const path of coreFiles(root, config)) {
-    const pieces = [path, ...spelledPieces(readFileSync(join(root, path), "utf8"), path)];
+    // Listed a moment ago and gone now (a test's fixture tree): it mentions
+    // nothing, the way it would not have been listed a moment later.
+    const text = readTextIfPresent(join(root, path));
+    if (text === null) continue;
+    const pieces = [path, ...spelledPieces(text, path)];
     for (const id of ids) if (mentions(pieces, id)) pairs.push({ path, id });
   }
   return pairs;

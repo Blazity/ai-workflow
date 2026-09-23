@@ -3,7 +3,7 @@
  * consistent. This helper throws on malformed input or unreadable tool output.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 export const repositoryRoot = resolve(import.meta.dirname, "../..");
@@ -83,4 +83,44 @@ export function printTable(headers, rows) {
 
 export function sortedObject(entries) {
   return Object.fromEntries([...entries].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/*
+ * Reading a working tree that something else is changing at the same moment.
+ *
+ * `pnpm run test:ci` runs its test files in parallel, and several of them plant
+ * a fixture tree inside the repository (a gate has to see it where it would
+ * see real code) and remove it when they finish. A walker in another file can
+ * list such a path and find it gone a moment later, when it reads it, and that
+ * surfaced as ENOENT from whichever test was walking: a failure that says
+ * nothing about the code under test.
+ *
+ * The rule, the same for a directory and for a file: a path that vanished
+ * between being listed and being read holds nothing, so it contributes no
+ * entry and no text. Every other error is still thrown, because a directory
+ * that cannot be read for any other reason is a gate that proves nothing.
+ */
+
+function vanished(error) {
+  return error !== null && typeof error === "object" && error.code === "ENOENT";
+}
+
+/** `readdirSync(directory, { withFileTypes: true })`, or `[]` when it vanished. */
+export function readDirectoryIfPresent(directory) {
+  try {
+    return readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (vanished(error)) return [];
+    throw error;
+  }
+}
+
+/** `readFileSync(path, "utf8")`, or `null` when it vanished. */
+export function readTextIfPresent(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (vanished(error)) return null;
+    throw error;
+  }
 }

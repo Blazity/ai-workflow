@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { coreFiles, describeCore, MENTION_RULE } from "../gates/core-references.mjs";
+import { readDirectoryIfPresent, readTextIfPresent } from "../gates/shared.mjs";
 import {
   allowed,
   classify,
@@ -117,17 +118,9 @@ function filesNamed(root: string, name: string): string[] {
   const found: string[] = [];
   const ignored = new Set([".git", "node_modules", ".next", ".output", ".nitro"]);
   const visit = (directory: string) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch (error) {
-      // Another test file in the same run makes and removes fixture trees
-      // under the repository root (`generate-integration-registry.test.ts`),
-      // so a directory seen a moment ago can be gone. Gone holds no file.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    for (const entry of entries) {
+    // Other test files plant and remove fixture trees in the repository while
+    // this walks it; `readDirectoryIfPresent` in `gates/shared.mjs` holds the rule.
+    for (const entry of readDirectoryIfPresent(directory)) {
       if (ignored.has(entry.name)) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
@@ -1187,6 +1180,17 @@ test("lint and unused-code gates are unconditional", () => {
   const unused = gate("unused-code.mjs");
   assert.equal(unused.status, gateSuccess, unused.stderr || unused.stdout);
   assert.match(unused.stdout, /unused-code PASS/u);
+});
+
+test("a path that vanished while a gate walked holds nothing, and any other failure still stops it", () => {
+  // Parallel test files plant fixture trees in the repository and remove them;
+  // a walker that listed one must read it as empty rather than fail on ENOENT,
+  // and must not turn every unreadable path into "nothing here".
+  const gone = join(mkdtempSync(join(tmpdir(), "vanished-")), "gone");
+  assert.deepEqual(readDirectoryIfPresent(gone), []);
+  assert.equal(readTextIfPresent(join(gone, "file.ts")), null);
+  assert.throws(() => readTextIfPresent(repoRoot), /EISDIR/u);
+  assert.throws(() => readDirectoryIfPresent(join(repoRoot, "package.json")), /ENOTDIR/u);
 });
 
 test("retired gate baselines and update commands are absent", async () => {
