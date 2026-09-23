@@ -57,3 +57,56 @@ export function isWorkerTimeout(error: unknown): boolean {
 export function isWorkerStatus(error: unknown, ...statuses: number[]): error is WorkerResponseError {
   return error instanceof WorkerResponseError && statuses.includes(error.status);
 }
+
+/**
+ * A worker refusal as the browser may see it: the same status and body minus
+ * the worker's own address.
+ *
+ * Nitro answers every h3 error with `{ error: true, url, statusCode,
+ * statusMessage, message }`, and `url` is the worker's public URL. Route
+ * handlers hand that body to the browser verbatim, so without this the one
+ * address the dashboard exists to keep private was in every form's network
+ * tab. The address is logged on the server instead, where an operator reading
+ * a failure still finds which worker answered. Anything that is not Nitro's
+ * error shape (a success, a stream, a body a route shaped itself) is returned
+ * as it came.
+ */
+export async function withoutWorkerLocation(response: Response): Promise<Response> {
+  if (response.ok || !response.headers.get("content-type")?.includes("json")) return response;
+  const text = await response.text();
+  const rebuilt = (body: string) =>
+    new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: withoutLength(response.headers),
+    });
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return rebuilt(text);
+  }
+  if (!isNitroError(body)) return rebuilt(text);
+  const { url, ...visible } = body;
+  console.error(
+    `[worker] ${response.status} from ${String(url)}: ${errorPayloadMessage(body) ?? "no message"}`,
+  );
+  return rebuilt(JSON.stringify(visible));
+}
+
+function isNitroError(body: unknown): body is { url: unknown; [key: string]: unknown } {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as { error?: unknown }).error === true &&
+    "url" in body
+  );
+}
+
+/** The body is re-serialized, so the length it arrived with no longer holds. */
+function withoutLength(headers: Headers): Headers {
+  const copy = new Headers(headers);
+  copy.delete("content-length");
+  copy.delete("content-encoding");
+  return copy;
+}
