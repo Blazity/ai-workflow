@@ -2,8 +2,8 @@ import { z } from "zod";
 import {
   INTEGRATION_BLOCK_TYPE,
   INTEGRATION_ID,
+  SETTINGS_REGISTRY,
   WORKFLOW_SUBJECT_FIELDS,
-  findSettingDefinition,
 } from "@shared/contracts";
 import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
@@ -464,7 +464,7 @@ function checkSettings(manifest: ParsedManifest, report: Report) {
     }
     keys.add(setting.key);
     const stored = integrationSettingKey(manifest.id, setting.key);
-    if (findSettingDefinition(stored) !== undefined) {
+    if (SETTINGS_REGISTRY.some((definition) => definition.key === stored)) {
       report(
         "setting_invalid",
         `${path}.key`,

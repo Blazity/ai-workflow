@@ -3,7 +3,7 @@
 // Every string the Settings surface puts on screen that is derived rather than
 // authored: the field label, the source badge, the applies-to note, the value
 // as text, and the keys named by a refusal the worker sent back.
-import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingValue, SettingsInFlightRule, SettingsSource } from "@shared/contracts";
 import { formatDateTime } from "../date-time";
 
@@ -150,7 +150,7 @@ const ISSUE_PATTERN =
   /([A-Za-z0-9_.]+)\s*\((unknown_key|wrong_type|not_allowed_value|below_minimum|null_not_allowed|above_request_limit)\)/g;
 
 function issueSentence(key: string, reason: string): string {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   switch (reason) {
     case "unknown_key":
       return "This deployment's worker does not know this setting.";

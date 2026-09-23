@@ -6,7 +6,7 @@
  * has no scrollbar to tell it there is more, so this adds the one fact a
  * protocol has to carry instead of show.
  */
-import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingsVersionView } from "@shared/contracts";
 import { listConnectedSettingsVersionPageRows } from "../../db/repositories/settings-history.js";
 import { SettingsValidationError, versionView } from "./store.js";
@@ -32,7 +32,7 @@ export async function readSettingsHistoryPage(input: {
   limit: number;
   before?: number;
 }): Promise<SettingsHistoryPage> {
-  if (!findSettingDefinition(input.key)) {
+  if (!settingDefinition(input.key)) {
     throw new SettingsValidationError([{ key: input.key, reason: "unknown_key" }]);
   }
   // One row past the page, read to answer "is there more" and then dropped.

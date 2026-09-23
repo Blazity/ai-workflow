@@ -7,7 +7,7 @@ import type {
   SettingsEntryView,
   SystemHealthResponse,
 } from "@shared/contracts";
-import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import { settingDefinition } from "@integrations/registry";
 
 import { displaySettingValue, settingLabel } from "@/lib/settings/format";
 import { groupSettings } from "@/lib/settings/groups";
@@ -79,10 +79,10 @@ export function SettingsScreen({
   available: boolean;
 }) {
   const deploymentVariables = settings.filter(
-    (entry) => findSettingDefinition(entry.key)?.requiresRedeploy === true,
+    (entry) => settingDefinition(entry.key)?.requiresRedeploy === true,
   );
   const editableSettings = settings.filter(
-    (entry) => findSettingDefinition(entry.key)?.requiresRedeploy !== true,
+    (entry) => settingDefinition(entry.key)?.requiresRedeploy !== true,
   );
   const groups = groupSettings(editableSettings);
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
-import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 
 import { Button, CkChip, Input, type ChipTone } from "@/components/ui";
@@ -40,7 +40,7 @@ type Message = { tone: "ok" | "error"; text: string };
 /** What the registry falls back to, said once per field so the placeholder is
  *  free to say "required" instead of showing a value nobody typed. */
 function defaultNote(entry: SettingsEntryView): string {
-  const definition = findSettingDefinition(entry.key);
+  const definition = settingDefinition(entry.key);
   if (definition?.default === null) {
     return "No default: this setting is unset until a value is given.";
   }

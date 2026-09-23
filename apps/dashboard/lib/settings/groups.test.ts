@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { settingDefinition } from "@integrations/registry";
 import {
   SETTINGS_REGISTRY,
-  findSettingDefinition,
   type SettingsEntryView,
 } from "@shared/contracts";
 import {
@@ -17,7 +17,7 @@ function entry(
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],

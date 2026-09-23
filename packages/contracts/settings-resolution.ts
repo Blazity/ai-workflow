@@ -61,35 +61,23 @@ export interface SettingsResolution {
 }
 
 /**
- * The registry by key, built once.
- *
- * The snapshot below resolves every key on every request and now asks per key,
- * so a scan of the array inside that loop would make a linear read quadratic.
- * Module level rather than rebuilt per call: the registry is a frozen literal
- * and cannot change while the process is up.
- */
-const DEFINITIONS_BY_KEY: ReadonlyMap<string, SettingDefinition> =
-  new Map(SETTINGS_REGISTRY.map((definition) => [definition.key, definition]));
-
-/**
  * What ONE key resolves to with no stored row: the variable it names, when it
  * names one and the deployment sets it, and otherwise its default.
  *
  * The second and third steps of the rule, on their own, for the caller that has
  * exactly one key in hand and no reason to read every row in the table: the
  * reset operation, which has to record what takes over once the row it removes
- * is gone. Exported and used by the loop below rather than restated there.
+ * is gone. The loop below applies the same rule per definition.
  *
  * Null for a key `find` does not know, which is a question for the caller's
- * own validation and not something to answer with a default. `find` is core's
- * registry by default; a surface that serves the settings integrations declare
- * passes the joined lookup (`settingDefinition` in `@integrations/registry`).
+ * own validation and not something to answer with a default. `find` is this
+ * build's one lookup (`settingDefinition` in `@integrations/registry`), for the
+ * reason `validateSettingsPatch` gives.
  */
 export function resolveSettingWithoutStoredRow(
   key: string,
   environment: SettingsEnvironmentReader,
-  find: (key: string) => SettingDefinition | undefined = (candidate) =>
-    DEFINITIONS_BY_KEY.get(candidate),
+  find: (key: string) => SettingDefinition | undefined,
 ): { value: SettingValue; source: "environment" | "default" } | null {
   const definition = find(key);
   return definition ? withoutStoredRow(definition, environment) : null;

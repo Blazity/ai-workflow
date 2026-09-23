@@ -4,7 +4,7 @@
 // boolean for a switch. This module is the only place that turns those back
 // into registry values and works out which of them actually changed, so the
 // PATCH carries the keys the operator touched and nothing else.
-import { settingDefinition as findSettingDefinition } from "@integrations/registry";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingValue, SettingsEntryView } from "@shared/contracts";
 
 /** One form field's live value, keyed by registry key. */
@@ -31,7 +31,7 @@ function parseStringList(raw: string): string[] {
 
 /** What a resolved value looks like inside its control. */
 export function draftValueFor(entry: SettingsEntryView): string | boolean {
-  const definition = findSettingDefinition(entry.key);
+  const definition = settingDefinition(entry.key);
   if (definition?.type === "boolean") return entry.value === true;
   if (entry.value === null) return "";
   if (Array.isArray(entry.value)) return entry.value.join("\n");
@@ -59,7 +59,7 @@ export function toSettingValue(
   key: string,
   raw: string | boolean,
 ): SettingValue {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   if (typeof raw === "boolean") return raw;
   if (!definition) return raw;
   const trimmed = raw.trim();
@@ -92,7 +92,7 @@ export function localSettingIssue(
   key: string,
   raw: string | boolean,
 ): string | undefined {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   if (!definition || typeof raw === "boolean") return undefined;
   const trimmed = raw.trim();
   if (definition.type === "integer") {

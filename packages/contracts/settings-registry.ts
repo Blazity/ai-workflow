@@ -454,15 +454,6 @@ export type SettingsSnapshot = {
   readonly [E in RegistryEntry as E["key"]]: ValueOfEntry<E>;
 };
 
-const definitionsByKey = new Map<string, SettingDefinition>(
-  SETTINGS_REGISTRY.map((definition) => [definition.key, definition]),
-);
-
-/** The definition of one key, or undefined when the key is not a setting. */
-export function findSettingDefinition(key: string): SettingDefinition | undefined {
-  return definitionsByKey.get(key);
-}
-
 /** Why one entry of a patch was refused. Never carries the value itself. */
 export interface SettingValidationIssue {
   readonly key: string;
@@ -498,13 +489,16 @@ function matchesType(definition: SettingDefinition, value: unknown): boolean {
  * group is told about all of its bad fields at once. An empty result means the
  * patch may be written as it is.
  *
- * `find` is how a key is looked up: core's registry alone by default, and the
- * joined list (`settingDefinition` in `@integrations/registry`) for a surface
- * that also serves the settings integrations declare.
+ * `find` is how a key is looked up, and it is this build's one lookup,
+ * `settingDefinition` in `@integrations/registry`: core's keys and every
+ * setting an integration declares. It is an argument rather than a default
+ * because this package cannot see the integrations, and a default of core's
+ * registry alone would refuse an integration's setting as `unknown_key` on
+ * whichever surface forgot to pass it.
  */
 export function validateSettingsPatch(
   patch: Readonly<Record<string, unknown>>,
-  find: (key: string) => SettingDefinition | undefined = findSettingDefinition,
+  find: (key: string) => SettingDefinition | undefined,
 ): SettingValidationIssue[] {
   const issues: SettingValidationIssue[] = [];
   for (const [key, value] of Object.entries(patch)) {
