@@ -658,7 +658,12 @@ App's installation token minting as well (`integrations/github/auth.ts`), and
 GitLab's Gitbeaker is handed a requester that sends through the same fetch
 (`integrations/gitlab/client.ts`), so neither reaches the global `fetch` or
 retries on its own; each package's `client.test.ts` runs the real SDK with a
-global `fetch` that throws. Arthur, Slack and Jira call `ctx.http` directly.
+global `fetch` that throws. Where a provider documents how long it works on a
+request, size the attempt to that: GitLab ends a request at 60 s, so its
+client asks for 75 s (`GITLAB_ATTEMPT_DEADLINE_MS`), while GitHub ends one at
+10 s and the default 30 s serves it. GitHub's GraphQL reads are POSTs and are
+marked as reads so they are retried like one. Arthur, Slack and Jira call
+`ctx.http` directly.
 
 ### What the run pin does to you
 
