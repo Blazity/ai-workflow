@@ -6,7 +6,12 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SETTINGS_REGISTRY } from "@shared/contracts";
+import {
+  SETTINGS_REGISTRY,
+  type SettingValue,
+  resolveSettingsSnapshot,
+  validateSettingsPatch,
+} from "@shared/contracts";
 import {
   integrationSettingDefinition,
   integrationSettingKey,
@@ -28,18 +33,36 @@ test("a setting is stored under the integration id and its key, in UPPER_SNAKE_C
   assert.equal(integrationSettingKey("acme", "v2Labels"), "ACME_V2_LABELS");
 });
 
-test("a setting is described the way the settings registry describes every setting", () => {
-  assert.deepEqual(integrationSettingDefinition({ id: "slack", name: "Slack" }, ALLOWLIST), {
-    key: "SLACK_ALLOWED_USER_IDS",
-    group: "integrations",
-    type: "string-list",
-    default: [],
-    description: "Slack: Who may run the slash command.",
-    // Read by a webhook when its request arrives, never inside a run.
-    appliesToRunsInFlight: "immediate",
-    overridablePerTrigger: false,
-    environmentVariable: "SLACK_ALLOWED_USER_IDS",
+test("a declared setting is written, validated and resolved by core's rules, its variable included", () => {
+  const definition = integrationSettingDefinition({ id: "slack", name: "Slack" }, ALLOWLIST);
+  const find = (key: string) => (key === definition.key ? definition : undefined);
+  const resolve = (stored: Map<string, SettingValue>, variables: Record<string, string>) => {
+    const { snapshot, sources } = resolveSettingsSnapshot(
+      stored,
+      { value: (variable) => variables[variable], isSet: (variable) => variable in variables },
+      [definition],
+    );
+    const values = snapshot as unknown as Record<string, unknown>;
+    return { value: values.SLACK_ALLOWED_USER_IDS, source: sources.get("SLACK_ALLOWED_USER_IDS") };
+  };
+
+  // The deployment that set the variable before the setting existed keeps it.
+  assert.deepEqual(resolve(new Map(), { SLACK_ALLOWED_USER_IDS: "U1, U2" }), {
+    value: ["U1", "U2"],
+    source: "environment",
   });
+  assert.deepEqual(resolve(new Map(), {}), { value: [], source: "default" });
+  // A value stored from the Settings page wins over the variable.
+  assert.deepEqual(resolve(new Map([["SLACK_ALLOWED_USER_IDS", ["U3"]]]), { SLACK_ALLOWED_USER_IDS: "U1" }), {
+    value: ["U3"],
+    source: "stored",
+  });
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: "U1" }, find), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "wrong_type" },
+  ]);
+  // The Settings page files it with the integrations and names whose it is.
+  assert.equal(definition.group, "integrations");
+  assert.equal(definition.description, "Slack: Who may run the slash command.");
 });
 
 test("the joined list is core's registry first, then what the integrations declare", () => {

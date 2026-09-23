@@ -521,7 +521,7 @@ Declare what you read in the manifest, as Slack does
 settings: [
   {
     key: "allowedUserIds",
-    description: "Slack user ids that may run the command. Empty lets everyone run it.",
+    description: "User ids that may run the command. Empty lets everyone run it.",
     type: "string-list",
     default: [],
     env: "SLACK_ALLOWED_USER_IDS",

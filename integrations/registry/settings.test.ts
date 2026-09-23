@@ -9,7 +9,12 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { integrationSettingDefinitions, settingDefinition, settingDefinitions } from "./index";
+import {
+  integrationManifests,
+  integrationSettingDefinitions,
+  settingDefinition,
+  settingDefinitions,
+} from "./index";
 
 test("every setting this build has is under a key of its own", () => {
   const keys = settingDefinitions.map((definition) => definition.key);
@@ -27,6 +32,22 @@ test("no integration's setting takes a key of core's", () => {
   assert.ok(core.has("MAX_CONCURRENT_AGENTS"), "core's registry is in the joined list");
   const taken = integrationSettingDefinitions.filter((definition) => core.has(definition.key));
   assert.deepEqual(taken.map((definition) => definition.key), []);
+});
+
+test("the Settings page names an integration once in front of each of its settings", () => {
+  // The page shows the description under the integrations group; the name is
+  // put in front of it, so a description that starts with it again reads
+  // "Slack: Slack user ids".
+  for (const manifest of integrationManifests) {
+    for (const setting of manifest.settings ?? []) {
+      assert.ok(
+        !setting.description.toLowerCase().startsWith(manifest.name.toLowerCase()),
+        `${manifest.id}.${setting.key} repeats "${manifest.name}"`,
+      );
+    }
+  }
+  const slack = integrationSettingDefinitions.find((definition) => definition.key === "SLACK_ALLOWED_USER_IDS");
+  assert.match(slack?.description ?? "", /^Slack: User ids/u);
 });
 
 test("the lookup answers every key of the list with that key's own definition", () => {

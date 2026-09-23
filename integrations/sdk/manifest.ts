@@ -178,7 +178,9 @@ export interface IntegrationWebhookManifest {
 export interface IntegrationSetting {
   /** The value's key in `ctx.settings`, in camelCase. */
   readonly key: string;
-  /** What it decides and what an empty value means, for the Settings page. */
+  /** What it decides and what an empty value means, for the Settings page,
+   *  which puts the integration's name in front of it: say "User ids", not
+   *  "Slack user ids". */
   readonly description: string;
   readonly type: "string-list";
   /** What it holds while nobody stored a value and `env` is unset. */

@@ -66,7 +66,7 @@ export const manifest = defineIntegration({
     {
       key: "allowedUserIds",
       description:
-        "Slack user ids (U0123...) that may run the /ai-workflow slash command. Empty lets everyone in the workspace run it.",
+        "User ids (U0123...) that may run the /ai-workflow slash command. Empty lets everyone in the workspace run it.",
       type: "string-list",
       default: [],
       env: "SLACK_ALLOWED_USER_IDS",
