@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import { isPullRequestUnreadableError } from "@integrations/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runtime } from "./worker";
@@ -110,5 +111,16 @@ describe("every GitHub call goes through the context's HTTP", () => {
       vcs.skillSource!().getDefaultBranch({ owner: "acme", repository: "api" }),
     ).resolves.toBe("trunk");
     expect(paths()).toContain("GET /repos/acme/api");
+  });
+});
+
+describe("the head sha is read like the head", () => {
+  // GitHub answers 404 for a pull request that does not exist, and for one in
+  // a repository the installation cannot see.
+  it("closes a pull request this installation can never read", async () => {
+    const { vcs } = connected();
+
+    await expect(vcs.getPRHead(8)).rejects.toSatisfy(isPullRequestUnreadableError);
+    await expect(vcs.getPRHeadSha(8)).rejects.toSatisfy(isPullRequestUnreadableError);
   });
 });

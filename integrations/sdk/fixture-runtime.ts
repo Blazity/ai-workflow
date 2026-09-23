@@ -51,10 +51,11 @@ async function readJson(ctx: FixtureContext, path: string, init?: RequestInit): 
     ...init,
     headers: { authorization: `Bearer ${ctx.connection.apiToken}` },
   });
-  if (response.status === 401) throw new FatalError("The fixture provider refused the API token.");
   if (!response.ok) {
-    // The status and headers ride along, so a caller can tell a refusal of
-    // one resource from any other failure (`isPullRequestRefusal`).
+    // The status and headers ride along, a refused token's included, so the
+    // caller decides what the answer means (`readProviderFailure`,
+    // `isPullRequestRefusal`). A FatalError here would stop the retries of
+    // whichever core step called, before core had read the answer at all.
     throw Object.assign(new Error(`Fixture provider answered ${response.status} for ${path}.`), {
       status: response.status,
       response: { headers: response.headers },

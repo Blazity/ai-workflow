@@ -686,14 +686,14 @@ describe("GitLabAdapter", () => {
       expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
     });
 
-    it("throws FatalError when the merge request is deterministically unavailable", async () => {
-      const error = new Error("Merge request not found") as any;
-      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
-      mockMergeRequests.show.mockRejectedValueOnce(error);
+    it("closes a merge request this token can never read, as getPRHead does", async () => {
+      mockMergeRequests.show.mockRejectedValueOnce(
+        new GitLabRequestError("404 Not found", new Response(null, { status: 404 })),
+      );
 
       const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);
 
-      expect(caught).toMatchObject({ name: "FatalError", message: "Merge request not found" });
+      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
     });
   });
 

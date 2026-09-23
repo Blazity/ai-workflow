@@ -959,11 +959,7 @@ export class GitHubAdapter
   }
 
   async getPRHeadSha(prId: number): Promise<string> {
-    const { data } = await this.octokit.pulls.get({
-      ...this.ownerRepo,
-      pull_number: prId,
-    });
-    return data.head.sha;
+    return (await this.readPullRequest(prId)).head.sha;
   }
 
   async findPR(branch: string): Promise<PullRequest | null> {

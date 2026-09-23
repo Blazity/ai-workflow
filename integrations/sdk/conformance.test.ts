@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   checkIntegrationConformance,
+  readProviderFailure,
   VCS_BOT_LOGIN_FIELD,
   VCS_LEGACY_BOT_LOGIN_FIELD,
   z,
@@ -643,4 +644,18 @@ test("the fixture closes only a pull request it cannot read, never a refused cre
   assert.notEqual((await refusedWith(403, { "retry-after": "30" })).name, "PullRequestUnreadableError");
   assert.notEqual((await refusedWith(401)).name, "PullRequestUnreadableError");
   assert.notEqual((await refusedWith(502)).name, "PullRequestUnreadableError");
+});
+
+test("the fixture hands a refused token to core as the provider's answer, not as fatal", async () => {
+  // Authors copy this fixture. A FatalError on every 401 stopped the retries
+  // of whichever core step called the adapter, whatever that step would have
+  // decided about a refused credential; the answer itself lets core decide.
+  const failure = await fixtureRepository(() => new Response("{}", { status: 401 }))
+    .getPRHead(1)
+    .catch((error: Error) => error);
+
+  assert.notEqual(failure.name, "FatalError");
+  const verdict = readProviderFailure(failure);
+  assert.equal(verdict.kind, "refused");
+  assert.equal(verdict.kind === "refused" ? verdict.status : null, 401);
 });

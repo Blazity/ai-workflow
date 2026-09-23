@@ -139,3 +139,40 @@ describe("what GitLab answered survives the client", () => {
     expect(readProviderFailure(failure)).toMatchObject({ kind: "refused", status: 403 });
   });
 });
+
+/**
+ * The head alone is the same read under the same rule: a merge request this
+ * token can never read is closed for good, a token GitLab refused is thrown as
+ * it came. It used to answer both with a FatalError, so a caller could not tell
+ * a merge request that is gone from a connection that needs repairing.
+ */
+describe("the head sha is read like the head", () => {
+  const refusing = (status: number, body: unknown) =>
+    connected((url) =>
+      url.pathname.endsWith("/merge_requests/7") ? json(status, body) : gitlab(url, undefined),
+    ).vcs;
+
+  it("reads the sha the head carries", async () => {
+    const { vcs } = connected();
+
+    await expect(vcs.getPRHeadSha(7)).resolves.toBe((await vcs.getPRHead(7)).headSha);
+  });
+
+  it("closes a merge request this token can never read", async () => {
+    const failure = await refusing(404, { message: "404 Not found" })
+      .getPRHeadSha(7)
+      .catch((error: unknown) => error);
+
+    expect(isPullRequestUnreadableError(failure)).toBe(true);
+  });
+
+  it("keeps a refused token retryable, with GitLab's status on it", async () => {
+    const failure = await refusing(401, { message: "401 Unauthorized" })
+      .getPRHeadSha(7)
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).name).not.toBe("FatalError");
+    expect(isPullRequestUnreadableError(failure)).toBe(false);
+    expect(readProviderFailure(failure)).toMatchObject({ kind: "refused", status: 401 });
+  });
+});
