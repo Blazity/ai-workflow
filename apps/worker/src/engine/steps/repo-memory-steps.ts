@@ -1764,7 +1764,8 @@ export async function loadRepoMemorySourcesStep(
     const truncatedRepositories: string[] = [];
     /**
      * One rendering against its kind's budget, WHATEVER THE PROVIDER RETURNED:
-     * whole when it fits what is left; cut to what is left, at a line, with a
+     * whole when it fits what is left; cut to what is left, at a line end when
+     * one keeps at least half the room and inside a line otherwise, with a
      * marker the model reads, when it does not (`fitMemoryText`); left out when
      * the kind is spent or too little is left to be worth a section. A cut
      * spends the kind, so nothing after it is injected.

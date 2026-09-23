@@ -32,7 +32,11 @@
  * - Secrets. Every observation reaches `observe` with every secret this
  *   deployment knows already taken out of its text (the environment's and
  *   those an admin stored in the dashboard, which an integration is never
- *   handed). Text core could not clean is refused before it reaches you.
+ *   handed). Text core could not clean is refused before it reaches you. Core
+ *   also takes them out of every `rendering` you recall before it reaches a
+ *   prompt or a workspace, so a value you stored before it became a known
+ *   secret goes no further; `entries` it hands on as you gave them, because
+ *   a run quotes one back to retract it.
  * - Size in a prompt. Core cuts what it injects to `MEMORY_PROMPT_BUDGET_BYTES`
  *   per scope and a notebook to `MEMORY_NOTEBOOK_MAX_BYTES`, with a marker,
  *   whatever you return.
@@ -138,8 +142,10 @@ export type MemoryScopeKind = MemoryScope["kind"];
  * of `rendering`, per scope, summed over every subject the prompt carries (the
  * owner's facts and each repository's). Core enforces it where it builds the
  * prompt, whatever a provider returns: a rendering that does not fit what is
- * left is cut at a line end and ends with a line saying it was cut, and later
- * renderings of that scope are left out and logged. Facts and lessons have a
+ * left is cut and ends with a line saying it was cut, and later renderings of
+ * that scope are left out and logged. The cut lands at the last line end that
+ * keeps at least half the room, and inside a line when none does (one very
+ * long entry). Facts and lessons have a
  * budget each, so a long facts list never starves the lessons beside it.
  *
  * So a provider does not need to be small, only ordered: what core cuts is the

@@ -316,15 +316,19 @@ do them and cannot get them wrong:
   reading `knownSecretValues()`). When that set cannot be read, the write
   answers `unavailable` and nothing is sent; text the redaction cannot process
   is `rejected`. Addresses (the subject key, a notebook's name, the run id, the
-  ticket key) are left as they are. What your engine stored before a value
-  became a known secret stays as it was: core cleans what it sends, and cannot
-  reach what you hold. (The built-in store cleans its own at the next write
-  into a document, with the same rule, `apps/worker/src/memory/known-secrets.ts`.)
+  ticket key) are left as they are. A value your engine stored before it
+  became a known secret stays in your engine, where core cannot reach it, but
+  goes no further: core takes known secrets out of every `rendering` you recall
+  before it reaches a prompt or a workspace, and hands `entries` on as you gave
+  them, because a run quotes one back to retract it. (The built-in store also
+  cleans what it holds at its next write into a document; the rule for all of
+  this is `apps/worker/src/memory/known-secrets.ts`.)
 - **Size in a prompt is capped.** One agent prompt carries at most
   `MEMORY_PROMPT_BUDGET_BYTES` of renderings: 16 KiB of facts and 16 KiB of
   lessons, summed over the owner and every repository in the prompt. A
-  rendering that does not fit what is left is cut at a line end and ends with
-  a marker line the model reads; the renderings after it are left out, and
+  rendering that does not fit what is left is cut and ends with a marker line
+  the model reads (at the last line end that keeps at least half the room, and
+  inside a line when none does); the renderings after it are left out, and
   both are logged (`repo_memory_injection_budget_exceeded`). A notebook is a
   file in the agent's workspace, not a prompt section, and is capped at
   `MEMORY_NOTEBOOK_MAX_BYTES` (256 KiB) the same way. So your rendering does not
