@@ -18,6 +18,7 @@ import {
   readProviderFailure,
   type IntegrationManifest,
 } from "@integrations/sdk";
+import { Octokit } from "@octokit/rest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildIntegrationContext, redactedError } from "./context.js";
@@ -273,6 +274,117 @@ describe("retries", () => {
 
     expect(response.status).toBe(503);
     expect(server.hits).toEqual(["GET", "GET", "GET"]);
+  });
+});
+
+/**
+ * An answer whose body the server is still sending when the attempt's
+ * deadline passes. The status and headers arrived in time, so a policy that
+ * returned at the headers handed back a Response whose body then failed, and
+ * Octokit reads a body that failed as an empty one: a pull request's files
+ * page came back as 200 with nothing in it, and a review saw no files.
+ */
+function lateBody(options: { lateMs: number; onlyFirst?: boolean }) {
+  let answered = 0;
+  return (_req: http.IncomingMessage, res: http.ServerResponse) => {
+    answered += 1;
+    const late = options.onlyFirst !== true || answered === 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write('{"items":[1,');
+    const finish = () => {
+      if (!res.destroyed) res.end("2]}");
+    };
+    if (late) setTimeout(finish, options.lateMs);
+    else finish();
+  };
+}
+
+describe("an attempt ends when its body has been read", () => {
+  it("tries a read again when its body arrives after the deadline, and then fails loudly", async () => {
+    const server = await serve(lateBody({ lateMs: 600 }));
+
+    const error = await rejection(
+      context().http.fetch(server.url, { timeoutMs: 150 }).then((response) => response.text()),
+    );
+
+    expect(error.name).toBe("TimeoutError");
+    expect(server.hits).toEqual(["GET", "GET", "GET"]);
+  });
+
+  it("keeps the next attempt's body when it arrives in time", async () => {
+    const server = await serve(lateBody({ lateMs: 600, onlyFirst: true }));
+
+    const response = await context().http.fetch(server.url, { timeoutMs: 150 });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ items: [1, 2] });
+    expect(server.hits).toEqual(["GET", "GET"]);
+  });
+
+  it("never sends a write again because its answer was cut", async () => {
+    // The write landed; only its answer did not arrive whole.
+    const server = await serve(lateBody({ lateMs: 600 }));
+
+    const error = await rejection(
+      context().http.fetch(server.url, { method: "POST", timeoutMs: 150 }),
+    );
+
+    expect(error.name).toBe("TimeoutError");
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  it("reads every page Octokit asks for, a late one included", async () => {
+    let secondPage = 0;
+    const server = await serve((req, res) => {
+      const page = new URL(req.url ?? "/", "http://x").searchParams.get("page") ?? "1";
+      if (page === "1") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          link: `<${server.url}items?page=2>; rel="next"`,
+        });
+        res.end("[1,2]");
+        return;
+      }
+      secondPage += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("[3,");
+      if (secondPage === 1) setTimeout(() => !res.destroyed && res.end("4]"), 600);
+      else res.end("4]");
+    });
+    const ctx = context();
+    const octokit = new Octokit({
+      baseUrl: server.url.replace(/\/$/u, ""),
+      request: {
+        fetch: (input: string | URL | Request, init?: RequestInit) =>
+          ctx.http.fetch(input, { ...init, timeoutMs: 150 }),
+      },
+    });
+
+    await expect(octokit.paginate("GET /items")).resolves.toEqual([1, 2, 3, 4]);
+  });
+
+  it("hands a streamed body to its caller as it arrives, when the caller asks", async () => {
+    // A download too large to hold in memory opts out of the read above and
+    // brings its own deadline, which then covers its own reading of the body.
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await serve((_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.write("first ");
+      void released.then(() => res.end("last"));
+    });
+
+    const response = await Promise.race([
+      context().http.fetch(server.url, { streamBody: true, timeoutMs: 5_000 }),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("the answer waited for the whole body")), 1_000),
+      ),
+    ]);
+    release();
+
+    await expect(response.text()).resolves.toBe("first last");
   });
 });
 

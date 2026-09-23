@@ -623,11 +623,15 @@ widens to `string`.
   active ones yet.
 - **`ctx.http.fetch`**: standard `fetch` signature, so it can be handed to a
   provider SDK that accepts a custom fetch. Each attempt has a 30 second
-  timeout; a read (GET, HEAD, OPTIONS) is retried twice after a network error,
-  a 429 or a 5xx, honouring `Retry-After` up to 30 seconds; nothing else is
-  retried unless you pass `retries`, because repeating a write after an
-  ambiguous 5xx reports a conflict for work that landed. A non-2xx response is
-  returned, not thrown. It is bound to `ctx.signal`, and a `signal` you pass
+  timeout, and an attempt ends when the whole body has been read: the
+  response comes back with its body already read, so a body the provider did
+  not finish in time is a failed attempt, never a short success. Pass
+  `streamBody: true` with a `timeoutMs` of its own for a download too large
+  to hold in memory. A read (GET, HEAD, OPTIONS) is retried twice after a
+  network error, a 429 or a 5xx, honouring `Retry-After` up to 30 seconds;
+  nothing else is retried unless you pass `retries`, because repeating a
+  write after an ambiguous 5xx reports a conflict for work that landed. A
+  non-2xx response is returned, not thrown. It is bound to `ctx.signal`, and a `signal` you pass
   in its options is honoured alongside it, across retries and the waits
   between them. A thrown error keeps its `name` (`TimeoutError`,
   `AbortError`) and has this connection's secrets taken out of its message.

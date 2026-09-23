@@ -129,7 +129,9 @@ function redactFields(
  *   `fetch` takes a single signal, so one not joined here would be silently
  *   replaced and a deadline the adapter set would never operate.
  * - the attempt deadline, `timeoutMs`, owned by this policy. It ends one
- *   attempt, and a read may then try again.
+ *   attempt, and a read may then try again. An attempt includes reading the
+ *   body (unless the caller asked for `streamBody`), so the deadline never
+ *   passes on a Response already handed back.
  *
  * WHAT IT THROWS is never what `fetch` threw. Node's own messages carry
  * request material: an invalid header value is quoted whole (`Headers.append:
@@ -169,6 +171,7 @@ async function fetchWithRetries(
     timeoutMs,
     retries: requestedRetries,
     resendAfterRateLimit,
+    streamBody,
     signal: callerSignal,
     ...request
   } = init ?? {};
@@ -198,23 +201,36 @@ async function fetchWithRetries(
     ...(target instanceof Request ? [target.signal] : []),
   ]);
 
+  /** How long to wait before this answer is asked for again; null when it is
+   *  the answer the caller gets. */
+  const waitBeforeAnotherAttempt = (response: Response, attempt: number): number | null => {
+    const rateLimited = response.status === 429;
+    if (!rateLimited && response.status < 500) return null;
+    const answer =
+      rateLimited && response.headers.has("retry-after") ? "rate_limited_with_wait" : "failed";
+    if (attempt >= retriesAfter(answer)) return null;
+    return waitBeforeRetry(response, attempt);
+  };
+
   for (let attempt = 0; ; attempt += 1) {
     const thisAttempt = AbortSignal.any([wholeRequest, AbortSignal.timeout(attemptDeadlineMs)]);
     let response: Response;
+    let wait: number | null;
     try {
       response = await fetch(target, { ...request, signal: thisAttempt });
+      wait = waitBeforeAnotherAttempt(response, attempt);
+      // AN ATTEMPT ENDS WHEN ITS BODY HAS BEEN READ. `fetch` settles at the
+      // headers while this attempt's deadline keeps running, so a body still
+      // arriving when it passes fails in the caller's hands, after this loop
+      // could do anything about it; and Octokit reads a body that failed as an
+      // empty one, so a late page was a 200 with nothing in it. Read here, a
+      // cut body is an attempt that threw: a read goes again, a write does not.
+      if (wait === null) return streamBody === true ? response : await readWhole(response);
     } catch (error) {
       if (wholeRequest.aborted || attempt >= retriesAfter("threw")) throw error;
       await delay(backoffMs(attempt), wholeRequest);
       continue;
     }
-    const rateLimited = response.status === 429;
-    if (!rateLimited && response.status < 500) return response;
-    const answer =
-      rateLimited && response.headers.has("retry-after") ? "rate_limited_with_wait" : "failed";
-    if (attempt >= retriesAfter(answer)) return response;
-    const wait = waitBeforeRetry(response, attempt);
-    if (wait === null) return response;
     // Released before the next attempt rather than left to the collector: an
     // unread body holds its connection, and a provider having a bad minute is
     // exactly when the pool runs short.
@@ -225,6 +241,29 @@ async function fetchWithRetries(
     }
     await delay(wait, wholeRequest);
   }
+}
+
+/** Statuses whose answer has no body, which a `Response` refuses to carry one for. */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/**
+ * The same answer with its body already read: the status, the headers, the
+ * URL it came from (after redirects) and the bytes, so the caller can read it
+ * as it would have read the original.
+ */
+async function readWhole(response: Response): Promise<Response> {
+  const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
+  const whole = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  // A constructed Response has no URL of its own; Octokit reports this one.
+  Object.defineProperties(whole, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+  });
+  return whole;
 }
 
 /** A connection value as `ctx.http` checks it before sending. */
