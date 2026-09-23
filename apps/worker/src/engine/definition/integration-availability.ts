@@ -220,7 +220,8 @@ export function integrationUnusableReason(presence: IntegrationPresence): string
  * integrations declare it, rather than offered in the palette and missing in
  * the run. `messaging` came with S9, `vcs` with S10 and S11, `issue_tracker`
  * with S12. A capability that joins execution joins this set in the same
- * change.
+ * change. `memory` never reaches this check: it is answered first by the
+ * rule a run is answered by.
  */
 const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set([
   "issue_tracker",
@@ -287,6 +288,9 @@ function capabilityIssue(
   capability: string,
   integrations: DeploymentIntegrations,
 ): string | null {
+  // Memory is answered by its own rule, the one every run is answered by: a
+  // block has no key for it, so "offered" can only mean "runs here remember".
+  if (capability === MEMORY) return memoryIssue(integrations);
   const holders = integrations.providers.get(capability) ?? [];
   const label = capabilityLabel(capability);
   if (holders.length === 0) {
@@ -313,6 +317,96 @@ function capabilityIssue(
   // not want, and the sentence says that rather than sending an admin to a
   // control nobody has built.
   return `${active.providers.join(" and ")} both provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
+}
+
+/**
+ * Who answers memory on this deployment. THE ONE RULE, read by every run
+ * (`activeMemory` in `engine/support/memory-runtime.ts`) and by the palette (a
+ * block that requires `memory`), so an editor cannot offer a block on memory
+ * that the run it starts will not have.
+ *
+ * An integration counts once an admin has switched it on and configured it,
+ * working or not (`connected` or `failing`). Nothing counted means the
+ * built-in store: memory is the one capability core serves by itself, so that
+ * is the default deployment rather than a refusal. One counted replaces the
+ * built-in store, and when it is failing it is still the one chosen: serving
+ * the built-in store instead would split the deployment's memory across two
+ * stores with nobody told. Two counted is a choice nobody made, and a failing
+ * one counts toward it, so a refused key cannot quietly hand memory to the
+ * other engine. Disabled and never connected are the admin's choice to use
+ * the built-in store.
+ */
+export type MemoryProviderChoice =
+  | { readonly kind: "builtin" }
+  | { readonly kind: "integration"; readonly id: string }
+  | { readonly kind: "failing"; readonly id: string }
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] };
+
+export function memoryProviderChoice(
+  integrations: Iterable<{
+    readonly id: string;
+    readonly status: IntegrationStatus;
+    readonly capabilities: readonly string[];
+  }>,
+): MemoryProviderChoice {
+  const chosen = [...integrations].filter(
+    (integration) =>
+      integration.capabilities.includes(MEMORY) &&
+      (integration.status === "connected" || integration.status === "failing"),
+  );
+  const [only] = chosen;
+  if (!only) return { kind: "builtin" };
+  if (chosen.length > 1) return { kind: "ambiguous", ids: chosen.map((integration) => integration.id) };
+  return only.status === "connected"
+    ? { kind: "integration", id: only.id }
+    : { kind: "failing", id: only.id };
+}
+
+/**
+ * Why memory is not served on this deployment, in one wording for both
+ * audiences, told apart only by what follows: a run's refusal says what
+ * happened to that run ("memory was not used"), the palette, before any run
+ * exists, says what will happen ("runs go without memory"). The cause and the
+ * fix are the same words in both. Without a full stop, because a screen that
+ * quotes a refusal adds its own. `failure` is the connection's own message,
+ * when it has one.
+ */
+export function memoryNotServedReason(
+  problem:
+    | { readonly kind: "ambiguous"; readonly names: readonly string[] }
+    | { readonly kind: "failing"; readonly name: string; readonly failure?: string | undefined },
+  audience: "run" | "deployment",
+): string {
+  const consequence = audience === "run" ? "so memory was not used" : "so runs go without memory";
+  if (problem.kind === "ambiguous") {
+    const { names } = problem;
+    const listed =
+      names.length === 2
+        ? `${names[0]} and ${names[1]} both provide`
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
+    return `${listed} memory on this deployment and no active provider is selected, ${consequence}. Disable all but one of them on the Integrations page`;
+  }
+  const failure = problem.failure ? ` (${problem.failure})` : "";
+  return `${problem.name} is switched on for memory and its connection is failing${failure}, ${consequence}. Fix it on the Integrations page, or disable it there to use the built-in memory`;
+}
+
+/** The palette's sentence for the memory rule above, or null when runs here remember. */
+function memoryIssue(integrations: DeploymentIntegrations): string | null {
+  const choice = memoryProviderChoice(integrations.byId.values());
+  if (choice.kind === "builtin" || choice.kind === "integration") return null;
+  const nameOf = (id: string) => integrations.byId.get(id)?.name ?? id;
+  const reason =
+    choice.kind === "ambiguous"
+      ? memoryNotServedReason({ kind: "ambiguous", names: choice.ids.map(nameOf) }, "deployment")
+      : memoryNotServedReason(
+          {
+            kind: "failing",
+            name: nameOf(choice.id),
+            failure: integrations.byId.get(choice.id)?.failure?.message,
+          },
+          "deployment",
+        );
+  return `${reason}.`;
 }
 
 /** The capability as a sentence reads it, from the SDK's one table of labels. */

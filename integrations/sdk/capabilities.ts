@@ -173,5 +173,13 @@ export interface IntegrationCapabilityAccess {
    * offered at all; it simply has no key on the context, so there is nothing to
    * call. That is what `RequiredCapabilities` in `context.ts` already does for
    * `agent_tracing`, and a fixture pins it.
+   *
+   * The editor answers such a requirement the way a run is answered, so a
+   * block is offered exactly where its run will have the capability: `memory`
+   * whenever runs here remember (the built-in store on a deployment that
+   * connected no memory integration, or the one memory integration that is
+   * switched on and working), and not while that integration is failing or
+   * two are switched on; `agent_tracing` whenever at least one tracing
+   * integration is usable.
    */
 }

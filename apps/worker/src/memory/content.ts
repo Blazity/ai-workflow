@@ -1,5 +1,3 @@
-import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
-
 /**
  * Content rules shared by every agent memory document, whichever scope writes
  * it. Reachable from workflow scope, so no Node builtins at module scope:
@@ -11,33 +9,69 @@ const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
 
 /**
- * Order matters: Postgres text rejects NUL outright (the driver throws a raw
- * error), redaction changes the byte count, so the cap is measured last on the
- * bytes that actually get stored. Only configured secrets are rewritten, because
- * the agent reads this document back and everything else has to stay verbatim.
+ * What the built-in store writes for a document: NUL removed, because Postgres
+ * text rejects it outright (the driver throws a raw error), then capped on the
+ * bytes that actually get stored. Everything else stays verbatim, because the
+ * agent reads this document back.
  *
- * `secrets` is every secret the deployment knows (`knownSecretValues`), which
- * the writer resolves: a document is written from a step, and a token an admin
- * stored in the dashboard is not in the environment for this module to find.
+ * Secrets are not this module's: every observation reaches a provider with
+ * them already taken out, and the built-in store cleans what it already holds,
+ * both by the one rule in `memory/known-secrets.ts`.
  */
 export function prepareMemoryContent(
   raw: string,
   maxBytes: number,
   sourceTruncated: boolean,
-  secrets: readonly string[],
-): { content: string; truncated: boolean } | null {
-  let content: string;
-  try {
-    content = redactConfiguredSecretsInText(raw.replace(/\0/g, ""), secrets);
-  } catch {
-    return null;
-  }
+): { content: string; truncated: boolean } {
+  const content = raw.replace(/\0/g, "");
   if (!sourceTruncated && utf8Bytes(content) <= maxBytes) {
     return { content, truncated: false };
   }
   const suffix = `\n${TRUNCATION_MARKER}`;
   const head = sliceUtf8Head(content, maxBytes - utf8Bytes(suffix));
   return { content: `${head}${suffix}`, truncated: true };
+}
+
+/**
+ * The line core ends memory with when it had to cut it to fit: in words,
+ * because a model or an agent reads it, and on a line of its own, so it never
+ * reads as an entry. Text that ends without it is whole.
+ */
+export const MEMORY_CUT_MARKER = "[memory cut here: the rest was over the size limit and was left out]";
+
+/**
+ * Below this much room, a cut section would be little more than its heading
+ * and the marker, which costs a prompt tokens and tells the model nothing, so
+ * the text is left out instead and its caller counts that.
+ */
+const MIN_CUT_BYTES = 1024;
+
+/**
+ * `text` fitted to `maxBytes` of UTF-8, for memory core puts in front of a
+ * model or into an agent's workspace. THE ONE RULE for cutting memory, so a
+ * cut reads the same wherever it happens.
+ *
+ * Whole when it fits. Otherwise cut and ended with `MEMORY_CUT_MARKER` on its
+ * own line, the marker included in `maxBytes`: at the last line end inside the
+ * room, so no entry is split, unless that would keep less than half the room
+ * (one line longer than that, which is a single oversized entry or a document
+ * written as one paragraph), in which case inside that line at a character
+ * boundary. Null when it does not fit and less than `MIN_CUT_BYTES` of room
+ * is left.
+ */
+export function fitMemoryText(
+  text: string,
+  maxBytes: number,
+): { readonly text: string; readonly cut: boolean } | null {
+  if (utf8Bytes(text) <= maxBytes) return { text, cut: false };
+  if (maxBytes < MIN_CUT_BYTES) return null;
+  const suffix = `\n${MEMORY_CUT_MARKER}`;
+  const room = maxBytes - utf8Bytes(suffix);
+  const head = sliceUtf8Head(text, room);
+  const lineEnd = head.lastIndexOf("\n");
+  const kept =
+    lineEnd >= 0 && utf8Bytes(head.slice(0, lineEnd)) >= room / 2 ? head.slice(0, lineEnd) : head;
+  return { text: `${kept.trimEnd()}${suffix}`, cut: true };
 }
 
 export function utf8Bytes(value: string): number {

@@ -1016,6 +1016,9 @@ async function rememberRoutingAnswer(input: {
       "../../../db/repositories/memory.js"
     );
     const { prepareMemoryContent } = await import("../../../memory/content.js");
+    const { redactConfiguredSecretsInText } = await import(
+      "../../../run-observability/sanitizer.js"
+    );
     const {
       REPO_ROUTING_DOC_PATH,
       mergeRepoRoutingEntries,
@@ -1071,12 +1074,21 @@ async function rememberRoutingAnswer(input: {
       });
       // Already stored, so a repeated run does not bump the version for nothing.
       if (sameRoutingEntries(merged.entries, existing)) return;
-      const prepared = prepareMemoryContent(
-        renderRepoRoutingDocument({ owner, entries: merged.entries }),
-        MAX_ROUTING_DOC_BYTES,
-        false,
-        secrets,
-      );
+      // Redacted here rather than by the memory port, because this writer is not
+      // on the port (it writes the built-in store directly, the one exception
+      // the memory rule names). Every write through the port is cleaned in
+      // `withoutKnownSecrets` instead; the set of secrets is the same one.
+      let scrubbed: string | null;
+      try {
+        scrubbed = redactConfiguredSecretsInText(
+          renderRepoRoutingDocument({ owner, entries: merged.entries }),
+          secrets,
+        );
+      } catch {
+        scrubbed = null;
+      }
+      const prepared =
+        scrubbed === null ? null : prepareMemoryContent(scrubbed, MAX_ROUTING_DOC_BYTES, false);
       // Fail closed. Text that could not be scrubbed never reaches the store, and
       // a truncated routing document is worse than a missing one: the cut can land
       // mid-line and leave an entry naming a repository nobody chose.

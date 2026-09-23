@@ -21,14 +21,30 @@ import type {
 import type { IntegrationState } from "@shared/contracts";
 
 const resolveUsableIntegrations = vi.fn();
+/** Every secret this deployment knows, as the one source answers it. Nothing
+ *  by default; a case that is about secrets says which. */
+const knownSecretValues = vi.fn<() => Promise<string[]>>();
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  knownSecretValues,
   // The comparison itself is the real one: a mocked pin check would prove that
   // this module calls something, not that a moved provider is refused.
   checkIntegrationPin: (
     await importOriginal<typeof import("../../services/integrations/runtime.js")>()
   ).checkIntegrationPin,
 }));
+/** The real redaction unless a case breaks it on purpose. */
+const redaction = vi.hoisted(() => ({ broken: false }));
+vi.mock("../../run-observability/sanitizer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../run-observability/sanitizer.js")>();
+  return {
+    ...actual,
+    redactConfiguredSecretsInText: (text: string, secrets: readonly string[]) => {
+      if (redaction.broken) throw new Error("redaction failed");
+      return actual.redactConfiguredSecretsInText(text, secrets);
+    },
+  };
+});
 
 // The memory integrations this build ships. No real one exists yet, so each
 // case registers the fakes it is about, the way a generated registry would.
@@ -159,6 +175,8 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   registered.splice(0);
+  redaction.broken = false;
+  knownSecretValues.mockResolvedValue([]);
   builtinRecall.mockResolvedValue({ ok: true, held: false, entries: [], rendering: "" });
   builtinObserve.mockResolvedValue({
     ok: true,
@@ -256,6 +274,19 @@ describe("a deployment that connected one engine", () => {
     });
   });
 
+  it("asks an engine that answers unavailable once, and hands the refusal on", async () => {
+    // A write that timed out may have landed. Asking again could store it
+    // twice, so core never repeats an observe: the next run's write is the retry.
+    const refusal = { ok: false, code: "unavailable", detail: "the engine answered 503" } as const;
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => refusal);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual(refusal);
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
+
   it("offers no admin half when the engine ships none", async () => {
     // An engine that cannot enumerate what it holds is fully usable for runs.
     // `store: null` is what stops a screen showing its silence as an empty
@@ -263,6 +294,68 @@ describe("a deployment that connected one engine", () => {
     readable(provider("Recall Engine", { recall: vi.fn(), observe: vi.fn() }));
 
     expect((await activeMemory()).store).toBeNull();
+  });
+
+  it("holds a listing asked for one subject to that subject, and says an engine that ignored it is incomplete", async () => {
+    // A port-contract check core applies to every provider: an engine that
+    // ignores `subjectKey` answers the newest page of everything, so the
+    // asked subject's older documents are simply missing from it. Passing
+    // that on as complete would show a repository as having no memory.
+    const summary = (subjectKey: string, docPath: string) => ({
+      subjectKey,
+      docPath,
+      ticketKey: null,
+      bytes: 1,
+      sourceRunId: "",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const list = vi.fn(async () => ({
+      documents: [summary("ticket:jira:AIW-1", "notebook"), summary(SUBJECT.key, "facts")],
+      complete: true,
+    }));
+    readable(
+      provider("Recall Engine", {
+        recall: vi.fn(),
+        observe: vi.fn(),
+        store: { list, read: vi.fn(), forget: vi.fn() },
+      }),
+    );
+    const store = (await activeMemory()).store;
+
+    expect(await store?.list({ subjectKey: SUBJECT.key })).toEqual({
+      documents: [summary(SUBJECT.key, "facts")],
+      complete: false,
+    });
+    expect(list).toHaveBeenCalledWith({ subjectKey: SUBJECT.key });
+    // Without a subject filter the same answer is the provider's to give.
+    expect(await store?.list({})).toMatchObject({ complete: true });
+  });
+
+  it("passes on a listing that honoured the subject filter as the engine gave it", async () => {
+    const listing = {
+      documents: [
+        {
+          subjectKey: SUBJECT.key,
+          docPath: "facts",
+          ticketKey: null,
+          bytes: 1,
+          sourceRunId: "",
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        },
+      ],
+      complete: true,
+    };
+    readable(
+      provider("Recall Engine", {
+        recall: vi.fn(),
+        observe: vi.fn(),
+        store: { list: async () => listing, read: vi.fn(), forget: vi.fn() },
+      }),
+    );
+
+    expect(await (await activeMemory()).store?.list({ subjectKey: SUBJECT.key })).toEqual(listing);
   });
 
   it("refuses when the engine declares memory and ships no code for it", async () => {
@@ -616,5 +709,191 @@ describe("what memory copies out of a provider", () => {
     await expect((await activeMemory()).store?.list({})).rejects.toThrow(
       "listing refused for [redacted]",
     );
+  });
+});
+
+describe("the secrets memory text carries in and out of this deployment", () => {
+  // A token an admin pasted into the dashboard is decrypted from the database
+  // and never reaches the environment, so an engine's own code cannot know it.
+  // Core takes it out before the engine sees the text, for every provider.
+  const STORED_TOKEN = "stored-dashboard-token-5e1f0c";
+  const written = { ok: true, stored: true, removed: 0, dropped: 0, remaining: 1 } as const;
+
+  it("hands a connected engine every text with this deployment's secrets taken out", async () => {
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+    const memory = await activeMemory();
+
+    await memory.observe({
+      ...OBSERVE,
+      observation: {
+        kind: "items",
+        learned: [`Deploy with ${STORED_TOKEN} in the header`],
+        refuted: [`The token ${STORED_TOKEN} is read from .env`],
+        derived: true,
+      },
+    });
+    await memory.observe({
+      ...OBSERVE,
+      scope: { kind: "notebook", name: "AIW-1" },
+      observation: { kind: "document", text: `curl -H "x-key: ${STORED_TOKEN}"`, sourceTruncated: true },
+    });
+
+    expect(JSON.stringify(observe.mock.calls)).not.toContain(STORED_TOKEN);
+    expect(observe.mock.calls.map(([request]) => request.observation)).toEqual([
+      {
+        kind: "items",
+        learned: ["Deploy with [REDACTED:configured_secret] in the header"],
+        refuted: ["The token [REDACTED:configured_secret] is read from .env"],
+        derived: true,
+      },
+      {
+        kind: "document",
+        text: 'curl -H "x-key: [REDACTED:configured_secret]"',
+        sourceTruncated: true,
+      },
+    ]);
+  });
+
+  it("leaves core's addresses as they were sent, even when a secret is spelled in them", async () => {
+    // Addresses are core's, compared exactly: rewriting one would orphan what
+    // is stored under it. A known value inside one is the case that tells
+    // "left alone" from "happened not to match".
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+    const addressed = {
+      subject: { key: `ticket:jira:${STORED_TOKEN}`, label: STORED_TOKEN },
+      scope: { kind: "notebook", name: STORED_TOKEN },
+      runId: `run_${STORED_TOKEN}`,
+      ticketKey: STORED_TOKEN,
+    } as const;
+
+    await (await activeMemory()).observe({
+      ...addressed,
+      observation: { kind: "document", text: `uses ${STORED_TOKEN}` },
+    });
+
+    expect(observe.mock.calls[0]?.[0]).toEqual({
+      ...addressed,
+      observation: { kind: "document", text: "uses [REDACTED:configured_secret]" },
+    });
+  });
+
+  it("takes a secret out of everything a recall hands back, rendering and entries", async () => {
+    // An engine can hold a value it stored before that value was a known
+    // secret. The rendering reaches a prompt and a workspace, the entries reach
+    // the model that distils; a retraction still works, because the quote is
+    // cleaned again on its way back.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const recall = vi.fn<MemoryAdapter["recall"]>(async () => ({
+      ok: true,
+      held: true,
+      entries: [{ text: `Deploy with ${STORED_TOKEN} in the header` }],
+      rendering: `- Deploy with ${STORED_TOKEN} in the header`,
+    }));
+    readable(provider("Recall Engine", { recall, observe: vi.fn() }));
+
+    const recalled = await (await activeMemory()).recall(RECALL);
+
+    expect(JSON.stringify(recalled)).not.toContain(STORED_TOKEN);
+    expect(recalled).toEqual({
+      ok: true,
+      held: true,
+      entries: [{ text: "Deploy with [REDACTED:configured_secret] in the header" }],
+      rendering: "- Deploy with [REDACTED:configured_secret] in the header",
+    });
+  });
+
+  it("uses nothing it recalled when the secrets to take out cannot be read", async () => {
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    readable(
+      provider("Recall Engine", {
+        recall: async () => ({ ok: true, held: true, entries: [], rendering: "- a fact" }),
+        observe: vi.fn(),
+      }),
+    );
+
+    expect(await (await activeMemory()).recall(RECALL)).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: "this deployment's secrets could not be read, so memory was not read",
+    });
+  });
+
+  it("reads the secret set once for every call a step makes", async () => {
+    // One resolution serves one step. Reading the connection tables per
+    // document would cost a prompt with eight repositories seventeen reads.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    readable(
+      provider("Recall Engine", {
+        recall: async () => ({ ok: true, held: true, entries: [], rendering: "- a fact" }),
+        observe: async () => written,
+      }),
+    );
+    const memory = await activeMemory();
+
+    await memory.recall(RECALL);
+    await memory.recall(RECALL);
+    await memory.observe(OBSERVE);
+
+    expect(knownSecretValues).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans what the built-in store is given in the same place", async () => {
+    // One home for the rule: the built-in store no longer scrubs for itself.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    readable();
+
+    await (await activeMemory()).observe({
+      ...OBSERVE,
+      observation: { kind: "items", learned: [`uses ${STORED_TOKEN}`], refuted: [] },
+    });
+
+    expect(builtinObserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        observation: { kind: "items", learned: ["uses [REDACTED:configured_secret]"], refuted: [] },
+      }),
+    );
+  });
+
+  it("sends nothing when the secrets to take out cannot be read", async () => {
+    // Fail closed. A smaller set here is a stored secret sent to a third party
+    // in the clear, and nobody would ever see that it happened.
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: expect.stringContaining("could not be read"),
+    });
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing it could not clean", async () => {
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    redaction.broken = true;
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual({
+      ok: false,
+      code: "rejected",
+      detail: expect.stringContaining("could not be scrubbed"),
+    });
+    expect(observe).not.toHaveBeenCalled();
   });
 });

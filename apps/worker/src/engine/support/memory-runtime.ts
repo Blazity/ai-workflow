@@ -25,10 +25,17 @@
  */
 import type {
   IntegrationConnectionPin,
-  IntegrationState,
   IntegrationUnavailableReason,
 } from "@shared/contracts";
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
+import {
+  KNOWN_SECRETS_UNREADABLE,
+  knownSecretsReader,
+  takeOutKnownSecrets,
+  unscrubbedWrite,
+  type KnownSecretCleaner,
+  type KnownSecretsReader,
+} from "../../memory/known-secrets.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import type {
   IntegrationManifest,
@@ -37,6 +44,7 @@ import type {
   MemoryRecall,
   MemoryRecallRequest,
   MemoryStoreAdapter,
+  MemoryStoreListing,
   MemoryObserveRequest,
   MemoryWrite,
 } from "@integrations/sdk";
@@ -172,20 +180,28 @@ export async function activeMemory(
         providers: [],
       });
     }
-    // Every memory integration an admin has switched on and configured,
-    // whether or not it works right now. Read off the resolver's own states,
-    // never derived here a second time.
+    // Who answers memory here is one rule, shared with the palette
+    // (`memoryProviderChoice`), read off the resolver's own states and never
+    // derived here a second time.
     const { integrationManifests } = await import("@integrations/registry");
-    const chosen = integrationManifests.filter(
-      (manifest) => servesMemory(manifest) && isChosen(resolved.states.get(manifest.id)),
+    const { memoryNotServedReason, memoryProviderChoice } = await import(
+      "../definition/integration-availability.js"
     );
-    if (chosen.length === 0) {
+    const choice = memoryProviderChoice(
+      integrationManifests.map((manifest) => ({
+        id: manifest.id,
+        capabilities: manifest.capabilities,
+        status: resolved.states.get(manifest.id)?.status ?? "not_connected",
+      })),
+    );
+    if (choice.kind === "builtin") {
       // The default, and the common case: nothing is connected (or what is
       // connected is disabled, which is the admin's choice), so the built-in
       // store serves. This is not a refusal and never reports one.
       return await builtinActiveMemory();
     }
-    if (chosen.length > 1) {
+    const manifestOf = (id: string) => integrationManifests.find((manifest) => manifest.id === id);
+    if (choice.kind === "ambiguous") {
       // Never a silent pick of the first. A run that wrote into one of two
       // connected engines because it happened to be first in the registry is
       // the failure an admin cannot explain afterwards, and it is the same
@@ -194,12 +210,18 @@ export async function activeMemory(
       // silent pick, and it moves the day the other one recovers.
       return refusing({
         code: "ambiguous",
-        detail: ambiguousReason(chosen),
-        providers: chosen.map((manifest) => manifest.id),
+        detail: memoryNotServedReason(
+          { kind: "ambiguous", names: choice.ids.map((id) => manifestOf(id)?.name ?? id) },
+          "run",
+        ),
+        providers: choice.ids,
       });
     }
-    const [selected] = chosen;
-    const only = resolved.usable.find((entry) => entry.manifest.id === selected?.id);
+    const selected = manifestOf(choice.id);
+    const only =
+      choice.kind === "integration"
+        ? resolved.usable.find((entry) => entry.manifest.id === choice.id)
+        : undefined;
     if (!selected || !only) {
       // Switched on and not working. NOT a fall back to the built-in store: the
       // admin believes this engine is serving, and writing into ours instead
@@ -207,7 +229,14 @@ export async function activeMemory(
       // told. The run goes on without memory and says why.
       return refusing({
         code: "unavailable",
-        detail: failingReason(selected, selected && resolved.states.get(selected.id)),
+        detail: memoryNotServedReason(
+          {
+            kind: "failing",
+            name: selected?.name ?? "The memory integration",
+            failure: selected ? resolved.states.get(selected.id)?.failure?.message : undefined,
+          },
+          "run",
+        ),
         providers: selected ? [selected.id] : [],
       });
     }
@@ -244,6 +273,7 @@ export async function activeMemory(
     return wrap(only.manifest.id, only.manifest.name, adapter, {
       redaction: only.redaction,
       budget: memoryBudget(only.manifest.name, lifetime, MEMORY_CALL_BUDGET_MS),
+      knownSecrets: knownSecretsReader(),
     });
   } catch (error) {
     return refusing({
@@ -261,42 +291,27 @@ async function builtinActiveMemory(): Promise<ActiveMemory> {
     await import("../../memory/builtin/adapter.js");
   // No budget and nothing to redact: the built-in store is core's own
   // database, bounded where every other query is, and holds no connection.
-  return wrap(BUILTIN_MEMORY_PROVIDER_ID, BUILTIN_MEMORY_PROVIDER_NAME, builtinMemoryAdapter(), {
-    redaction: NOTHING_TO_REDACT,
-    budget: UNBOUNDED,
-  });
+  // One reader of the secret set for the wrapper and the store together, so
+  // cleaning what the store holds costs the step no second read.
+  const knownSecrets = knownSecretsReader();
+  return wrap(
+    BUILTIN_MEMORY_PROVIDER_ID,
+    BUILTIN_MEMORY_PROVIDER_NAME,
+    builtinMemoryAdapter(knownSecrets),
+    { redaction: NOTHING_TO_REDACT, budget: UNBOUNDED, knownSecrets },
+  );
 }
 
 function servesMemory(manifest: IntegrationManifest): boolean {
   return manifest.capabilities.includes("memory");
 }
 
-/** Enabled, and configured: connected, or configured and failing. Not a
- *  disabled one and not one nobody ever connected. */
-function isChosen(state: IntegrationState | undefined): boolean {
-  return state?.status === "connected" || state?.status === "failing";
-}
-
-function failingReason(
-  manifest: IntegrationManifest | undefined,
-  state: IntegrationState | undefined,
-): string {
-  const failure = state?.failure ? ` (${state.failure.message})` : "";
-  return `${manifest?.name ?? "The memory integration"} is switched on for memory and its connection is failing${failure}, so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory`;
-}
-
-function ambiguousReason(chosen: readonly IntegrationManifest[]): string {
-  const names = chosen.map((manifest) => manifest.name);
-  const listed =
-    names.length === 2
-      ? `${names[0]} and ${names[1]} both provide`
-      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
-  return `${listed} memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page`;
-}
-
 /**
  * What core puts around a provider: the redaction for the words a refusal
- * RETURNS, and the budget its calls spend. What a provider throws needs no
+ * RETURNS, and the budget its calls spend. (The secrets core takes out of the
+ * text it sends and of the rendering it gets back are the same for every
+ * provider and need no guard of their own: `withoutKnownSecrets` on every
+ * observation, `recallWithoutKnownSecrets` on every recall.) What a provider throws needs no
  * redaction here: it comes from the runtime `usable.ts` built, which already
  * took the connection's secrets out of every error its adapters (and the
  * `store` inside them) throw.
@@ -304,6 +319,8 @@ function ambiguousReason(chosen: readonly IntegrationManifest[]): string {
 interface ProviderGuard {
   readonly redaction: Pick<IntegrationRedaction, "text">;
   readonly budget: MemoryBudget;
+  /** The step's one reader of the secret set (`knownSecretsReader`). */
+  readonly knownSecrets: KnownSecretsReader;
 }
 
 /** The built-in store's: it holds no connection, so it has no secret. */
@@ -334,7 +351,7 @@ function wrap(
   id: string,
   name: string,
   adapter: MemoryAdapter,
-  { redaction, budget }: ProviderGuard,
+  { redaction, budget, knownSecrets }: ProviderGuard,
 ): ActiveMemory {
   const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
   const spent = () => ({ ok: false, code: "unavailable", detail: budget.spentReason }) as const;
@@ -342,12 +359,13 @@ function wrap(
     id,
     name,
     refusal: null,
-    store: adapter.store ? guardedStore(adapter.store, budget) : null,
+    store: adapter.store ? guardedStore(id, adapter.store, budget) : null,
     async recall(request) {
       try {
         const answer = await budget.spend(() => adapter.recall(request));
         if (answer === SPENT) return spent();
-        return answer.ok ? answer : { ...answer, detail: redaction.text(answer.detail) };
+        if (!answer.ok) return { ...answer, detail: redaction.text(answer.detail) };
+        return await recallWithoutKnownSecrets(answer, knownSecrets());
       } catch (error) {
         return {
           ok: false,
@@ -357,8 +375,10 @@ function wrap(
       }
     },
     async observe(request) {
+      const cleaned = await withoutKnownSecrets(request, knownSecrets());
+      if (!cleaned.ok) return cleaned.refusal;
       try {
-        const answer = await budget.spend(() => adapter.observe(request));
+        const answer = await budget.spend(() => adapter.observe(cleaned.request));
         if (answer === SPENT) return spent();
         return answer.ok ? answer : { ...answer, detail: redaction.text(answer.detail) };
       } catch (error) {
@@ -372,17 +392,140 @@ function wrap(
   };
 }
 
-function guardedStore(store: MemoryStoreAdapter, budget: MemoryBudget): MemoryStoreAdapter {
+/**
+ * The observation with every secret this deployment knows taken out of its
+ * text, before any provider sees it: every observation, every provider, the
+ * built-in store included. The rule, its secret source and its refusals live
+ * in `memory/known-secrets.ts`, which says why a provider cannot do this
+ * itself.
+ *
+ * Only the text is cleaned: `learned`, `refuted` and a document's `text`.
+ * `refuted` is cleaned too because it is matched against what was stored, and
+ * what was stored went through here. The subject key, the notebook name, the
+ * run id and the ticket key are core's addresses, compared exactly; rewriting
+ * one would orphan everything stored under it.
+ *
+ * Nothing is sent when the secrets cannot be read or the text cannot be
+ * cleaned: the refusal is the answer.
+ */
+async function withoutKnownSecrets(
+  request: MemoryObserveRequest,
+  cleaner: Promise<KnownSecretCleaner>,
+): Promise<
+  | { readonly ok: true; readonly request: MemoryObserveRequest }
+  | { readonly ok: false; readonly refusal: MemoryWrite }
+> {
+  const cleaned = await takeOutKnownSecrets(
+    (clean): MemoryObserveRequest => {
+      const { observation } = request;
+      return {
+        ...request,
+        observation:
+          observation.kind === "items"
+            ? {
+                ...observation,
+                learned: observation.learned.map(clean),
+                refuted: observation.refuted.map(clean),
+              }
+            : { ...observation, text: clean(observation.text) },
+      };
+    },
+    cleaner,
+  );
+  return cleaned.ok
+    ? { ok: true, request: cleaned.value }
+    : { ok: false, refusal: unscrubbedWrite(cleaned.why) };
+}
+
+/**
+ * What a recall hands back, `rendering` and every entry's `text`, with every
+ * secret this deployment knows taken out before it reaches a prompt, a
+ * workspace or the model that distils. A provider can hold a value it stored
+ * before that value became a known secret, and a hosted engine's stored text
+ * is out of core's reach, so this is the last place it can be stopped.
+ *
+ * Entries are cleaned as well, and that costs a retraction nothing: a run
+ * quotes the cleaned entry back, core cleans the quote again on its way to
+ * the provider (`withoutKnownSecrets`), and the built-in store matches it
+ * against its own items cleaned the same way. An engine that matches a quote
+ * against raw stored text misses it whether the quote was cleaned here or on
+ * the way back.
+ *
+ * FAILS CLOSED: a set that cannot be read, or text the redaction cannot
+ * process, is `unavailable`, which every caller of `recall` already answers by
+ * going on without that memory.
+ */
+async function recallWithoutKnownSecrets(
+  answer: Extract<MemoryRecall, { ok: true }>,
+  cleaner: Promise<KnownSecretCleaner>,
+): Promise<MemoryRecall> {
+  const cleaned = await takeOutKnownSecrets(
+    (clean) => ({
+      rendering: clean(answer.rendering),
+      entries: answer.entries.map((entry) => ({ ...entry, text: clean(entry.text) })),
+    }),
+    cleaner,
+  );
+  if (!cleaned.ok) {
+    return {
+      ok: false,
+      code: "unavailable",
+      detail:
+        cleaned.why === "unreadable"
+          ? `${KNOWN_SECRETS_UNREADABLE}, so memory was not read`
+          : "the recalled text could not be scrubbed of this deployment's secrets, so it was not used",
+    };
+  }
+  return { ...answer, ...cleaned.value };
+}
+
+function guardedStore(
+  id: string,
+  store: MemoryStoreAdapter,
+  budget: MemoryBudget,
+): MemoryStoreAdapter {
   const guarded = async <T>(call: () => Promise<T>): Promise<T> => {
     const answer = await budget.spend(call);
     if (answer === SPENT) throw new Error(budget.spentReason);
     return answer;
   };
   return {
-    list: (options) => guarded(() => store.list(options)),
+    async list(options) {
+      const listing = await guarded(() => store.list(options));
+      return options.subjectKey === undefined
+        ? listing
+        : withinSubject(id, options.subjectKey, listing);
+    },
     read: (ref) => guarded(() => store.read(ref)),
     forget: (ref) => guarded(() => store.forget(ref)),
   };
+}
+
+/**
+ * A listing asked for one subject, held to it. A provider that ignored the
+ * filter answered some other slice of what it holds (typically the newest
+ * page of everything), so the documents of the asked subject it left out are
+ * unknown: what is kept is cut to that subject and reported incomplete, and
+ * the provider is named in the log, because the screen can only say "this may
+ * not be everything" and the fix is in the adapter.
+ */
+async function withinSubject(
+  id: string,
+  subjectKey: string,
+  listing: MemoryStoreListing,
+): Promise<MemoryStoreListing> {
+  const kept = listing.documents.filter((document) => document.subjectKey === subjectKey);
+  if (kept.length === listing.documents.length) return listing;
+  try {
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      { provider: id, subjectKey, returned: listing.documents.length, kept: kept.length },
+      "memory_list_subject_filter_ignored",
+    );
+  } catch {
+    // The listing is still answered; the log is the only thing lost.
+  }
+  return { documents: kept, complete: false };
 }
 
 /** What a call answers instead when the budget ran out before it did. */

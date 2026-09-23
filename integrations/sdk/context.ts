@@ -220,6 +220,10 @@ export interface IntegrationRequestInit extends RequestInit {
    * and 0 for a write. Set it on a write only where the provider makes the
    * request idempotent (an idempotency key, a conditional header); set it to
    * 0 for a request that must be sent exactly once whatever comes back.
+   *
+   * "Read" and "write" are what the call does, not its method: core can only
+   * see the method, so a read the provider spells as a POST (a search, a
+   * filtered listing) is sent once unless you pass `retries`, and it may.
    */
   retries?: number;
   /**
