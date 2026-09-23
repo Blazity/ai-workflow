@@ -149,6 +149,15 @@ export interface DispatchTriggerDeps {
    * dispatch reads it itself.
    */
   readBotLogin?: typeof readVcsBotLogin;
+  /**
+   * The caller's deadline, when it has one: the webhook route's request. The
+   * pull request read below happens before the trigger is saved, so a
+   * provider that hangs past the invocation would leave nothing behind, not
+   * even a diagnostic; bounded by this it answers unreachable instead, which
+   * the route turns into a retryable 503. Absent (the drain), each request is
+   * bounded by its attempt deadline only.
+   */
+  lifetime?: AbortSignal;
 }
 
 async function readEnabledDefinition(db: Db | undefined, triggerType: WorkflowBlockType) {
@@ -1224,7 +1233,10 @@ async function readCurrentPullRequest(
       };
       return { status: "ok", current, handles: await vcsHandleIdentity(pr.provider) };
     }
-    return { status: "ok", ...(await readProviderCurrentPullRequest(event)) };
+    return {
+      status: "ok",
+      ...(await readProviderCurrentPullRequest(event, deps.lifetime ? { lifetime: deps.lifetime } : {})),
+    };
   } catch (error) {
     // The provider says this connection can never read this pull request (see
     // `PullRequestUnreadableError`): answered as an ignore the provider's

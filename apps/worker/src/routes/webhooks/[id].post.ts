@@ -42,9 +42,11 @@ export default defineEventHandler(async (event) => {
 
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
   // A request has one deadline for everything it does with the contexts, so
-  // it is their lifetime.
+  // it is their lifetime: this integration's, and the one dispatch resolves
+  // to read the pull request.
+  const lifetime = AbortSignal.timeout(WEBHOOK_TIMEOUT_MS);
   const resolved = await resolveUsableIntegrations({
-    lifetime: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+    lifetime,
     filter: (candidate) => candidate.id === id,
   });
   if (!resolved.readable) {
@@ -170,7 +172,7 @@ export default defineEventHandler(async (event) => {
     // failed to act on never reads as accepted.
     let verdict: TriggerDeliveryVerdict;
     try {
-      verdict = await actOnTriggerEvents(event, id, reception, readBotLogin);
+      verdict = await actOnTriggerEvents(event, id, reception, readBotLogin, lifetime);
     } catch (error) {
       observeWebhook(id, "rejected", "handler_failed");
       throw error;
@@ -270,6 +272,8 @@ async function actOnTriggerEvents(
     { kind: "trigger_events" }
   >,
   readBotLogin: VcsBotLoginReader,
+  /** The request's deadline, which dispatch's pull request read ends with. */
+  lifetime: AbortSignal,
 ): Promise<TriggerDeliveryVerdict> {
   const { getRequestSettingsSnapshot, maxConcurrentAgents } = await import(
     "../../services/settings/index.js"
@@ -348,6 +352,7 @@ async function actOnTriggerEvents(
       maxConcurrentAgents: maxConcurrentAgents(settings),
       repositoryCatalog,
       readBotLogin,
+      lifetime,
     });
     if (result.result === "error") {
       return { kind: "retry", reason: "trigger_error", diagnosticId: result.diagnosticId };

@@ -35,13 +35,17 @@ const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
   botLoginReadable: true,
+  /** The lifetime the route resolved its integration with. */
+  resolvedLifetime: undefined as AbortSignal | undefined,
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
-  resolveUsableIntegrations: async () =>
-    state.readable
+  resolveUsableIntegrations: async (input?: { lifetime?: AbortSignal }) => {
+    state.resolvedLifetime = input?.lifetime;
+    return state.readable
       ? { readable: true, usable: state.usable, states: state.states }
-      : { readable: false, reason: "the settings read timed out" },
+      : { readable: false, reason: "the settings read timed out" };
+  },
 }));
 
 const executeRunControlCommand = vi.fn();
@@ -981,6 +985,23 @@ describe("POST /webhooks/:id", () => {
       // yet, so the post-PR gate does not start beside it.
       expect(await response.json()).toEqual({ status: "ignored", reason: "at_capacity" });
       expect(state.legacyGate).not.toHaveBeenCalled();
+    });
+
+    it("reads the pull request inside the request's own deadline, and answers 5xx with a diagnostic when it passes", async () => {
+      // Dispatch reads the pull request before the trigger is saved. Bounded
+      // only per attempt, a provider that kept failing slowly outlived the
+      // invocation and left no answer and no diagnostic; bounded by the
+      // request, the read gives up in time for this answer.
+      state.dispatch.mockResolvedValue({ result: "error", diagnosticId: "diag-deadline" });
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      const [, deps] = state.dispatch.mock.calls.at(-1) as [unknown, { lifetime?: AbortSignal }];
+      expect(deps.lifetime).toBeInstanceOf(AbortSignal);
+      expect(deps.lifetime).toBe(state.resolvedLifetime);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ data: { diagnosticId: "diag-deadline" } });
     });
 
     it("still answers 5xx when the dispatch itself failed", async () => {

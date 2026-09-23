@@ -143,14 +143,16 @@ export async function vcsHandleIdentity(provider: string): Promise<VcsHandleIden
 }
 
 /**
- * Resolves with no lifetime, as every resolution in this file does, on
- * purpose: a VCS adapter is held for the work it was resolved for (a listing
- * across pages, a skill import, a repository's whole prepare), every request
- * it makes is already bounded on its own, and a timer started here would
- * expire the context under whoever still holds it.
+ * Starts no clock of its own, on purpose: a VCS adapter is held for the work
+ * it was resolved for (a listing across pages, a skill import, a repository's
+ * whole prepare), every request it makes is already bounded on its own, and a
+ * timer started here would expire the context under whoever still holds it.
+ * A caller whose work has a real deadline (a webhook request) passes that
+ * deadline as the `lifetime`, and every request the adapter makes ends with it.
  */
 async function resolveIntegrationAdapter(
   target: RepositoryVcsTarget,
+  lifetime?: AbortSignal,
 ): Promise<VcsIntegrationAdapter> {
   const manifest = integrationManifest(target.provider);
   if (!manifest?.capabilities.includes("vcs")) {
@@ -163,6 +165,7 @@ async function resolveIntegrationAdapter(
     "../../services/integrations/runtime.js"
   );
   const resolved = await resolveUsableIntegrations({
+    ...(lifetime ? { lifetime } : {}),
     filter: (candidate) => candidate.id === target.provider,
   });
   if (!resolved.readable) {
@@ -237,9 +240,18 @@ function lazyAdapter(resolve: () => Promise<VcsIntegrationAdapter>): DeferredVcs
   });
 }
 
-export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): RepositoryVcsRuntime {
+/** What a caller may say about the adapter's life beyond the repository. */
+export interface RepositoryVcsOptions {
+  /** The caller's own deadline, when its work has one; see `resolveIntegrationAdapter`. */
+  readonly lifetime?: AbortSignal;
+}
+
+export function createRepositoryVcsRuntime(
+  target: RepositoryVcsTarget,
+  options: RepositoryVcsOptions = {},
+): RepositoryVcsRuntime {
   let concrete: Promise<VcsIntegrationAdapter> | undefined;
-  const resolve = () => (concrete ??= resolveIntegrationAdapter(target));
+  const resolve = () => (concrete ??= resolveIntegrationAdapter(target, options.lifetime));
   return {
     provider: target.provider,
     repoPath: target.repoPath,
@@ -263,8 +275,11 @@ export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): Reposit
   };
 }
 
-export function createRepositoryVCS(target: RepositoryVcsTarget): DeferredVcsAdapter {
-  return createRepositoryVcsRuntime(target).vcs;
+export function createRepositoryVCS(
+  target: RepositoryVcsTarget,
+  options: RepositoryVcsOptions = {},
+): DeferredVcsAdapter {
+  return createRepositoryVcsRuntime(target, options).vcs;
 }
 
 /**

@@ -1,22 +1,27 @@
 import type { VcsHandleIdentity } from "@integrations/sdk";
 import type { TriggerEvent } from "@shared/contracts";
 import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
-import { createRepositoryVCS, vcsHandleIdentity } from "./vcs-runtime.js";
+import { createRepositoryVCS, type RepositoryVcsOptions, vcsHandleIdentity } from "./vcs-runtime.js";
 
 /**
  * What the provider says about the pull request now, and how its handles
  * compare. The head needs this repository's connection; the comparison needs
- * none and comes from the provider itself.
+ * none and comes from the provider itself. A caller with a deadline passes it
+ * as the `lifetime`, and the read ends with it.
  */
 export async function readProviderCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
+  options: RepositoryVcsOptions = {},
 ): Promise<{ current: PullRequestHead; handles: VcsHandleIdentity }> {
   const { pr } = event;
-  const vcs = createRepositoryVCS({
-    provider: pr.provider,
-    repoPath: pr.repoPath,
-    baseBranch: pr.baseRef,
-  });
+  const vcs = createRepositoryVCS(
+    {
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      baseBranch: pr.baseRef,
+    },
+    options,
+  );
   const [current, handles] = await Promise.all([
     vcs.getPRHead(pr.prNumber),
     vcsHandleIdentity(pr.provider),
