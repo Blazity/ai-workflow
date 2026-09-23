@@ -1101,8 +1101,8 @@ test("every arrival reads differently beside the name", () => {
     "configured here, tested": "Connected |  | From values stored here",
     "changed since its last test": "Connected | Changed since its test | From values stored here",
     "never set up": "Not set up |  | ",
-    "half set up in the environment": "Not connected | Incomplete | Environment incomplete",
-    "first save failed its test": "Not connected | Saved values failed their test | Stored values not in use yet",
+    "half set up in the environment": "Not connected | Incomplete | ",
+    "first save failed its test": "Not connected | Saved values failed their test | ",
     "switched off": "Disabled |  | From values stored here",
     "failing its test": "Failing |  | From values stored here",
   });

@@ -822,6 +822,7 @@ export function ConnectionScreen({
               const control =
                 field.format === "multiline" ? (
                   <Textarea
+                    required={!field.optional}
                     value={values[field.key] ?? ""}
                     disabled={!writable || busy !== null || secretLocked || clearing}
                     monospace
@@ -829,6 +830,7 @@ export function ConnectionScreen({
                   />
                 ) : (
                   <Input
+                    required={!field.optional}
                     type={field.secret ? "password" : field.format === "url" ? "url" : "text"}
                     inputMode={field.format === "integer" ? "numeric" : undefined}
                     autoComplete={field.secret ? "new-password" : "off"}
@@ -849,13 +851,20 @@ export function ConnectionScreen({
                     label={
                       <>
                         {field.label}
+                        {/* The marker Field draws for `required`, drawn here so
+                            it stays beside the name rather than after the tag;
+                            the control still carries `required`. */}
+                        {!field.optional && (
+                          <span aria-hidden="true" className="ml-1 text-fail">
+                            *
+                          </span>
+                        )}
                         {/* In the stored-values form below an environment in
                             use, the environment's tag would describe the other
                             source: the form says what is stored. */}
                         {!fromEnvironment && <FieldSourceTag source={source} />}
                       </>
                     }
-                    required={!field.optional}
                     hint={[
                       fieldHint(field, state, clearing),
                       fromEnvironment ? "" : source.where,

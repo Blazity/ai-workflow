@@ -65,7 +65,7 @@ export function statusChip(state: IntegrationState): IntegrationStatusChip {
 export interface IntegrationBadges {
   readonly status: IntegrationStatusChip;
   readonly qualifier: { readonly label: string; readonly tone: "warn" | "failed" } | null;
-  /** Where the values in use come from, or null when nothing configures it. */
+  /** Where the values runs read come from, or null when no source is in use. */
   readonly source: string | null;
 }
 
@@ -96,13 +96,17 @@ function qualifierOf(integration: IntegrationDto): IntegrationBadges["qualifier"
   return null;
 }
 
+/**
+ * Only a source runs actually read gets the badge. Half an environment or
+ * stored values that never passed a test are the qualifier's to flag, and the
+ * sentence under the name says which variable or value is missing; a second
+ * badge saying "incomplete" beside "Incomplete" read as two problems.
+ */
 function sourceBadge(integration: IntegrationDto): string | null {
   const state = integration.state;
   if (sourceInUse(state, "environment")) return "From environment variables";
   if (sourceInUse(state, "stored")) return "From values stored here";
-  if (neverConfigured(integration)) return null;
-  if (state.source === "environment") return "Environment incomplete";
-  return "Stored values not in use yet";
+  return null;
 }
 
 /** Nothing anywhere configures it: no variable set, no value stored. */
