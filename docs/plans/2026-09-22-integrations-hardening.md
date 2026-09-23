@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Integrations hardening: what the branch review found and what we decided
 
@@ -192,6 +192,72 @@ and the worker build runs migrations.
 **Decision.** The guide says so plainly: an integration is tested with its
 package tests and conformance locally, and on production through the
 Connection form after merge. No step anywhere suggests deploying to demo.
+
+### Round H1: core consolidation
+
+Numbered H1.x rather than D12 onward, because other rounds write their
+decisions into this file at the same time.
+
+**H1.1. The tracker owns its links (F16, F122).** Core built
+`<Site URL>/browse/<KEY>` from the raw connection value and filtered keys with
+a Jira pattern, while Jira built its own links from the site's origin, so a
+Site URL saved with a path gave every run view, message and MCP answer a link
+that went nowhere. Chosen: an optional `ticketUrl(key)` on
+`IssueTrackerAdapter` (pure, never throws, null for a key that is not a
+ticket; additive, ADR-010 change log), and one pair of functions every core
+link site calls (`engine/support/ticket-url.ts`, a leaf with no imports
+because the workflow body reads it). A ticket run records the tracker's link
+on its ticket snapshot and in `runs.ticket_url`; every surface shows the
+recorded link first and asks the tracker in force only when there is none, so
+old runs keep the links they were shown with. `RunStartTracker.baseUrl` is
+still written and no longer read, so a rollback finds it. Rejected: fixing the
+path inside core (the rule stays in core and a second tracker still gets Jira
+URLs); a required port member (breaks every tracker written against the
+current SDK).
+
+**H1.2. Unreadable is not "none" (F61, F128, F112, second half of F124).**
+`usableIntegrations` turned "the settings could not be read" into an empty
+list, which every caller then read as "nothing is connected". It is deleted;
+`resolveUsableIntegrations` is the one reader and answers `readable: false`
+with the reason, and each caller says what that means where it is: a block
+fails as an engine fault naming the unread settings (never "not connected"),
+the Integrations page answers `cause: "worker"`, a sandbox is not traced and
+the log says why, the VCS lookups throw `IntegrationSettingsUnreadableError`,
+and manual dispatch answers 503. `system.capabilities` reads the deployment
+once and hands the same read to all three fields (F112).
+
+**H1.3. Capabilities are counted once (F121, F127).**
+`builtinCapabilitiesOfDeployment` is deleted: the issue tracker, messaging and
+version control are served only by integrations
+(`INTEGRATION_SERVED_CAPABILITIES`), and `activeProviderOf` is the one answer
+to "which provider serves this `one` capability", used by the editor, the
+runtime, the capability overview and MCP. An integration block that requires
+`llm` goes through the same credential gate as Call LLM, one function for
+both.
+
+**H1.4. Tracing follows its pin and never gates a run (first half of F124).**
+Tracing providers were already pinned at run start and never compared. Now
+the run-state step and each sandbox compare the pin; a tracer reconfigured
+since the run started is not asked, and what that costs is that run's tracing
+and nothing else, because a disabled tracer has always meant an untraced run
+rather than a failed one. `recordedPinFor` gains the `every_provider`
+selection for this. The impact preview does not count these runs as stopping.
+
+**H1.5. The impact preview for version control says "may" and counts by
+scope.** A workflow reaches a version control provider through the
+repository it picks per ticket, so the pinned reach names every provider.
+The preview now reads repository selection's own rule
+(`pinnedScopeExcludesProvider`, replacing a copy that disagreed with it when a
+scope sets both lists) to leave out workflows, and runs, whose scope rules the
+provider out, and the dashboard says "Enabled workflows that may use" for a
+version control provider, because an unscoped workflow's next repository is
+not knowable before its ticket. Rejected: counting only runs whose selected
+repository is on the provider (that fact lives in the run's repository record
+and is not read here; worth doing when the record is).
+
+**H1.6. One home for a capability's label.** `capabilityLabel` lives in the
+SDK beside `INTEGRATION_CAPABILITIES`; the registry re-exports it and the
+editor lowercases it into sentences.
 
 ## Memory contract (from the S14 gate, before S15)
 
