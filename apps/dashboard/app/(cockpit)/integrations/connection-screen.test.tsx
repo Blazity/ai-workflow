@@ -971,6 +971,36 @@ test("turning off an integration with no blocks says nothing about blocks, and n
   assert.match(rendered, /3 runs in flight may stop/);
 });
 
+test("turning a version control provider off says which workflows may use it, not which do", async (t) => {
+  // A workflow picks its repository per ticket, so the worker can only list
+  // the workflows whose repository scope leaves room for this provider. The
+  // sentence claims what the list backs.
+  stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    return body?.preview === "disable"
+      ? {
+          status: 200,
+          body: impactOf({
+            stops: "unusable",
+            enabledDefinitions: [{ id: 1, name: "Ticket to PR" }],
+            inFlightRuns: 2,
+          }),
+        }
+      : { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({ name: "Hub", capabilities: ["vcs"], blocks: [] }),
+  });
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  const rendered = text(root);
+  assert.match(rendered, /Enabled workflows that may use Hub: Ticket to PR/);
+  assert.doesNotMatch(rendered, /Enabled workflows using Hub/);
+});
+
 test("a config edit that no run checks goes ahead without a question", async (t) => {
   // The tracker compares no pin, so a Jira edit stops nothing in flight: the
   // worker says so with a zero, and the save is not interrupted.

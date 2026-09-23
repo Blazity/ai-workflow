@@ -22,12 +22,15 @@ vi.mock("../../engine/support/issue-tracker-runtime.js", () => ({
     `${id}\u0000${baseUrl.trim().toLowerCase()}`,
 }));
 
-function trackerConnected(wiring: Record<string, string>) {
+function trackerConnected(
+  wiring: Record<string, string>,
+  ticketUrl?: (key: string) => string | null,
+) {
   resolveActiveIssueTracker.mockResolvedValue({
     ok: true,
     id: "jira",
     name: "Jira",
-    adapter: {},
+    adapter: ticketUrl ? { ticketUrl } : {},
     wiring: { projectKey: "PROJ", baseUrl: "", ...wiring },
   });
 }
@@ -37,7 +40,7 @@ function noTrackerConnected(reason = "No issue tracker is connected on this depl
 }
 
 import {
-  issueTrackerBaseUrl,
+  issueTrackerTicketLinks,
   ticketBoardSettings,
 } from "./integration-settings.js";
 
@@ -46,25 +49,25 @@ beforeEach(() => {
 });
 
 describe("integration settings", () => {
-  it("follows the connection on every call, not a snapshot taken at import", async () => {
+  it("links a ticket the way the tracker in force does, on every call", async () => {
     // An operator can re-point the tracker at another site while the worker is
     // running. A module-level snapshot would keep publishing links to the old
-    // one, and the failure would look like a caching problem rather than a
-    // settings bug.
-    trackerConnected({ baseUrl: "https://one.example" });
-    expect(await issueTrackerBaseUrl()).toBe("https://one.example");
+    // one. And the link is the tracker's own: a Site URL saved with a path is
+    // the tracker's to read, not core's to paste in front of /browse/.
+    trackerConnected({ baseUrl: "https://one.example/jira" }, (key) => `https://one.example/browse/${key}`);
+    expect((await issueTrackerTicketLinks())("AWT-1")).toBe("https://one.example/browse/AWT-1");
 
-    trackerConnected({ baseUrl: "https://two.example" });
-    expect(await issueTrackerBaseUrl()).toBe("https://two.example");
+    trackerConnected({ baseUrl: "https://two.example" }, (key) => `https://two.example/t/${key}`);
+    expect((await issueTrackerTicketLinks())("AWT-1")).toBe("https://two.example/t/AWT-1");
   });
 
   it("publishes no ticket link when no tracker is connected", async () => {
-    // Deliberately an empty string rather than a throw: the callers are run
-    // lists and run detail, each building a link beside something else it is
-    // already showing. A refusal here would take away the page somebody needs
-    // in order to see what happened.
+    // Deliberately no links rather than a throw: the callers are run lists and
+    // run detail, each building a link beside something else it is already
+    // showing. A refusal here would take away the page somebody needs in order
+    // to see what happened.
     noTrackerConnected();
-    expect(await issueTrackerBaseUrl()).toBe("");
+    expect((await issueTrackerTicketLinks())("AWT-1")).toBeNull();
   });
 
   it("carries the backlog transition only where the connection has one", async () => {

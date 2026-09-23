@@ -6,7 +6,6 @@ import type { IntegrationState, WorkflowDefinitionV2 } from "@shared/contracts";
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 vi.mock("../../engine/definition/block-contract-environment.js", () => ({
-  builtinCapabilitiesOfDeployment: () => [],
   workflowBlockRegistryContext: (_profile: unknown, integrations: unknown) => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },

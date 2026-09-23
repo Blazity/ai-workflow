@@ -98,7 +98,6 @@ import {
 import { canonicalizeWorkflowBlockTypes, canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import type { CoreMessagingDelivery } from "./support/messaging.js";
-import { ticketUrlFor } from "./support/ticket-url.js";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { LoadedWorkflowPlan } from "./steps/definition-step.js";
@@ -652,6 +651,15 @@ async function agentWorkflowBody(
   const { resolveWorkflowTicketStep } = await import("./steps/workflow-ticket.js");
   const ticket = await resolveWorkflowTicketStep(entry, runSettings.COLUMN_AI);
   if (!ticket) return;
+  // Where a person opens what this run is about, for every record the run
+  // writes: the ticket's page as its tracker linked it when the run read it,
+  // or the pull request the run was started for. The workflow cannot ask a
+  // tracker, so the link rides with the ticket rather than being spelled here.
+  const subjectUrl: string | null = entry.ticketKey
+    ? (ticket.url ?? null)
+    : entry.kind === "pr_trigger"
+      ? entry.pr.prUrl
+      : null;
 
   let clarificationsReconciled = false;
   const cleanupClarifications = async (): Promise<void> => {
@@ -736,11 +744,7 @@ async function agentWorkflowBody(
           status: "failed",
           ticketKey: entry.ticketKey ?? null,
           ticketTitle: ticket.title,
-          ticketUrl: entry.ticketKey
-            ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
-            : entry.kind === "pr_trigger"
-              ? entry.pr.prUrl
-              : null,
+          ticketUrl: subjectUrl,
           model: null,
           totals: computeUsageTotals({}, {}, undefined, undefined, {}),
           budgetFailure: null,
@@ -965,11 +969,7 @@ async function agentWorkflowBody(
       subjectKey: entry.subjectKey,
       ticketKey: entry.ticketKey ?? null,
       ticketTitle: ticket.title,
-      ticketUrl: entry.ticketKey
-        ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
-        : entry.kind === "pr_trigger"
-          ? entry.pr.prUrl
-          : null,
+      ticketUrl: subjectUrl,
       definitionVersion: plan.version,
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
@@ -1331,9 +1331,7 @@ async function agentWorkflowBody(
       integrationLlmDefaults: { provider: runDefaultKind, model: defaultModel },
       entry,
       ticket,
-      ticketUrl: entry.ticketKey
-        ? (ticketUrlFor(ticket.identifier, runTracker.baseUrl) ?? "")
-        : "",
+      ticketUrl: entry.ticketKey ? (ticket.url ?? "") : "",
       changeSummary: "",
       ...(clarificationHistory && clarificationHistory.length > 0
         ? { clarifications: clarificationHistory }
@@ -5324,11 +5322,7 @@ async function agentWorkflowBody(
         status: runOutcome,
         ticketKey: entry.ticketKey ?? null,
         ticketTitle: ticket.title,
-        ticketUrl: entry.ticketKey
-          ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
-          : entry.kind === "pr_trigger"
-            ? entry.pr.prUrl
-            : null,
+        ticketUrl: subjectUrl,
         model: activeModel ?? null,
         totals: computeUsageTotals(
           runPhaseUsages,

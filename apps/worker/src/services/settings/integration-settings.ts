@@ -10,6 +10,11 @@
  */
 import type { SettingsSnapshot } from "@shared/contracts";
 import type { ResolvedIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
+import {
+  NO_TICKET_LINKS,
+  ticketLinksOf,
+  type TicketLinks,
+} from "../../engine/support/ticket-url.js";
 import { env } from "../../infra/vcs-config.js";
 
 /**
@@ -110,18 +115,20 @@ export function webhookTriggerEncryptionKey(): string | undefined {
 }
 
 /**
- * The issue tracker's base URL, for the ticket links run reads publish.
+ * How the active issue tracker links a ticket, for the run reads that publish
+ * ticket links: the port's `ticketUrl`, resolved once per read.
  *
- * Empty when no tracker is connected, and that is the right answer here rather
- * than a refusal: every caller is building a link beside something else it is
- * already showing, and a run list that refused to render because a tracker was
- * disconnected would take away the page somebody needs in order to see what
- * happened. A link is dropped, the rest of the row stands.
+ * No links when no tracker is usable, and that is the right answer here
+ * rather than a refusal: every caller is building a link beside something else
+ * it is already showing, and a run list that refused to render because a
+ * tracker was disconnected would take away the page somebody needs in order to
+ * see what happened. A link is dropped, the rest of the row stands, and a run
+ * that recorded its own link keeps it (`ticketLinkFor`).
  */
-export async function issueTrackerBaseUrl(): Promise<string> {
+export async function issueTrackerTicketLinks(): Promise<TicketLinks> {
   const { resolveActiveIssueTracker } = await import(
     "../../engine/support/issue-tracker-runtime.js"
   );
   const tracker = await resolveActiveIssueTracker();
-  return tracker.ok ? tracker.wiring.baseUrl : "";
+  return tracker.ok ? ticketLinksOf(tracker.adapter) : NO_TICKET_LINKS;
 }

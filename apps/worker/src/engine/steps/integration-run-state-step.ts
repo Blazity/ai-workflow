@@ -32,7 +32,7 @@
  * after an ambiguous failure is exactly how a second bucket appears.
  */
 import type { IntegrationRunState } from "@integrations/sdk";
-import type { IntegrationUnavailableReason } from "@shared/contracts";
+import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
 
 /** Bounded well under the invocation ceiling; this is one call to one provider. */
 const RUN_STATE_TIMEOUT_MS = 60_000;
@@ -43,6 +43,14 @@ export interface IntegrationRunStatesInput {
   readonly runId: string;
   /** What the run is about, from `runSubjectKey` and nowhere else. */
   readonly subjectKey: string;
+  /**
+   * What the run recorded about its integrations at its start. A state is
+   * created on the connection the run pinned or not at all: one made on a
+   * connection an admin has since reconfigured would be the run's for the rest
+   * of it, on an engine the run never started with. Absent on a call recorded
+   * before this field existed, which then compares nothing, as it did.
+   */
+  readonly integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 /**
@@ -53,9 +61,10 @@ export interface IntegrationRunStatesInput {
  * - `none`: this build's integration declares no run state. A fact of the
  *   build, the same on every replay of it, and nothing was asked of anyone.
  * - `unavailable`: the integration declares run state and is not usable on
- *   this deployment right now. A fact of the moment, with the cause an admin
- *   can act on, so it is not remembered and whatever reports it names that
- *   cause rather than blaming the provider for creating nothing.
+ *   this deployment right now, or its connection moved since the run pinned
+ *   it. A fact of the moment, with the cause an admin can act on, so it is not
+ *   remembered and whatever reports it names that cause rather than blaming
+ *   the provider for creating nothing.
  * - `failed`: the provider was asked and did not produce a state. Recorded for
  *   the run, because asking again could create a second one.
  * - `unreadable`: this deployment's own integration settings could not be
@@ -84,7 +93,10 @@ export async function createIntegrationRunStatesStep(
   if (input.integrationIds.length === 0) return {};
 
   const { integrationManifest } = await import("@integrations/registry");
-  const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
+  const { checkIntegrationPin, resolveUsableIntegrations } = await import(
+    "../../services/integrations/runtime.js"
+  );
+  const { recordedPinFor } = await import("../support/recorded-pins.js");
   const { logger } = await import("../../infra/logger.js");
   const { isRunControlError } = await import("../helpers/run-control-error.js");
 
@@ -125,6 +137,24 @@ export async function createIntegrationRunStatesStep(
             message: `${manifest.name} is ${disabled ? "disabled" : "not connected"} on this deployment.`,
           } as IntegrationRunStateOutcome,
         ] as const;
+      }
+      // The integration itself is what is used, whichever capability or block
+      // led here, so a provider the run holds no pin for is used as it is now
+      // (`recorded-pins.ts`).
+      const recorded = recordedPinFor(input.integrationPins, integrationId, "every_provider");
+      const current = resolved.states.get(integrationId);
+      if (recorded.kind === "pinned" && current) {
+        const check = checkIntegrationPin(recorded.pin, current);
+        if (!check.ok) {
+          return [
+            integrationId,
+            {
+              status: "unavailable",
+              reason: check.reason,
+              message: `${manifest.name} was ${check.reason} after this run started, so nothing was asked of it for this run.`,
+            } as IntegrationRunStateOutcome,
+          ] as const;
+        }
       }
       if (typeof usable.runtime.beginRun !== "function") {
         // Conformance refuses this, so it means a build assembled from

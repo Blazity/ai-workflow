@@ -9,10 +9,10 @@ import {
   type IntegrationImpactPreviewResponse,
   type IntegrationState,
   type WorkflowDefinition,
-  type WorkflowRepositoryScope,
   canManageIntegrations,
 } from "@shared/contracts";
 
+import { pinnedScopeExcludesProvider } from "../../adapters/vcs/repository-directory.js";
 import { createConnectedPostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import {
   readConnectedIntegrationConnections,
@@ -36,7 +36,11 @@ import {
   type IntegrationEnvironmentReader,
   type IntegrationSecretsKeyState,
 } from "./resolve.js";
-import { secretsKeyMaterial, type IntegrationActor } from "./authoring.js";
+import {
+  readIntegrationStatesFrom,
+  secretsKeyMaterial,
+  type IntegrationActor,
+} from "./authoring.js";
 
 /** Why runs in flight may stop after a change, or `none`. */
 export type ImpactStop = IntegrationImpactPreviewResponse["stops"];
@@ -97,9 +101,9 @@ export interface InFlightRun {
  * declares its runs.
  *
  * `unusable` (turned off, or disconnected with nothing to fall back to): every
- * run whose graph reaches the integration (`integrationsUsedBy`, the reached
- * set) stops or goes on without it at its next use, whether or not anything
- * compares a pin: a ticket run asks for the tracker and none is there.
+ * run whose graph may reach the integration (`definitionMayReach`) stops or
+ * goes on without it at its next use, whether or not anything compares a pin:
+ * a ticket run asks for the tracker and none is there.
  *
  * `reconfigured` (still usable, with values a pin no longer matches): only a
  * run whose next use compares its pin stops. It needs a recorded pin for the
@@ -107,9 +111,11 @@ export interface InFlightRun {
  * the integration's own blocks in the graph; `send_message` when it serves
  * messaging (a notification alone is withheld and the run goes on); or
  * version control, when the definition's repository scope does not rule the
- * provider out. The issue tracker, tracing and memory compare no pin today, so
- * a Jira edit stops nothing. A run with no pins, or with no pin for the
- * integration, compares nothing and is not counted.
+ * provider out. The issue tracker and memory compare no pin today, so a Jira
+ * edit stops nothing; tracing compares its pin and, on a mismatch, stops
+ * tracing that run and nothing else, so it is not counted either. A run with
+ * no pins, or with no pin for the integration, compares nothing and is not
+ * counted.
  *
  * Only runs on enabled definitions are weighed, because theirs are the graphs
  * read here; a run started on a definition switched off since is not counted.
@@ -132,7 +138,7 @@ export function runsThatMayStop(input: {
       run.definitionId === null ? undefined : input.definitions.get(run.definitionId);
     if (!definition) return false;
     if (input.stops === "unusable") {
-      return integrationsUsedBy(definition.nodes, integrations).includes(integrationId);
+      return definitionMayReach(definition, integrationId, integrations);
     }
     const pin = run.integrationPins?.find((candidate) => candidate.integrationId === integrationId);
     if (!pin || pin.configFingerprint !== input.currentFingerprint) return false;
@@ -143,18 +149,49 @@ export function runsThatMayStop(input: {
       capabilities.includes("messaging") &&
       definition.nodes.some((node) => node.type === "send_message");
     const worksOnItsRepositories =
-      capabilities.includes("vcs") && scopeAllows(definition.repositoryScope, integrationId);
+      capabilities.includes("vcs") &&
+      !pinnedScopeExcludesProvider(definition.repositoryScope, integrationId);
     return ownBlock || postsMessages || worksOnItsRepositories;
   }).length;
 }
 
-/** Whether a definition's repository scope leaves room for a provider's repositories. */
-function scopeAllows(scope: WorkflowRepositoryScope | undefined, provider: string): boolean {
-  if (scope?.repositories && scope.repositories.length > 0) {
-    return scope.repositories.some((repository) => repository.provider === provider);
-  }
-  if (scope?.providers && scope.providers.length > 0) return scope.providers.includes(provider);
-  return true;
+/**
+ * Whether a definition's runs may reach an integration: what the list of
+ * enabled workflows names, and what `unusable` counts.
+ *
+ * `integrationsUsedBy` is the reach a run PINS at its start, and for version
+ * control that is every connected provider, because the repository a run
+ * works on is chosen later, per ticket. A definition whose repository scope
+ * rules a provider out never works on that provider's repositories (repository
+ * selection applies the same rule, `pinnedScopeExcludesProvider`, one home for
+ * it), so reading the pinned reach here named workflows, and counted runs, that
+ * turning GitHub off cannot touch. Such a definition still reaches the
+ * provider through anything else it uses, its own blocks included, which the
+ * second question asks with the provider taken out of version control.
+ *
+ * What stays a "may": a definition with no scope, or one that leaves room for
+ * several providers, picks its repository per ticket, so nothing read here can
+ * say which provider its next run lands on. The dashboard's sentence says so.
+ */
+function definitionMayReach(
+  definition: WorkflowDefinition,
+  integrationId: string,
+  integrations: DeploymentIntegrations,
+): boolean {
+  if (!integrationsUsedBy(definition.nodes, integrations).includes(integrationId)) return false;
+  const servesVersionControl = (integrations.providers.get("vcs") ?? []).includes(integrationId);
+  if (!servesVersionControl) return true;
+  if (!pinnedScopeExcludesProvider(definition.repositoryScope, integrationId)) return true;
+  const withoutItsRepositories: DeploymentIntegrations = {
+    ...integrations,
+    providers: new Map(
+      [...integrations.providers].map(([capability, ids]) => [
+        capability,
+        capability === "vcs" ? ids.filter((id) => id !== integrationId) : ids,
+      ]),
+    ),
+  };
+  return integrationsUsedBy(definition.nodes, withoutItsRepositories).includes(integrationId);
 }
 
 /**
@@ -192,7 +229,7 @@ export async function summarizeIntegrationImpact(input: {
     };
   }
   const using = input.definitions.filter((entry) =>
-    integrationsUsedBy(entry.definition.nodes, input.integrations).includes(input.integrationId),
+    definitionMayReach(entry.definition, input.integrationId, input.integrations),
   );
   const inFlightRuns =
     input.stops === "none"
@@ -235,17 +272,7 @@ export async function previewIntegrationImpact(input: {
   const storedConnections = await readConnectedIntegrationConnections();
   const material = secretsKeyMaterial();
   const environment = environmentReaderFrom();
-  const states = new Map<string, IntegrationState>();
-  for (const candidate of integrationManifests) {
-    states.set(candidate.id, resolveIntegrationState({
-      manifest: candidate,
-      environment,
-      stored: storedConnections.get(candidate.id) ?? null,
-      secretsKey: material.present
-        ? { present: true, keyId: material.keyId }
-        : { present: false },
-    }));
-  }
+  const states = readIntegrationStatesFrom(storedConnections);
   const current = states.get(manifest.id);
   if (!current) throw new DashboardAuthError(404, "Unknown integration");
   const { changesFingerprint, stops } = previewedChange({
@@ -299,9 +326,7 @@ export async function previewIntegrationImpact(input: {
       unmeasuredCapabilities.length > 0
         ? null
         : definitions
-            .filter((entry) =>
-              integrationsUsedBy(entry.definition.nodes, integrations).includes(manifest.id),
-            )
+            .filter((entry) => definitionMayReach(entry.definition, manifest.id, integrations))
             .map(({ id, name }) => ({ id, name }));
     return {
       changesFingerprint,

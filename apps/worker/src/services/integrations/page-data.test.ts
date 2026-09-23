@@ -4,7 +4,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolution = vi.hoisted(() => ({ delayMs: 0, read: (async () => ({})) as (ctx: { signal?: AbortSignal }) => Promise<unknown> }));
+const resolution = vi.hoisted(() => ({
+  delayMs: 0,
+  /** The database did not answer when the resolver read the settings. */
+  unreadable: null as string | null,
+  read: (async () => ({})) as (ctx: { signal?: AbortSignal }) => Promise<unknown>,
+}));
 
 vi.mock("@integrations/registry", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@integrations/registry")>()),
@@ -16,15 +21,21 @@ vi.mock("@integrations/registry/worker", () => ({
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: { warn: vi.fn() } }));
 vi.mock("./usable.js", () => ({
-  usableIntegrations: async (input: { lifetime?: AbortSignal }) => {
+  resolveUsableIntegrations: async (input: { lifetime?: AbortSignal }) => {
     await new Promise((resolve) => setTimeout(resolve, resolution.delayMs));
-    return [
-      {
-        manifest: { id: "acme", name: "Acme" },
-        runtime: { api: { usage: (ctx: { signal?: AbortSignal }) => resolution.read(ctx) } },
-        ctx: { signal: input.lifetime },
-      },
-    ];
+    if (resolution.unreadable !== null) return { readable: false, reason: resolution.unreadable };
+    return {
+      readable: true,
+      states: new Map(),
+      connectionFailures: new Map(),
+      usable: [
+        {
+          manifest: { id: "acme", name: "Acme" },
+          runtime: { api: { usage: (ctx: { signal?: AbortSignal }) => resolution.read(ctx) } },
+          ctx: { signal: input.lifetime },
+        },
+      ],
+    };
   },
 }));
 
@@ -45,6 +56,7 @@ function answersAfter(ms: number) {
 beforeEach(() => {
   vi.useFakeTimers();
   resolution.delayMs = 0;
+  resolution.unreadable = null;
   // `AbortSignal.timeout` runs on the runtime's own clock, which the fake
   // timers do not move; a budget built on it is put on the same clock here,
   // so every reader is measured by the one clock the test advances.
@@ -88,5 +100,24 @@ describe("a contributed page waiting on its provider", () => {
     await vi.advanceTimersByTimeAsync(21_500);
 
     expect(await pending).toEqual({ status: "ok", value: { rows: 3 } });
+  });
+
+  it("says our side could not read its settings, never that the integration is not connected", async () => {
+    // A database that did not answer for a moment is not an integration that
+    // is off: "not connected" sent a person to the Connection tab to fix a
+    // connection that works.
+    resolution.unreadable = "connection terminated unexpectedly";
+    const pending = readIntegrationPageData("acme", "usage");
+    await vi.dynamicImportSettled();
+    await vi.runAllTimersAsync();
+
+    const result = await pending;
+    expect(result).toMatchObject({ status: "unavailable", cause: "worker" });
+    if (result.status !== "unavailable") throw new Error("unreachable");
+    expect(result.reason).toContain("integration settings could not be read");
+    expect(result.reason).not.toContain("not connected");
+    // The database's own words are logged where the read failed, never put
+    // in front of a person.
+    expect(result.reason).not.toContain("connection terminated");
   });
 });

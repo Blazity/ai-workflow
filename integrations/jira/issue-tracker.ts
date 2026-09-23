@@ -30,6 +30,14 @@ export interface JiraConfig {
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
 
 /**
+ * A Jira issue key: the project key, a dash, the issue's number. Atlassian:
+ * a project key "must be at least two characters long", must "start with an
+ * uppercase letter" and may "contain only uppercase letters or numbers"
+ * (Jira Cloud administration, "Edit a space's details").
+ */
+const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+
+/**
  * An answer from Jira that was not a success, with the status on the error.
  * Whoever catches it reads what Jira said from `status` (the SDK's
  * `readProviderFailure` among them) rather than parsing the sentence.
@@ -111,6 +119,23 @@ export class JiraAdapter implements IssueTrackerAdapter {
     this.projectKey = config.projectKey;
     this.cloudId = config.cloudId ?? null;
     this.fetch = config.fetch;
+  }
+
+  /**
+   * The issue's page on this site, which Jira Cloud serves at `/browse/<KEY>`
+   * on the site's origin whatever path the Site URL was saved with. Null for a
+   * subject key Jira never issued (a webhook delivery, a schedule occurrence,
+   * a pull request with no ticket): there is no page for it, and a link would
+   * be a 404.
+   */
+  ticketUrl(key: string): string | null {
+    return ISSUE_KEY.test(key) ? this.issuePage(key) : null;
+  }
+
+  /** Where an issue Jira itself named lives: the one spelling of the link. */
+  private issuePage(key: string, commentId?: string): string {
+    const page = `${this.tenantOrigin}/browse/${encodeURIComponent(key)}`;
+    return commentId ? `${page}?focusedCommentId=${encodeURIComponent(commentId)}` : page;
   }
 
   private async getCloudId(signal?: AbortSignal | null): Promise<string> {
@@ -391,7 +416,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
     const commentId = typeof data?.id === "string" ? data.id : null;
     if (!commentId) return null;
-    return `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
+    return this.issuePage(id, commentId);
   }
 
   async findCommentByMarker(id: string, marker: string): Promise<string | null> {
@@ -408,9 +433,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
           .some((line) => line.trim() === marker);
         if (!hasMarker) continue;
         const commentId = comment?.id == null ? "" : String(comment.id);
-        return commentId
-          ? `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`
-          : `${this.tenantOrigin}/browse/${encodeURIComponent(id)}`;
+        return this.issuePage(id, commentId || undefined);
       }
 
       const total = Number(data?.total);
@@ -457,7 +480,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     }
     return {
       identifier: key,
-      url: `${this.tenantOrigin}/browse/${encodeURIComponent(key)}`,
+      url: this.issuePage(key),
     };
   }
 
@@ -634,7 +657,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
         key: issue.key,
         summary: fields.summary ?? "",
         status: fields.status?.name ?? "",
-        url: `${this.tenantOrigin}/browse/${encodeURIComponent(issue.key)}`,
+        url: this.issuePage(issue.key),
         // Truncated here rather than by the caller: a search over a whole
         // project must not pull entire ticket bodies across the wire only for
         // them to be cut down afterwards.

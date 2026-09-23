@@ -20,7 +20,7 @@ vi.mock("../../engine/support/adapters.js", async () => {
       adaptersFor(state.tracker, { runRegistry: { listAll: state.listAll } }),
   };
 });
-vi.mock("../settings/index.js", () => ({ issueTrackerBaseUrl: async () => "" }));
+vi.mock("../settings/index.js", () => ({ issueTrackerTicketLinks: async () => () => null }));
 vi.mock("../overview/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../overview/index.js")>()),
   collectAwaitingRuns: async () => [],

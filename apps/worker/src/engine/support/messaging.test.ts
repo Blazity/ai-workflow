@@ -40,13 +40,17 @@ vi.mock("../../infra/logger.js", () => ({
 
 // Where a person opens the ticket comes from whichever integration serves the
 // issue tracker capability, so this suite says only that one is connected and
-// where it lives. Which tracker is chosen is proved in
+// how it links a ticket: in a shape no tracker core has heard of, so a link
+// core spelled itself could not pass. Which tracker is chosen is proved in
 // `issue-tracker-runtime.test.ts`.
 vi.mock("./issue-tracker-runtime.js", () =>
-  connectedIssueTracker({ baseUrl: "https://acme.atlassian.net" }),
+  connectedIssueTracker({
+    baseUrl: "https://acme.atlassian.net/jira",
+    ticketUrl: (key) => (key.startsWith("AWT-") ? `https://tracker.example/t/${key}` : null),
+  }),
 );
 
-import { messagingSender, ticketUrlFor } from "./messaging.js";
+import { messagingSender } from "./messaging.js";
 
 const QUERY = { channels: ["C1"], keywords: ["login"], lookbackDays: 30, maxResults: 10 };
 
@@ -100,10 +104,10 @@ describe("messagingSender", () => {
     const delivery = await messagingSender().notifyForTicket("AWT-42", { kind: "started" });
 
     expect(delivery).toEqual({ delivered: true });
-    // The tracker link is core's fact, built here and rendered by the provider.
+    // The link is the tracker's, carried by core and rendered by the provider.
     expect(notifyForTicket.mock.calls[0]![0]).toEqual({
       key: "AWT-42",
-      url: "https://acme.atlassian.net/browse/AWT-42",
+      url: "https://tracker.example/t/AWT-42",
     });
     expect(notifyForTicket.mock.calls[0]![2]).toMatchObject({
       handle: "1758300000.000100",
@@ -353,22 +357,5 @@ describe("messagingSender", () => {
       ok: false,
       reason: "unsupported",
     });
-  });
-});
-
-describe("ticketUrlFor", () => {
-  it("links a tracker key and refuses to guess a page for anything else", () => {
-    expect(ticketUrlFor("AWT-42", "https://acme.atlassian.net")).toBe(
-      "https://acme.atlassian.net/browse/AWT-42",
-    );
-    expect(ticketUrlFor("AWT-42", "https://acme.atlassian.net/")).toBe(
-      "https://acme.atlassian.net/browse/AWT-42",
-    );
-    // A pull request run and a schedule occurrence have synthesized keys, and
-    // /browse/<that> is always a 404.
-    expect(ticketUrlFor("pr:acme/api#128", "https://acme.atlassian.net")).toBeNull();
-    expect(ticketUrlFor("webhook-7f3a", "https://acme.atlassian.net")).toBeNull();
-    // A deployment with no tracker configured links nowhere at all.
-    expect(ticketUrlFor("AWT-42", "")).toBeNull();
   });
 });

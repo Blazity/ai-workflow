@@ -28,7 +28,7 @@ import type {
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
 import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
-import { ticketUrlFor } from "../../engine/support/messaging.js";
+import { ticketLinksOf } from "../../engine/support/ticket-url.js";
 import { logger } from "../../infra/logger.js";
 import type { CancelRunTarget } from "../run-lifecycle/index.js";
 
@@ -48,8 +48,11 @@ export interface RunControlDeps {
   readonly cancelRun: CancelRunFn;
   /** Where a cancelled ticket goes back to. */
   readonly backlog?: IssueTrackerMoveTarget;
-  /** Base url of the tracker, for the link every answer carries. */
-  readonly trackerBaseUrl: string;
+}
+
+/** The link every answer carries for a ticket: the tracker's own, or none. */
+function ticketLink(deps: RunControlDeps, ticketKey: string): string {
+  return ticketLinksOf(deps.issueTracker)(ticketKey) ?? "";
 }
 
 export async function executeRunControlCommand(
@@ -102,7 +105,7 @@ async function summary(deps: RunControlDeps): Promise<RunControlAnswer> {
   const failedRuns: RunControlFailedRun[] = failed.map(({ ticketKey, meta }) => ({
     ticketKey,
     runId: meta.runId,
-    ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+    ticketUrl: ticketLink(deps, ticketKey),
     failedAt: meta.failedAt,
   }));
   return { kind: "registry", active: liveOf(active, deps), failed: failedRuns };
@@ -131,7 +134,7 @@ async function status(ticketKey: string, deps: RunControlDeps): Promise<RunContr
   return {
     kind: "run_status",
     ticketKey,
-    ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+    ticketUrl: ticketLink(deps, ticketKey),
     runId,
     hasSandbox,
   };
@@ -150,7 +153,7 @@ async function inspect(ticketKey: string, deps: RunControlDeps): Promise<RunCont
     kind: "entry",
     entry: {
       ticketKey,
-      ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+      ticketUrl: ticketLink(deps, ticketKey),
       runId: entry?.runId ?? null,
       sandboxId: sandboxIds[0] ?? null,
       claimedAt: entry?.createdAt ? new Date(entry.createdAt).toISOString() : null,
@@ -169,7 +172,7 @@ async function cancel(
   const answer = (outcome: RunControlCancelOutcome, runId: string | null): RunControlAnswer => ({
     kind: "cancelled",
     ticketKey,
-    ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+    ticketUrl: ticketLink(deps, ticketKey),
     runId,
     outcome,
   });
@@ -251,7 +254,7 @@ async function reset(ticketKey: string, deps: RunControlDeps): Promise<RunContro
   return {
     kind: "reset",
     ticketKey,
-    ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+    ticketUrl: ticketLink(deps, ticketKey),
     outcome,
   };
 }
@@ -260,7 +263,7 @@ function run(ticketKey: string, runId: string, deps: RunControlDeps): RunControl
   return {
     ticketKey,
     runId,
-    ticketUrl: ticketUrlFor(ticketKey, deps.trackerBaseUrl) ?? "",
+    ticketUrl: ticketLink(deps, ticketKey),
   };
 }
 
@@ -280,7 +283,7 @@ export async function runControlDeps(): Promise<RunControlDeps> {
   // back and no tracker to link to, which `RunControlDeps` already allows.
   const tracker = adapters.issueTrackerResolution;
   if (!tracker.ok) {
-    return { registry: adapters.runRegistry, cancelRun, trackerBaseUrl: "" };
+    return { registry: adapters.runRegistry, cancelRun };
   }
   const board = await ticketBoardOf(tracker, await loadSettingsSnapshot());
   return {
@@ -290,6 +293,5 @@ export async function runControlDeps(): Promise<RunControlDeps> {
     backlog: board.backlogTransitionId
       ? { name: board.backlogColumn, transitionId: board.backlogTransitionId }
       : board.backlogColumn,
-    trackerBaseUrl: tracker.wiring.baseUrl,
   };
 }

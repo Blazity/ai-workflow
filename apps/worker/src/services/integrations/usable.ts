@@ -103,32 +103,34 @@ type WebhookPurpose = {
 
 /**
  * Every connected, enabled integration whose connection values can be read,
- * each with the context its own code receives; empty when this deployment's
- * integration settings could not be read at all.
+ * each with the context its own code receives, or the fact that this
+ * deployment's integration settings could not be read at all.
+ *
+ * THE ONE READER, and it keeps "could not read our own settings" apart from
+ * "nothing is usable" for every caller. There used to be a second one that
+ * folded the two into an empty list, and each of its callers then said a false
+ * thing with confidence: a pull request URL "no provider recognises", a
+ * sandbox built with no version control credentials, a page "not connected",
+ * a run "with no tracing integration". A database that did not answer for a
+ * moment is not an integration that is off, so every caller acts on
+ * `readable: false` in its own words (retry, fail, or say it is unknown) and
+ * none can forget to, because the type does not let it reach `usable`
+ * without looking.
  *
  * `filter` narrows the manifests before any connection is opened, so a
  * deployment with five integrations does not decrypt five connections to find
  * the one that traces.
- */
-export async function usableIntegrations(input: ContextLifetime & {
-  readonly filter?: (manifest: IntegrationManifest) => boolean;
-}): Promise<UsableIntegration[]> {
-  const resolved = await resolveUsableIntegrations(input);
-  return resolved.readable ? resolved.usable : [];
-}
-
-/**
- * The same answer, keeping "could not read our own settings" apart from
- * "nothing is usable". A caller that records its answer for the rest of a run
- * needs the difference: a database that did not answer for a moment is not an
- * integration that is off, and remembering it as one would refuse every later
- * use in the run while blaming the provider.
  *
- * `states` is the resolver's own reading of the candidates, handed back rather
- * than re-derived: a caller that has to tell a person WHY an integration it
- * asked for is missing from `usable` (disabled, never connected) would
- * otherwise decide that a second time, which is the one thing `resolve.ts`
- * exists to prevent. It carries no secret and no ciphertext.
+ * `states` is the resolver's own reading of the integrations (every one this
+ * build ships, whenever there was a candidate), handed back rather than
+ * re-derived: a caller that
+ * has to tell a person WHY an integration it asked for is missing from
+ * `usable` (disabled, never connected) would otherwise decide that a second
+ * time, which is the one thing `resolve.ts` exists to prevent. It carries no
+ * secret and no ciphertext. `connectionFailures` is the same courtesy for the
+ * last reason a candidate can be missing: its state is usable and its values
+ * could not be read (a secret stored under another key, a value that no
+ * longer parses), with the resolver's sentence for it.
  */
 export async function resolveUsableIntegrations(input: ContextLifetime & WebhookPurpose & {
   readonly filter?: (manifest: IntegrationManifest) => boolean;
@@ -137,6 +139,7 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
       readonly readable: true;
       readonly usable: UsableIntegration[];
       readonly states: ReadonlyMap<string, IntegrationState>;
+      readonly connectionFailures: ReadonlyMap<string, IntegrationFailure>;
     }
   | { readonly readable: false; readonly reason: string }
 > {
@@ -161,12 +164,12 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
   const { logger } = await import("../../infra/logger.js");
 
   const candidates = integrationManifests.filter((manifest) => input.filter?.(manifest) ?? true);
-  if (candidates.length === 0) return { readable: true, usable: [], states: new Map() };
+  if (candidates.length === 0) {
+    return { readable: true, usable: [], states: new Map(), connectionFailures: new Map() };
+  }
 
-  // A database this caller cannot reach is not a failure of the caller's work:
-  // every caller here is doing something alongside it (tracing a run, naming a
-  // bucket, drawing a page). It is reported as unreadable rather than as
-  // "nothing usable", and each caller decides what that means where it is.
+  // A database this caller cannot reach is reported as unreadable rather than
+  // as "nothing usable", and each caller decides what that means where it is.
   //
   // Read once: the states and the values they gate come from the same rows,
   // so a save landing between two reads cannot pair one version's state with
@@ -186,6 +189,7 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
   let settingsSnapshot: Readonly<Record<string, unknown>> | undefined;
 
   const usable: UsableIntegration[] = [];
+  const connectionFailures = new Map<string, IntegrationFailure>();
   for (const manifest of candidates) {
     const state = states.get(manifest.id);
     // What this caller needs of the connection: all of it, or for a webhook
@@ -200,11 +204,13 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
       active: stored.get(manifest.id)?.active ?? null,
       secretsKey,
     };
-    // The card already says why a connection cannot be read, and this caller
-    // is doing something the run can go on without, so it is a line in the log
-    // rather than a failure.
-    const unreadable = (failure: IntegrationFailure) =>
+    // The card already says why a connection cannot be read. Logged here once,
+    // and handed back so a caller that has to tell a person why the
+    // integration is missing can.
+    const unreadable = (failure: IntegrationFailure) => {
       logger.warn({ integration: manifest.id, reason: failure.reason }, "integration_connection_unreadable");
+      connectionFailures.set(manifest.id, failure);
+    };
     let read: IntegrationManifest;
     let values: Record<string, ConnectionValue>;
     if (requires === undefined) {
@@ -266,7 +272,35 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
       redaction,
     });
   }
-  return { readable: true, usable, states };
+  return { readable: true, usable, states, connectionFailures };
+}
+
+/**
+ * What a caller throws when it cannot do its work without this deployment's
+ * integration settings and could not read them.
+ *
+ * A class rather than a sentence, because the caller that catches it is often
+ * not the one that read (manual dispatch catches what the version control
+ * runtime threw) and has to answer "try again", never "not configured".
+ *
+ * The message is fixed apart from what could not be done, and the database's
+ * own words ride in `cause`, the way `IntegrationSecretsUnreadableError` does
+ * it: the message lands where people read it (a run's failure, a dispatch
+ * refusal), and a driver's error text there helps nobody act. The resolver
+ * logs the cause once, where it read (`integration_states_unreadable`).
+ */
+export class IntegrationSettingsUnreadableError extends Error {
+  constructor(
+    /** What could not be done, as the end of a sentence: "so no sandbox was built". */
+    consequence: string,
+    cause: string,
+  ) {
+    super(
+      `This deployment's integration settings could not be read, ${consequence}. Nothing is known about any provider from this; try again shortly.`,
+      { cause },
+    );
+    this.name = "IntegrationSettingsUnreadableError";
+  }
 }
 
 /**

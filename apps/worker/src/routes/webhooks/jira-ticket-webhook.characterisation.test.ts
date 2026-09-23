@@ -177,7 +177,6 @@ vi.mock("../../services/integrations/runtime.js", async () => ({
       states: new Map([["jira", { usable: true, enabled: true, source: "environment" }]]),
     };
   },
-  usableIntegrations: async () => [connectedJira()],
   checkIntegrationPin: () => ({ ok: true }),
 }));
 

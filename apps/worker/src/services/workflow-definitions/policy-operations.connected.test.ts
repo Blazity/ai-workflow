@@ -49,7 +49,7 @@ vi.mock("./connected-policy-dependencies.js", () => ({
   // a dependency, so this file says "no integration here" as a value instead of
   // needing a DATABASE_URL to find out.
   connectedDefinitionBlockContracts: async () =>
-    blockContractsFor(undefined, testDeploymentIntegrations([], ["vcs"])),
+    blockContractsFor(undefined, testDeploymentIntegrations([], { vcs: ["github"] })),
   dispatchConnectedDefinitionManual: vi.fn(),
   preflightConnectedDefinitionManual: vi.fn(),
   previewConnectedDefinitionPrompt: vi.fn(),
@@ -69,7 +69,6 @@ vi.mock("../settings/snapshot.js", () => ({
 }));
 
 vi.mock("../../engine/definition/block-contract-environment.js", () => ({
-  builtinCapabilitiesOfDeployment: () => ["issue_tracker", "vcs", "messaging"],
   workflowBlockRegistryContext: (_profile?: unknown, integrations?: unknown) => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },
@@ -82,7 +81,6 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
       blocks: new Map(),
       providers: new Map(),
       selected: new Map(),
-      builtinCapabilities: new Set(),
     },
   }),
 }));
