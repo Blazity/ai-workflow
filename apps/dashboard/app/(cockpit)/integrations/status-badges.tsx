@@ -4,7 +4,7 @@ import { CkChip } from "@/components/ui";
 import { integrationBadges, type IntegrationTone } from "@/lib/integrations/presentation";
 
 /** The chip tones the cockpit already ships, named by what they mean here. */
-export const STATUS_CHIP_TONES: Record<IntegrationTone, "success" | "failed" | "neutral" | "blocked"> = {
+const STATUS_CHIP_TONES: Record<IntegrationTone, "success" | "failed" | "neutral" | "blocked"> = {
   success: "success",
   failed: "failed",
   quiet: "blocked",
