@@ -224,8 +224,9 @@ from a Site URL with a path; a recorded link on another host (the tracker was
 reconnected to another site, or replaced) or a tracker that gives none keeps
 the recorded link. (Revised after the gate: the first version showed the
 recorded link whenever there was one, which kept those broken links forever.)
-`RunStartTracker.baseUrl` is
-still written and no longer read, so a rollback finds it. Rejected: fixing the
+`RunStartTracker.baseUrl` is gone: it was kept at first "for a rollback", to a
+build that was never deployed, so there was nothing to roll back to (final
+round). Rejected: fixing the
 path inside core (the rule stays in core and a second tracker still gets Jira
 URLs); a required port member (breaks every tracker written against the
 current SDK).
@@ -239,7 +240,8 @@ without a link rather than `[KEY]()` (`withoutEmptyLinks`); its stored
 (`recordRunUsage`), and every view still links the ticket through the tracker
 in force. Filling the link inside the run would need a new step on the
 resumed path, which changes the step sequence of runs already suspended, so
-it was not done.
+it was not done. The run-start result no longer carries the Site URL; one
+recorded while it did is read as before, the extra key ignored.
 
 **H1.2. Unreadable is not "none" (F61, F128, F112, second half of F124).**
 `usableIntegrations` turned "the settings could not be read" into an empty

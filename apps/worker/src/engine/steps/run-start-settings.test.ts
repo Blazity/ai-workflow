@@ -80,6 +80,23 @@ describe("loadRunStartSettingsStep", () => {
     );
   });
 
+  it("freezes the board's transition ids and nothing that names the site", async () => {
+    // The Site URL used to ride along "for a rollback" to a build that was
+    // never deployed. Links are the tracker's own answer, recorded with the
+    // run's ticket.
+    vi.stubEnv("JIRA_BASE_URL", "https://acme.atlassian.net");
+    vi.stubEnv("JIRA_API_TOKEN", "jira-token-value");
+    vi.stubEnv("JIRA_PROJECT_KEY", "AWT");
+    vi.stubEnv("JIRA_AI_TRANSITION_ID", "21");
+    try {
+      const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+
+      expect(stored.tracker).toEqual({ aiTransitionId: "21" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("resolves the snapshot from stored rows", async () => {
     const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 

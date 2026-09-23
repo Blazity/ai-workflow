@@ -140,20 +140,16 @@ export interface RunStartSettings {
   tracker?: RunStartTracker;
 }
 
+/**
+ * The board wiring a run froze at its start: the transition ids its moves use.
+ *
+ * It no longer carries the tracker's Site URL. How a ticket is linked is the
+ * tracker's own answer, recorded with the run's ticket (`WorkflowTicket.url`),
+ * and no deployed build ever read the field from here, so there is nothing to
+ * roll back to. A result recorded while it was still written carries it and
+ * is read as before: the extra key is ignored.
+ */
 export interface RunStartTracker {
-  /**
-   * The tracker's Site URL as its connection held it. Empty when no tracker
-   * was connected.
-   *
-   * NOT READ BY THIS BUILD, and still written on purpose. The build before
-   * this one built its ticket links from it; how a ticket is linked is now the
-   * tracker's own answer, recorded with the run's ticket
-   * (`WorkflowTicket.url`). A run started here and resumed after a rollback to
-   * that build replays this result, and without the field that build would
-   * fail the run building a link. Stop writing it once a release has passed
-   * with nothing to roll back to.
-   */
-  baseUrl: string;
   backlogTransitionId?: string;
   aiTransitionId?: string;
   aiReviewTransitionId?: string;
@@ -297,7 +293,7 @@ export function runStartSettings(stored: RunStartSettings): SettingsSnapshot {
  * the connection.
  */
 export function runStartTracker(stored: RunStartSettings): RunStartTracker {
-  return stored.tracker ?? { baseUrl: "" };
+  return stored.tracker ?? {};
 }
 
 async function readTrackerWiring(
@@ -315,10 +311,8 @@ async function readTrackerWiring(
     absent(resolved.reason, resolved.refusal);
     return undefined;
   }
-  const { baseUrl, backlogTransitionId, aiTransitionId, aiReviewTransitionId } =
-    resolved.wiring;
+  const { backlogTransitionId, aiTransitionId, aiReviewTransitionId } = resolved.wiring;
   return {
-    baseUrl,
     ...(backlogTransitionId ? { backlogTransitionId } : {}),
     ...(aiTransitionId ? { aiTransitionId } : {}),
     ...(aiReviewTransitionId ? { aiReviewTransitionId } : {}),
