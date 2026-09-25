@@ -462,13 +462,32 @@ describe("POST /api/v1/settings/reset", () => {
     ]);
   });
 
-  it("follows the owner-only rule MCP settings.reset has: an admin and a member get 403", async () => {
+  it("lets an admin remove a stored value, the same rule MCP settings.reset has", async () => {
     await patch({ settings: { COLUMN_AI: "QA-A" }, reason: "first" });
-    for (const userId of ["user_admin", "user_member"]) {
-      state.sessionUserId = userId;
-      const res = await reset({ key: "COLUMN_AI", reason: "tidy" });
-      expect(res.status).toBe(403);
-    }
+
+    state.sessionUserId = "user_admin";
+    const res = await reset({ key: "COLUMN_AI", reason: "back to the default" });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      removed: true,
+      setting: {
+        key: "COLUMN_AI",
+        source: "default",
+        lastVersion: { actor: "user_admin", actorLabel: "Admin", reason: "back to the default" },
+      },
+    });
+    await expect(db.select().from(settings)).resolves.toHaveLength(0);
+  });
+
+  it("gives a member 403 and removes nothing", async () => {
+    await patch({ settings: { COLUMN_AI: "QA-A" }, reason: "first" });
+
+    state.sessionUserId = "user_member";
+    const res = await reset({ key: "COLUMN_AI", reason: "tidy" });
+
+    expect(res.status).toBe(403);
+    expect(res.statusText).toBe("Only an owner or an admin can remove a stored setting.");
     await expect(db.select().from(settings)).resolves.toHaveLength(1);
   });
 

@@ -623,9 +623,47 @@ describe("settings.reset", () => {
     expect(await db.select().from(settingsVersions)).toEqual([]);
   });
 
-  it("refuses an unknown key, an admin, and a client-credentials token", async () => {
-    const owner = await connectedClient();
+  it("lets an admin with a person behind the token clear a stored value", async () => {
     const admin = await connectedClient({ role: "admin" });
+    await admin.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "MAX_CONCURRENT_AGENTS",
+        value: 5,
+        reason: "one slot per reviewer",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    const result = await admin.callTool({
+      name: "settings.reset",
+      arguments: {
+        key: "MAX_CONCURRENT_AGENTS",
+        reason: "let the deployment decide again",
+        idempotencyKey: KEY_TWO,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result)).toMatchObject({
+      removed: true,
+      setting: { value: 3, source: "default" },
+    });
+    expect(await db.select().from(settings)).toEqual([]);
+  });
+
+  it("refuses an unknown key, a member, and a client-credentials token", async () => {
+    const owner = await connectedClient();
+    await owner.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "MAX_CONCURRENT_AGENTS",
+        value: 5,
+        reason: "one slot per reviewer",
+        idempotencyKey: "55555555-5555-4555-8555-555555555555",
+      },
+    });
+    const member = await connectedClient({ role: "member" });
     const service = await connectedClient({
       kind: "service",
       role: "service",
@@ -643,7 +681,7 @@ describe("settings.reset", () => {
     ).toMatchObject({ code: "VALIDATION_FAILED" });
     expect(
       errorOf(
-        await admin.callTool({
+        await member.callTool({
           name: "settings.reset",
           arguments: {
             key: "MAX_CONCURRENT_AGENTS",
@@ -665,14 +703,23 @@ describe("settings.reset", () => {
         }),
       ),
     ).toMatchObject({ code: "FORBIDDEN" });
+    // Neither refusal removed anything: the owner's value still stands.
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "MAX_CONCURRENT_AGENTS", value: 5 }),
+    ]);
   });
 
-  it.each(["MCP_ENABLED", "MCP_TOOL_TIMEOUT_MS", "MCP_READ_RATE_LIMIT_PER_MINUTE"])(
-    "refuses to clear %s either",
-    async (key) => {
-      const owner = await connectedClient();
+  it.each([
+    ["MCP_ENABLED", "owner"],
+    ["MCP_TOOL_TIMEOUT_MS", "owner"],
+    ["MCP_READ_RATE_LIMIT_PER_MINUTE", "owner"],
+    ["MCP_ENABLED", "admin"],
+  ] as const)(
+    "refuses to clear %s either, for an %s",
+    async (key, role) => {
+      const client = await connectedClient({ role });
 
-      const result = await owner.callTool({
+      const result = await client.callTool({
         name: "settings.reset",
         arguments: { key, reason: "back to the default", idempotencyKey: KEY_ONE },
       });
@@ -686,9 +733,6 @@ describe("settings.reset", () => {
     },
   );
 
-  // The lock that does not depend on somebody remembering to keep a role list
-  // closed: a token with no `sub` never holds workflows:write in the first
-  // place (withoutAuthoringScopes), and these lists refuse it again.
   it("refuses to clear a value somebody changed after it was read", async () => {
     const client = await connectedClient();
     const first = await client.callTool({
@@ -733,12 +777,14 @@ describe("settings.reset", () => {
     }
   });
 
-  it("keeps the owner-only, person-only policy on the two clearing tools", () => {
-    expect(policyFor("settings.reset").roles).toEqual(["owner"]);
-    expect(policyFor("repositories.activate").roles).toEqual(["owner"]);
-    expect(policyFor("settings.set").roles).not.toContain("service");
-    expect(policyFor("settings.set").scope).toBe("settings:write");
-    expect(policyFor("settings.reset").scope).toBe("settings:write");
+  // Admitting an admin did not open either write to a token with nobody behind
+  // it: the role lists still leave "service" out, and withoutAuthoringScopes
+  // keeps settings:write away from a token with no `sub` in the first place.
+  it("keeps both settings writes person-only, under the settings scope", () => {
+    for (const tool of ["settings.set", "settings.reset"] as const) {
+      expect(policyFor(tool).roles).not.toContain("service");
+      expect(policyFor(tool).scope).toBe("settings:write");
+    }
   });
 });
 
