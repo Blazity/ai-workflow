@@ -436,6 +436,10 @@ legacy read once every Mem0 notebook has an `imported` row. Until then
 `/memory` and MCP list Mem0 notebooks as "legacy, moved" or "legacy, not yet
 moved".
 
+**Changed by Q14 (25.09):** there is no sweep and no legacy read. Stage 1b
+only stops new notebooks going to Mem0; the ones already there are forgotten
+with everything else Mem0 holds right after 6a merges.
+
 ## Decisions by Filip (23.09.2026)
 
 These were the one-way doors the brief did not settle. Filip accepted every
@@ -483,6 +487,7 @@ for the executors.
   Mem0 forever; (b) delete them in stage 11 after the sweep shows every one
   imported and a dry run lists them. **Decided: (b).** They duplicate
   built-in and hold human decisions in a store the product no longer lists.
+  Superseded by Q14: Mem0 is wiped after 6a instead.
 - **Q6. Widen the integration pin contract with the Mem0 identity**
   (`packages/contracts`, optional `{orgId, projectId}` on the memory pin
   entry). (a) yes, as D4 describes; (b) no, pin only the integration and
@@ -491,7 +496,8 @@ for the executors.
 
 ### Decided on 25.09 (Filip accepted the recommendations)
 
-- **Q11.** Entry state lives in a new table in migration 0073, keyed by a
+- **Q11.** Entry state lives in a new table in migration 0074 (0073 was
+  taken on main on 25.09), keyed by a
   stable entry key with the text hash as a movable alias (quality design,
   Decision 1).
 - **Q12.** Learning lands only when the work is accepted: proposals wait for
@@ -500,6 +506,17 @@ for the executors.
   (Decision 2). This removes today's immediate learning.
 - **Q13.** Codex gets the area upfront until a probe proves its hooks; hook
   trust is never bypassed (Decision 3).
+- **Q14.** Wipe production Mem0 instead of migrating it. Right after 6a
+  merges, every memory Mem0 holds today (facts, lessons and notebooks) is
+  forgotten through the product's own forget (MCP `memory_forget` or the
+  dashboard), so each removal is recorded in the ledger. Production held four
+  documents on 23.09, so the history is worth less than the code that would
+  carry it. What leaves scope: the D9 batch sweep and its owner-only route,
+  the legacy Mem0 notebook read in 1b, the stage 11 sweep gate, Q5 (nothing
+  is left to delete), E35 (no legacy immutable entry survives) and E37.
+  Stage 1b still sends new notebooks to built-in only, so nothing new lands
+  in Mem0 before the wipe. The wipe runs from Filip's session or the
+  advisor's MCP login, never from a run.
 
 ## Open to the executors
 
@@ -724,7 +741,7 @@ at stage start, reviewer and skeptic walk at the gate); one fix round at most.
 | 2 | 4 module + built-in v2 | review | 1, 2, 3 merged | unwired |
 | 2 | 5 Mem0 v2 + live probe | review | 1, 2 merged; probe key from Filip | unwired |
 | 2 | 7 reads + MCP (absorbs store visibility) | review | 3 merged | merges before 6a |
-| 3 | 6a pin, ledger writes, sweep | review+skeptic | 1b, 4, 5, 7 merged | first run-path change; parked run |
+| 3 | 6a pin, ledger writes | review+skeptic | 1b, 4, 5, 7 merged | first run-path change; parked run; Mem0 wiped right after merge (Q14) |
 | 3 | 4b policy module | review | 4 merged | unwired |
 | 3 | 4c memory kit + CLI probe | review | 4b merged | unwired |
 | 4 | 6b placement, ranking, updates, org proposals | review | 6a proven, 3, 4b merged | |
@@ -735,10 +752,10 @@ at stage start, reviewer and skeptic walk at the gate); one fix round at most.
 | 5 | 6e learning after merge | review+skeptic | 6d merged | removes immediate learning (Q12) |
 | 6 | 9 dashboard (9a run page, 9b /memory and integrations) | review | 7, 7b, 8, U merged | Filip looks at it live |
 | 6 | 10 remove routing and org switch | review | 1, 6a, 6b, 9 merged | |
-| 7 | 11 remove v1 and legacy paths | evidence | 6c, 6d, 6e proven, 10 merged, sweep complete | |
+| 7 | 11 remove v1 and legacy paths | evidence | 6c, 6d, 6e proven, 10 merged, Mem0 wiped (Q14) | |
 | 7 | 12 docs, red team, production proof | red team + branch review | everything | |
 
-Live agents at most 4 at a time. Decisions Q1 to Q13 are final.
+Live agents at most 4 at a time. Decisions Q1 to Q14 are final; the stage rows below are read with Q14 (no sweep, no legacy notebook read, no E35 or E37).
 
 ## Stages
 
@@ -776,13 +793,13 @@ mechanical subsets. `ENGINE CHECKS` means the two boundary tests plus the
   has a reader.
 - 6a starts after 1b, 4, 5 and 7. It is the first merge that changes the run
   path beyond the notebook: merge in a quiet window with a parked run, run one
-  ticket, read its ledger, run the sweep. 6b follows only after 6a is proven.
+  ticket, read its ledger, then wipe Mem0 (Q14). 6b follows only after 6a is proven.
 - 6a and 6b share `repo-memory-steps.ts` and `agent-workflow.ts` by halves;
   they never run at the same time.
 - Stage 8 after 6a and 7. Stage 9 after 7 and 8 and the UX spec. Stage 10
   after stage 1, 6a, 6b and 9 (6b replaces the promotion code; stage 9 drops
-  both switches from `/memory`). Stage 11 after 6b is proven, 10 is merged and the
-  sweep is complete. Stage 12 last.
+  both switches from `/memory`). Stage 11 after 6b is proven, 10 is merged and
+  Mem0 is wiped. Stage 12 last.
 - Drain: none planned (D7). Verified against `@workflow/core` 4.8.0: replay
   matches by correlation id and step name only, so optional new inputs and
   result fields are safe. A stage that breaks D7 stops and asks.
