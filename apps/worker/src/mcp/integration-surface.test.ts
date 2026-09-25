@@ -391,15 +391,18 @@ describe("what an agent learns from one question", () => {
     const listed = (
       dataOf(await client.callTool({ name: "blocks.list", arguments: {} })).blocks as Array<{
         type: string;
-        availability: { available: boolean; unavailableReason: string | null };
+        integration: string | null;
+        available: boolean;
+        unavailableReason: string | null;
       }>
     ).filter((block) => block.type.startsWith("demo_"));
 
     expect(listed).toHaveLength(1);
     for (const block of facts[0]?.blocks ?? []) {
-      const contract = listed.find((entry) => entry.type === block.type);
-      expect(contract?.availability.available).toBe(block.available);
-      expect(contract?.availability.unavailableReason).toBe(block.unavailableReason);
+      const summary = listed.find((entry) => entry.type === block.type);
+      expect(summary?.integration).toBe(facts[0]?.id);
+      expect(summary?.available).toBe(block.available);
+      expect(summary?.unavailableReason).toBe(block.unavailableReason);
     }
   });
 
