@@ -1,5 +1,5 @@
 {
-  "contractHash": "0958ce704e1d36f9da6f3597399a12bc8526adbd577813a2d1953064db64f07f",
+  "contractHash": "1701b01174d6a5ea31ae2b3dba249f33dbfc6ef912a64a8e71de8d308260f3ce",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -30,7 +30,7 @@
     },
     {
       "name": "tickets.get",
-      "description": "Fetch a ticket's fields, status, labels and (optionally) its comments.",
+      "description": "Fetch a ticket's fields, status, labels, related tickets and (optionally) its comments. `relatedTickets` lists the ticket's parent, the tickets under it (subtasks, and an epic's child issues) and its links, each with its key, title, status and `relation`, the words that complete \"this ticket ... <key>\" (\"is a child of\", \"is the parent of\", \"blocks\"); only their titles, never their descriptions. It is null when the tracker does not report relations, and an empty list when it says there are none.",
       "inputSchema": {
         "type": "object",
         "properties": {

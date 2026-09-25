@@ -478,7 +478,7 @@ describe("JiraAdapter", () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const fields = new URL(String(mockFetch.mock.calls[0][0])).searchParams.get("fields")?.split(",");
-      expect(fields).toEqual(expect.arrayContaining(["subtasks", "parent", "issuelinks"]));
+      expect(fields).toEqual(expect.arrayContaining(["subtasks", "parent", "issuelinks", "issuetype"]));
     });
 
     it("lists a parent's subtasks in the order the team ranked them", async () => {
@@ -578,6 +578,117 @@ describe("JiraAdapter", () => {
       expect(ticket.relatedTickets).toEqual([
         { key: "PROJ-9", title: "", status: "", relation: "blocks" },
       ]);
+    });
+
+    // An epic's stories are not in its own read: Jira lists `subtasks` there,
+    // and an epic's children are issues whose `parent` is the epic. Planning an
+    // epic without them plans it blind to the breakdown the team already made,
+    // so an epic, and only an epic, costs one more request, a search for its
+    // children. The issue type shape is Jira's (`hierarchyLevel` 1 is the epic
+    // level, 0 a story, -1 a subtask), as the AWP project's own read returns it.
+    describe("an epic's children", () => {
+      const epicType = { id: "10821", name: "Epik", subtask: false, hierarchyLevel: 1 };
+
+      function searchAnswer(issues: unknown[]) {
+        return { ok: true, json: async () => ({ issues, isLast: true }) };
+      }
+
+      it("lists an epic's child issues after its subtasks and before its links, from one bounded search", async () => {
+        mockFetch.mockResolvedValueOnce(
+          issueWith({
+            issuetype: epicType,
+            parent: null,
+            subtasks: [{ id: "50164", key: "AWP-275", fields: { summary: "Promo banner shows when the code expires", status: { name: "Gotowe" } } }],
+            issuelinks: [
+              { id: "1", type: { name: "Blocks", inward: "is blocked by", outward: "blocks" }, outwardIssue: { key: "AWP-300", fields: { summary: "Launch the spring campaign", status: { name: "Do zrobienia" } } } },
+            ],
+          }),
+        );
+        mockFetch.mockResolvedValueOnce(
+          searchAnswer([
+            { id: "50165", key: "AWP-276", fields: { summary: "Basket API refuses expired codes", status: { name: "Gotowe" } } },
+            // A subtask is a child too, so the search finds it again.
+            { id: "50164", key: "AWP-275", fields: { summary: "Promo banner shows when the code expires", status: { name: "Gotowe" } } },
+            { id: "50166", key: "AWP-277", fields: { summary: "Pricing module: discount rules get an optional expiry date", status: { name: "W toku" } } },
+          ]),
+        );
+
+        const ticket = await jiraAdapter().fetchTicket("AWP-274");
+
+        expect(ticket.relatedTickets).toEqual([
+          { key: "AWP-275", title: "Promo banner shows when the code expires", status: "Gotowe", relation: "is the parent of" },
+          { key: "AWP-276", title: "Basket API refuses expired codes", status: "Gotowe", relation: "is the parent of" },
+          { key: "AWP-277", title: "Pricing module: discount rules get an optional expiry date", status: "W toku", relation: "is the parent of" },
+          { key: "AWP-300", title: "Launch the spring campaign", status: "Do zrobienia", relation: "blocks" },
+        ]);
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        const search = new URL(String(mockFetch.mock.calls[1][0]));
+        expect(search.pathname).toMatch(/\/rest\/api\/3\/search\/jql$/);
+        expect(search.searchParams.get("jql")).toBe('parent = "ALOY-210" ORDER BY Rank ASC');
+        expect(search.searchParams.get("maxResults")).toBe("25");
+        expect(search.searchParams.get("fields")?.split(",")).toEqual(["summary", "status"]);
+      });
+
+      // One line per ticket AND relation: the child the search finds again is
+      // one line, and a link the epic also has to one of its children stays,
+      // because "blocks" says something "is the parent of" does not.
+      it("keeps a link to one of the epic's children beside the child line", async () => {
+        mockFetch.mockResolvedValueOnce(
+          issueWith({
+            issuetype: epicType,
+            parent: null,
+            subtasks: [],
+            issuelinks: [
+              { id: "1", type: { name: "Blocks", inward: "is blocked by", outward: "blocks" }, outwardIssue: { key: "AWP-276", fields: { summary: "Basket API refuses expired codes", status: { name: "Gotowe" } } } },
+            ],
+          }),
+        );
+        mockFetch.mockResolvedValueOnce(
+          searchAnswer([{ id: "50165", key: "AWP-276", fields: { summary: "Basket API refuses expired codes", status: { name: "Gotowe" } } }]),
+        );
+
+        const ticket = await jiraAdapter().fetchTicket("AWP-274");
+
+        expect(ticket.relatedTickets?.map(({ key, relation }) => `${relation} ${key}`)).toEqual([
+          "is the parent of AWP-276",
+          "blocks AWP-276",
+        ]);
+      });
+
+      it("asks nothing more for a story, a task or a subtask", async () => {
+        mockFetch.mockResolvedValueOnce(
+          issueWith({ issuetype: { name: "Zadanie", subtask: false, hierarchyLevel: 0 }, parent: null, subtasks: [], issuelinks: [] }),
+        );
+
+        await jiraAdapter().fetchTicket("AWP-280");
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      // Every reader of a ticket goes through this read (dispatch, the
+      // reconciler, the answer poller), so the children are the one part of it
+      // allowed to fail: an epic whose children cannot be searched is still an
+      // epic somebody can run.
+      it("still reads an epic whose children cannot be searched, without them", async () => {
+        mockFetch.mockResolvedValueOnce(
+          issueWith({
+            issuetype: epicType,
+            parent: null,
+            subtasks: [],
+            issuelinks: [
+              { id: "1", type: { name: "Blocks", inward: "is blocked by", outward: "blocks" }, outwardIssue: { key: "AWP-300", fields: { summary: "Launch", status: { name: "Do zrobienia" } } } },
+            ],
+          }),
+        );
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 400, statusText: "Bad Request", json: async () => ({}) });
+
+        const ticket = await jiraAdapter().fetchTicket("AWP-274");
+
+        expect(ticket.title).toBe("Support Dynamic Styling");
+        expect(ticket.relatedTickets).toEqual([
+          { key: "AWP-300", title: "Launch", status: "Do zrobienia", relation: "blocks" },
+        ]);
+      });
     });
   });
 
@@ -687,6 +798,271 @@ describe("JiraAdapter", () => {
       const ticket = await jiraAdapter().fetchTicket("PROJ-1");
 
       expect(ticket.acceptanceCriteria).toBe("");
+    });
+  });
+
+  // Every agent reads a ticket through this text, and the flattener used to put
+  // every text run on a line of its own: a sentence with one bold word or one
+  // link reached the model as four lines, and a description written in Jira's
+  // editor has no blank line anywhere, so the acceptance criteria ran on to the
+  // end of it. The nodes below are Atlassian's own examples from the ADF
+  // reference (developer.atlassian.com/cloud/jira/platform/apis/document/,
+  // retrieved 2026-09-23: nodes mention, emoji, date, status, inlineCard,
+  // hardBreak, codeBlock, orderedList, listItem, tableHeader, expand; marks link),
+  // and taskList/taskItem from the ADF JSON schema (@atlaskit/adf-schema,
+  // full.json), put together the way Jira's editor writes a description.
+  describe("fetchTicket rich text", () => {
+    const text = (value: string, marks?: unknown[]) => ({ type: "text", text: value, ...(marks ? { marks } : {}) });
+    const paragraph = (...content: unknown[]) => ({ type: "paragraph", content });
+    const listItem = (...content: unknown[]) => ({ type: "listItem", content });
+    const doc = (...content: unknown[]) => ({ version: 1, type: "doc", content });
+
+    function issueWith(description: unknown, commentBodies: unknown[] = []) {
+      return {
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Discount codes can expire",
+            description,
+            comment: {
+              comments: commentBodies.map((body, index) => ({
+                id: String(index + 1),
+                author: { displayName: "Ada", accountId: "acc-ada" },
+                body,
+                created: "2026-09-23T10:00:00.000Z",
+              })),
+              total: commentBodies.length,
+            },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+          },
+        }),
+      };
+    }
+
+    async function read(description: unknown, commentBodies: unknown[] = []) {
+      mockFetch.mockResolvedValueOnce(issueWith(description, commentBodies));
+      return jiraAdapter().fetchTicket("PROJ-1");
+    }
+
+    it("reads a sentence with a bold word and a link as one line", async () => {
+      const ticket = await read(
+        doc(
+          paragraph(
+            text("The basket API "),
+            text("must", [{ type: "strong" }]),
+            text(" refuse an expired code, see "),
+            text("the pricing rules", [{ type: "link", attrs: { href: "https://example.com/pricing", title: "Pricing" } }]),
+            text(" for the dates."),
+          ),
+        ),
+      );
+
+      expect(ticket.description).toBe(
+        "The basket API must refuse an expired code, see [the pricing rules](https://example.com/pricing) for the dates.",
+      );
+    });
+
+    it("writes a link whose text is its address once", async () => {
+      const ticket = await read(
+        doc(paragraph(text("Spec: "), text("https://example.com/spec", [{ type: "link", attrs: { href: "https://example.com/spec" } }]))),
+      );
+
+      expect(ticket.description).toBe("Spec: https://example.com/spec");
+    });
+
+    it("reads mentions, emoji, dates, status lozenges, inline code and cards as a person sees them", async () => {
+      const ticket = await read(
+        doc(
+          paragraph(
+            { type: "mention", attrs: { id: "ABCDE-ABCDE-ABCDE-ABCDE", text: "@Bradley Ayers", userType: "APP" } },
+            text(" please ship "),
+            text("parseCode()", [{ type: "code" }]),
+            text(" by "),
+            { type: "date", attrs: { timestamp: "1582152559" } },
+            text(" "),
+            { type: "emoji", attrs: { shortName: ":grinning:", text: "😀" } },
+            text(" it is "),
+            { type: "status", attrs: { localId: "abcdef12-abcd-abcd-abcd-abcdef123456", text: "In Progress", color: "yellow" } },
+            text(", design in "),
+            { type: "inlineCard", attrs: { url: "https://atlassian.com" } },
+          ),
+        ),
+      );
+
+      expect(ticket.description).toBe(
+        "@Bradley Ayers please ship `parseCode()` by 2020-02-19 😀 it is In Progress, design in https://atlassian.com",
+      );
+    });
+
+    it("reads a date written in milliseconds, and an emoji with only its short name", async () => {
+      const ticket = await read(
+        doc(paragraph(text("Due "), { type: "date", attrs: { timestamp: "1582152559000" } }, text(" "), { type: "emoji", attrs: { shortName: ":rocket:" } })),
+      );
+
+      expect(ticket.description).toBe("Due 2020-02-19 :rocket:");
+    });
+
+    it("marks struck-out text, so a requirement somebody crossed out does not read as one", async () => {
+      const ticket = await read(
+        doc(paragraph(text("Store codes in "), text("Redis", [{ type: "strike" }]), text(" Postgres."))),
+      );
+
+      expect(ticket.description).toBe("Store codes in ~~Redis~~ Postgres.");
+    });
+
+    it("breaks the line where a person pressed Shift+Enter, and nowhere else inside a paragraph", async () => {
+      const ticket = await read(doc(paragraph(text("Hello"), { type: "hardBreak" }, text("world"))));
+
+      expect(ticket.description).toBe("Hello\nworld");
+    });
+
+    it("stops the acceptance criteria under a heading at the paragraph after the list", async () => {
+      const ticket = await read(
+        doc(
+          paragraph(text("Marketing wants discount codes that stop working after a date.")),
+          { type: "heading", attrs: { level: 2 }, content: [text("Acceptance criteria")] },
+          {
+            type: "bulletList",
+            content: [
+              listItem(paragraph(text("The basket "), text("refuses", [{ type: "strong" }]), text(" an expired code"))),
+              listItem(paragraph(text("The banner shows the expiry date in UTC"))),
+            ],
+          },
+          paragraph(text("Out of scope: a UI for managing codes.")),
+        ),
+      );
+
+      expect(ticket.acceptanceCriteria).toBe(
+        "- The basket refuses an expired code\n- The banner shows the expiry date in UTC",
+      );
+      expect(ticket.description).toBe(
+        [
+          "Marketing wants discount codes that stop working after a date.",
+          "## Acceptance criteria",
+          "",
+          "- The basket refuses an expired code",
+          "- The banner shows the expiry date in UTC",
+          "",
+          "Out of scope: a UI for managing codes.",
+        ].join("\n"),
+      );
+    });
+
+    it("stops the criteria a label introduces at the next heading", async () => {
+      const ticket = await read(
+        doc(
+          paragraph(text("AC:", [{ type: "strong" }])),
+          paragraph(text("Expired codes are refused with a 410")),
+          { type: "heading", attrs: { level: 3 }, content: [text("Notes")] },
+          paragraph(text("Use the staging prices.")),
+        ),
+      );
+
+      expect(ticket.acceptanceCriteria).toBe("Expired codes are refused with a 410");
+    });
+
+    it("numbers an ordered list from where it starts, and indents a nested list under its item", async () => {
+      const ticket = await read(
+        doc({
+          type: "orderedList",
+          attrs: { order: 3 },
+          content: [
+            listItem(
+              paragraph(text("Add the expiry column")),
+              { type: "bulletList", content: [listItem(paragraph(text("nullable, UTC")))] },
+            ),
+            listItem(paragraph(text("Refuse expired codes"))),
+          ],
+        }),
+      );
+
+      expect(ticket.description).toBe("3. Add the expiry column\n   - nullable, UTC\n4. Refuse expired codes");
+    });
+
+    it("reads an action item list with what is done ticked", async () => {
+      const ticket = await read(
+        doc({
+          type: "taskList",
+          attrs: { localId: "tl-1" },
+          content: [
+            { type: "taskItem", attrs: { localId: "t-1", state: "DONE" }, content: [text("Write the migration")] },
+            { type: "taskItem", attrs: { localId: "t-2", state: "TODO" }, content: [text("Update the banner")] },
+          ],
+        }),
+      );
+
+      expect(ticket.description).toBe("- [x] Write the migration\n- [ ] Update the banner");
+    });
+
+    it("keeps a code block's lines and language, set apart from the text around it", async () => {
+      const ticket = await read(
+        doc(
+          paragraph(text("Before")),
+          { type: "codeBlock", attrs: { language: "javascript" }, content: [text("var foo = {};\nvar bar = [];")] },
+          paragraph(text("After")),
+        ),
+      );
+
+      expect(ticket.description).toBe("Before\n\n```javascript\nvar foo = {};\nvar bar = [];\n```\n\nAfter");
+    });
+
+    it("reads a table row by row, one cell never running into the next", async () => {
+      const cell = (type: string, value: string) => ({ type, attrs: {}, content: [paragraph(text(value))] });
+      const ticket = await read(
+        doc({
+          type: "table",
+          attrs: { isNumberColumnEnabled: false, layout: "default" },
+          content: [
+            { type: "tableRow", content: [cell("tableHeader", "Code"), cell("tableHeader", "Expires")] },
+            { type: "tableRow", content: [cell("tableCell", "SPRING"), cell("tableCell", "2026-10-01")] },
+          ],
+        }),
+      );
+
+      expect(ticket.description).toBe("| Code | Expires |\n| --- | --- |\n| SPRING | 2026-10-01 |");
+    });
+
+    it("reads an expand's title and body", async () => {
+      const ticket = await read(
+        doc({ type: "expand", attrs: { title: "Hello world" }, content: [paragraph(text("Hello world"))] }),
+      );
+
+      expect(ticket.description).toBe("Hello world\nHello world");
+    });
+
+    // The quote marker is what the answer readers tell a person's words from
+    // ours by, so a quoted sentence with one bold word must stay ONE quoted
+    // line, not three lines with the bold word stranded on its own.
+    it("keeps a quoted sentence with a bold word on one quoted line", async () => {
+      const ticket = await read(doc(paragraph(text("Build it"))), [
+        doc(
+          {
+            type: "blockquote",
+            content: [paragraph(text("github:acme/billing is "), text("not", [{ type: "strong" }]), text(" selected on this work."))],
+          },
+          paragraph(text("yes, add it")),
+        ),
+      ]);
+
+      expect(ticket.comments[0]?.body).toBe("> github:acme/billing is not selected on this work.\nyes, add it");
+    });
+
+    // An image-only comment is not an answer (`answer-authorship.ts`), so it
+    // must keep reading as empty rather than as a placeholder for the file.
+    it("reads a comment that is only an image as empty", async () => {
+      const ticket = await read(doc(paragraph(text("Build it"))), [
+        doc({
+          type: "mediaSingle",
+          attrs: { layout: "center" },
+          content: [{ type: "media", attrs: { id: "4478e39c-cf9b-41d1-ba92-68589487cd75", type: "file", collection: "MediaServicesSample" } }],
+        }),
+      ]);
+
+      expect(ticket.comments[0]?.body).toBe("");
     });
   });
 

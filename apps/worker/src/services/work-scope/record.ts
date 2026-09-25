@@ -15,6 +15,7 @@
  * the changes, and knows nothing about either.
  */
 import {
+  canonicalSubjectKey,
   repositoryCatalogKey,
   workScopeWritePlanSchema,
   WORK_SCOPE_TRAIL_PAGE_DEFAULT,
@@ -211,12 +212,16 @@ async function readRecord(
   persistence: WorkScopeRecordPersistence,
   input: { subjectKey: string; trail?: { limit?: number; beforeId?: number } },
 ): Promise<WorkScopeRecordView> {
+  // The key a person typed, in the spelling runs record under: a key compared
+  // verbatim read `ticket:jira:awp-274` as "nothing recorded" beside AWP-274's
+  // record. The answer echoes this spelling, so the caller learns it.
+  const subjectKey = canonicalSubjectKey(input.subjectKey);
   // Said, not refused. A subject kind that keeps no record answers plainly that
   // it keeps none, because a caller asking whether one exists deserves the
   // answer and a read can cause no bad write; `applyEdit` is where the same
   // fact refuses. The store is still asked, so a key of a kind that DOES carry
   // a record is never answered from this predicate alone.
-  const carriesRecord = subjectCarriesWorkScopeRecord(input.subjectKey);
+  const carriesRecord = subjectCarriesWorkScopeRecord(subjectKey);
   const page = {
     limit: input.trail?.limit ?? WORK_SCOPE_TRAIL_PAGE_DEFAULT,
     ...(input.trail?.beforeId === undefined ? {} : { beforeId: input.trail.beforeId }),
@@ -225,11 +230,11 @@ async function readRecord(
   // entries can only be newer than them, which reads as history the entries
   // have not caught up with rather than as entries ahead of their own history.
   const [scope, trail] = await Promise.all([
-    persistence.readScope(input.subjectKey),
-    persistence.listTrail(input.subjectKey, page),
+    persistence.readScope(subjectKey),
+    persistence.listTrail(subjectKey, page),
   ]);
   return {
-    subjectKey: input.subjectKey,
+    subjectKey,
     carriesRecord,
     // A subject with no record answers 0 rather than null, so a caller that
     // reads and then edits never has to tell "no record" from "an empty one".
@@ -244,7 +249,11 @@ async function applyEdit(
   persistence: WorkScopeRecordPersistence,
   input: { request: WorkScopeEditRequest; editor: WorkScopeEditor; now?: Date },
 ): Promise<WorkScopeEditOutcome> {
-  const { request, editor } = input;
+  const { editor } = input;
+  // Written onto the record runs read, never onto a twin of it: an edit of
+  // `ticket:jira:awp-281` answered success on an empty record nobody reads
+  // while AWP-281's own record stayed where it was.
+  const request = { ...input.request, subjectKey: canonicalSubjectKey(input.request.subjectKey) };
   if (!subjectCarriesWorkScopeRecord(request.subjectKey)) {
     return { kind: "subject_carries_no_record", subjectKey: request.subjectKey };
   }
