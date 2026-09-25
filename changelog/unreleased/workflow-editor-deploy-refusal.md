@@ -1,2 +1,0 @@
-- The workflow editor now says why a Deploy did not go through: the first reason, in the block's name, with a link to that block and to the full list of issues. A Deploy button that cannot be pressed says why on hover.
-- In the workflow editor, the notice about steps that cannot run sits above the canvas instead of covering its blocks, the toolbar wraps on narrow screens, and the source scope bar shows "Loading…" until providers are known.

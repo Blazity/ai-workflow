@@ -95,6 +95,10 @@ import {
   type AnswerDeliveryRecord,
 } from "../agent-visibility/index.js";
 import { createAuthRepository, getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
+import {
+  readConnectedMcpOauthClientName,
+  readMcpOauthClientName,
+} from "../../db/repositories/mcp.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -203,17 +207,44 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
   /** Whoever is behind a user id, for the ticket comment an MCP answer posts,
    *  or null when the deployment cannot say. */
   personLabel(userId: string): Promise<string | null>;
+  /** The name an MCP client registered, or null when it has none. */
+  mcpClientName(clientId: string): Promise<string | null>;
 }
 
 /**
- * A label that is only the id again is no name a person would recognise, and
- * an email address is not something to publish: the ticket may be a client's,
- * and the person behind an MCP client never agreed to have their address
- * posted there. Anonymous beats leaked.
+ * Whoever signed in behind an MCP token, as the ticket should name them: their
+ * name, or their email address when that is all the account has. A label that
+ * is only the id again is no name anybody recognises, so that is null.
+ *
+ * The address is published deliberately. This used to refuse it, on the ground
+ * that the ticket may be a client's, and every account the bootstrap and invite
+ * paths create without a name carries its address as its name
+ * (services/auth/auth-core.ts, invite-acceptance.ts), so on production every
+ * MCP answer went out signed with a 32-character OAuth client id (AWP-274,
+ * 2026-09-23). The person answered on this ticket through a deployment they
+ * are a member of, the way a Jira comment of theirs would be signed.
  */
 function namedPerson(label: string, userId: string): string | null {
   const trimmed = label.trim();
-  return trimmed.length > 0 && trimmed !== userId && !trimmed.includes("@") ? trimmed : null;
+  return trimmed.length > 0 && trimmed !== userId ? trimmed : null;
+}
+
+/** Longest client name a comment carries. The name is whatever the client
+ *  registered, through public dynamic registration included, so it is bounded
+ *  and flattened to one line like any other text we did not write. */
+const MCP_CLIENT_NAME_MAX_LENGTH = 60;
+
+function boundedClientName(name: string | null): string | null {
+  // Control characters out first, including the line breaks a registered name
+  // could use to start a paragraph of its own in the comment.
+  const flat = (name ?? "")
+    .replace(new RegExp(String.raw`[\u0000-\u001F\u007F]+`, "gu"), " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flat) return null;
+  return flat.length > MCP_CLIENT_NAME_MAX_LENGTH
+    ? `${flat.slice(0, MCP_CLIENT_NAME_MAX_LENGTH - 3)}...`
+    : flat;
 }
 
 /** The catalog as the answer reader and the decision want it, from whichever
@@ -436,6 +467,13 @@ export function answerClarificationAndResume(
         return null;
       }
     },
+    mcpClientName: async (clientId) => {
+      try {
+        return boundedClientName(await readMcpOauthClientName(db, clientId));
+      } catch {
+        return null;
+      }
+    },
     repositoryCatalog: () => readRepositoryCatalogKeys(db),
     readWorkScope: (subjectKey) => readWorkScope(db, subjectKey),
     applyAnswerWorkScope: (plan) => applyAnswerWorkScopePlan(db, plan),
@@ -462,6 +500,13 @@ export function answerConnectedClarificationAndResume(
     personLabel: async (userId) => {
       try {
         return namedPerson(await getConnectedDashboardUserLabel(userId), userId);
+      } catch {
+        return null;
+      }
+    },
+    mcpClientName: async (clientId) => {
+      try {
+        return boundedClientName(await readConnectedMcpOauthClientName(clientId));
       } catch {
         return null;
       }
@@ -564,22 +609,32 @@ async function deliverAnswer(
   persistence: AnswerPersistence,
   arrival: AnswerArrival,
 ): Promise<AnswerClarificationOutcome> {
-  const { row, rawAnswer, actor } = input;
+  const { row, rawAnswer } = input;
   // Every tracker call below goes through this, so a question with no ticket
   // never needs a tracker and one with a ticket always has one.
   const questionTicket = questionTicketOf(row, input.issueTracker);
 
   const answer = rawAnswer.trim();
   const isResumeRetry = row.status === "answered" && row.answer === answer;
-  // Whoever is behind an MCP client, where the deployment knows them: read
-  // once, and used both for the record of the arrival and for the ticket
-  // comment, so neither of them signs a person's answer with an OAuth client
-  // id alone.
+  // Whoever is behind an MCP client, where the deployment knows them, and the
+  // name the client registered: read once, and used for the record of the
+  // arrival, the ticket comment and the answer's own signature, so none of
+  // them signs a person's answer with an OAuth client id.
   const mcpPerson =
     input.surface.kind === "mcp" && input.surface.userId
       ? await persistence.personLabel(input.surface.userId)
       : null;
-  const displayOf = (label: string) => (mcpPerson ? `${mcpPerson} (${label})` : label);
+  const mcpClientName =
+    input.surface.kind === "mcp" ? await persistence.mcpClientName(input.surface.clientId) : null;
+  const mcpClient =
+    input.surface.kind === "mcp" ? `MCP client ${mcpClientName ?? input.surface.clientId}` : null;
+  // The caller signs an MCP answer with its client ("MCP <clientId>"), which is
+  // all the transport knows. The answer is the person's when there is one: that
+  // is who the resumed agent and the dashboard are told answered.
+  const actor =
+    mcpClient === null ? input.actor : { id: input.actor.id, label: mcpPerson ?? mcpClient };
+  const displayOf = (label: string) =>
+    mcpClient === null ? label : mcpPerson ? `${mcpPerson} (${mcpClient})` : mcpClient;
 
   // AN ARRIVAL IS WHAT A PERSON SENT, whatever we then do with it.
   //
@@ -902,7 +957,12 @@ async function deliverAnswer(
   // it would echo the person's own comment back at them.
   const commentSurface: ClarificationAnswerSurfaceComment | null =
     input.surface.kind === "mcp"
-      ? { kind: "mcp", clientId: input.surface.clientId, person: mcpPerson }
+      ? {
+        kind: "mcp",
+        clientId: input.surface.clientId,
+        clientName: mcpClientName,
+        person: mcpPerson,
+      }
       : input.surface.kind === "dashboard"
         ? { kind: "dashboard" }
         : null;

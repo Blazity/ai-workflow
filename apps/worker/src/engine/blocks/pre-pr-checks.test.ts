@@ -44,6 +44,7 @@ import {
   runPrePrChecksWithFixes,
   runRepositorySetup,
 } from "./pre-pr-checks.js";
+import { repositoryScriptsOutput } from "./support/repository-scripts-output.js";
 import type { PhasePollOutcome, PhasePollTuning } from "./poll-phase.js";
 import {
   createV2InvocationCancellationController,
@@ -1087,6 +1088,7 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         declaredIn: ["github:acme/web"],
         missing: ["github:acme/api"],
         skipped: [],
+        skippedReasons: [],
       },
     ]);
     expect(run.summary).toBe(
@@ -1126,6 +1128,8 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         declaredIn: ["github:acme/web"],
         missing: [],
         skipped: ["github:acme/api"],
+        // The launch step's answer was journaled without a reason.
+        skippedReasons: [{ repo: "github:acme/api", reason: "unrecorded" }],
       },
     ]);
     // A skipped repository is narrated but not counted: uncoveredGroupCount
@@ -1136,6 +1140,116 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         '"lint" was not entered in github:acme/api; that repository was not ' +
         "part of this run.",
     );
+  });
+
+  it("does not count a catalog repository outside the workspace as a gap", async () => {
+    // The configuration is every profiled repository in the catalog. acme/api
+    // declares no `test` and this run never had it, so no launch step is asked
+    // about it; it used to land in missing, and uncoveredGroupCount then said a
+    // fully covered workspace was not. A definition branching on
+    // `uncoveredGroupCount equals 0` took the wrong edge on every such run.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["test"] },
+        workspaceRepositoryKeys: ["github:acme/web"],
+      }),
+    );
+
+    expect(run.groupCoverage).toEqual([
+      {
+        group: "test",
+        declaredIn: ["github:acme/web"],
+        missing: [],
+        skipped: ["github:acme/api"],
+        skippedReasons: [{ repo: "github:acme/api", reason: "not_in_workspace" }],
+      },
+    ]);
+    expect(repositoryScriptsOutput(run, ["test"]).uncoveredGroupCount).toBe(0);
+  });
+
+  it("still counts a repository the workspace holds, in any case, that lacks the group", async () => {
+    // The manifest spells the repository the provider's way; the catalog row
+    // may not. Taking one for another would hide exactly the gap this reports.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["test"] },
+        workspaceRepositoryKeys: ["github:acme/web", "github:acme/api"],
+      }),
+    );
+
+    expect(run.groupCoverage).toMatchObject([
+      { group: "test", missing: ["github:acme/api"], skipped: [] },
+    ]);
+    expect(repositoryScriptsOutput(run, ["test"]).uncoveredGroupCount).toBe(1);
+  });
+
+  it("records why each repository was not entered", async () => {
+    // The replay used to say "not part of this run" whatever happened; the
+    // launch step knows, and so does a walk that stopped before a repository.
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) => (repoPath === "acme/api"
+      ? { skipped: true, reason: "not_in_workspace" }
+      : started(repoIndex)));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm lint")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["lint"] },
+      }),
+    );
+
+    expect(run.groupCoverage).toMatchObject([
+      {
+        group: "lint",
+        skipped: ["github:acme/api"],
+        skippedReasons: [{ repo: "github:acme/api", reason: "not_in_workspace" }],
+      },
+    ]);
+  });
+
+  it("says a repository the walk never reached was not reached", async () => {
+    // The first batch outlives its ceiling, so the walk stops and acme/api is
+    // never launched: not a statement about the workspace at all.
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("duration_cap", 1_500_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ progress: { completed: 0, total: 1, stoppedAt: "pnpm lint" } }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["lint"] },
+      }),
+    );
+
+    expect(run.groupCoverage).toMatchObject([
+      {
+        group: "lint",
+        skipped: ["github:acme/api"],
+        skippedReasons: [{ repo: "github:acme/api", reason: "not_reached" }],
+      },
+    ]);
   });
 
   it("names every repository a selected group is missing from, in one sentence", async () => {
@@ -1152,6 +1266,7 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         declaredIn: [],
         missing: ["github:acme/api", "github:acme/web"],
         skipped: [],
+        skippedReasons: [],
       },
     ]);
     expect(run.summary).toBe(
@@ -1245,6 +1360,7 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         declaredIn: ["github:acme/web"],
         missing: [],
         skipped: ["gitlab:acme/web"],
+        skippedReasons: [{ repo: "gitlab:acme/web", reason: "unrecorded" }],
       },
     ]);
   });

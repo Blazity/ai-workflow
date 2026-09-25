@@ -154,8 +154,9 @@ const repoScriptGroupStatusType = objectType({
 /** What one NAMED selected group did in each configured repository, from what
  *  the run actually did. `declaredIn` ran it and declares it, `missing` took
  *  part in the run and does not declare it, and `skipped` was left out of the
- *  run altogether (absent from the workspace, or never reached). A repository
- *  the run never entered can never appear in declaredIn.
+ *  run altogether (absent from the workspace, or never reached), with the
+ *  reason for each in `skippedReasons`. A repository the run never entered can
+ *  never appear in declaredIn.
  *
  *  Empty for the gate selection, which resolves its groups per repository, so a
  *  group deliberately kept out of one repository's gateGroups is not a gap.
@@ -168,6 +169,12 @@ const repoScriptGroupCoverageType = objectType({
   declaredIn: arrayType(stringType()),
   missing: arrayType(stringType()),
   skipped: arrayType(stringType()),
+  skippedReasons: arrayType(
+    objectType({
+      repo: stringType(),
+      reason: enumStringType(["not_in_workspace", "unchanged", "not_reached", "unrecorded"]),
+    }),
+  ),
 });
 /** One command the run actually started. Mirrors run_checks v1's per-command
  *  shape, plus the three things groups added: which group DECLARES it (the

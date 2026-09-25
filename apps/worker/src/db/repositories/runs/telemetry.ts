@@ -82,7 +82,8 @@ export interface RunUsage {
    * cron snapshot re-observing the run in the Workflow world, which never
    * happens on deployments where the scheduled cron doesn't fire (and which
    * mis-reports a failed-but-returned run as "success" even when it does).
-   * "blocked" (external cancellation) stays cron-driven.
+   * "blocked" (external cancellation) is written by the cancel path once it
+   * has torn the run down (markRunBlockedOnCancel), and by the cron otherwise.
    */
   status: "success" | "failed" | "awaiting";
   /** Durable failure reason (execution error / budget stop) recorded with a
@@ -692,6 +693,13 @@ export function markConnectedRunResumed(runId: string): Promise<void> {
  * a frozen status, so without this the cancelled row keeps showing awaiting
  * input. Guarded on exactly "awaiting" so it only ever touches a parked run.
  *
+ * `fromRunning` widens the guard to a "running" row too, for the one caller that
+ * knows it stopped a live run itself: the cancel path, behind its step-drain
+ * barrier, after Workflow confirmed the cancellation (cancel-run.ts
+ * settleCancelledRun). Without it that row said "running" until the next cron
+ * snapshot noticed. Every other caller keeps the awaiting-only guard, so a run
+ * that legitimately resumed to "running" is never blocked by a stale retire.
+ *
  * "blocked" is terminal, so the settle also finalizes the lifecycle the way
  * recordRunUsage does on completion: completedAt keeps a precise value if one
  * was already recorded, else stamps now(); durationSec is filled from a known
@@ -699,8 +707,15 @@ export function markConnectedRunResumed(runId: string): Promise<void> {
  * no duration, forever (the cron never touches a frozen status and keepIfNull
  * only keeps what the settle wrote).
  */
-export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<void> {
-  await db
+export async function markRunBlockedOnCancel(
+  db: Db,
+  runId: string,
+  options: { fromRunning?: boolean } = {},
+): Promise<boolean> {
+  const settleFrom = options.fromRunning ? ["awaiting", "running"] : ["awaiting"];
+  // True only when this write moved the row: a row the run already closed as
+  // "failed" or "success" is not a stop, and its caller must not describe one.
+  const settled = await db
     .update(workflowRuns)
     .set({
       status: "blocked",
@@ -708,11 +723,16 @@ export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<voi
       durationSec: durationFromStart(),
       updatedAt: sql`now()`,
     })
-    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+    .where(and(eq(workflowRuns.runId, runId), inArray(workflowRuns.status, settleFrom)))
+    .returning({ runId: workflowRuns.runId });
+  return settled.length > 0;
 }
 
-export function markConnectedRunBlockedOnCancel(runId: string): Promise<void> {
-  return markRunBlockedOnCancel(getDb(), runId);
+export function markConnectedRunBlockedOnCancel(
+  runId: string,
+  options: { fromRunning?: boolean } = {},
+): Promise<boolean> {
+  return markRunBlockedOnCancel(getDb(), runId, options);
 }
 
 /**
@@ -727,8 +747,9 @@ export function markConnectedRunBlockedOnCancel(runId: string): Promise<void> {
  * it never overwrites a terminal success/failed/blocked, so a run that finished
  * on its own between the operator's click and this write keeps its real outcome
  * (the cron never downgrades a frozen status either). Deliberately separate from
- * markRunBlockedOnCancel so the two clarification-park callers (settleCancelledPark,
- * retireClarificationForGoneTicket) keep the narrower awaiting-only guard and
+ * markRunBlockedOnCancel so its clarification-park callers (retireClarification-
+ * ForGoneTicket, and the cancel path for a run it did not stop) keep the narrower
+ * awaiting-only guard and
  * never block a run that legitimately resumed to "running".
  */
 export async function markRunBlockedByOperator(

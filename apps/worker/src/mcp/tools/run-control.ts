@@ -318,10 +318,10 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             // a case that can reach here.
             actor: {
               id: deps.actor.userId ?? deps.actor.subject,
-              // Names the client, not the platform: the label is stored on the row,
-              // reaches the resumed agent's prompt and (once AIW-265 lands) the
-              // ticket comment, so a person reading the ticket sees that an MCP
-              // client answered rather than a colleague.
+              // All the transport knows. The core signs the answer with the
+              // person behind the token, or the client's registered name, from
+              // the surface below (answer-core.ts deliverAnswer), because the
+              // label reaches the row, the resumed agent's prompt and the ticket.
               label: `MCP ${deps.actor.clientId}`,
             },
             // Where this answer really came from, stated rather than read out

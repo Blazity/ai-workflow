@@ -1,5 +1,5 @@
-import { createError, defineEventHandler, readBody } from "h3";
-import type { SettingsPatchResponse } from "@shared/contracts";
+import { createError, defineEventHandler, readBody, setResponseStatus } from "h3";
+import type { SettingsPatchResponse, SettingsVersionConflict } from "@shared/contracts";
 import { parseRequestBody, settingsPatchRequestSchema } from "@shared/contracts";
 import {
   requireDashboardActor,
@@ -8,6 +8,7 @@ import {
 import { canEditSettings } from "../../../services/auth/roles.js";
 import {
   SettingsValidationError,
+  SettingsVersionConflictError,
   settingApiEditRefusal,
   settingsNotEditableThroughApi,
   updateSettings,
@@ -16,9 +17,10 @@ import {
 /** Changing a switch changes it for every run and every user of this
  *  deployment, so it follows the owner/admin rule, and the reason travels with
  *  the change: a behaviour change nobody can explain later is the thing the
- *  version rows exist to prevent. */
+ *  version rows exist to prevent. A stale `expectedVersions` is answered with
+ *  409 and a body naming what each refused key holds now. */
 export default defineEventHandler(
-  async (event): Promise<SettingsPatchResponse | undefined> => {
+  async (event): Promise<SettingsPatchResponse | SettingsVersionConflict | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
       if (!canEditSettings(actor.role)) {
@@ -52,8 +54,13 @@ export default defineEventHandler(
         patch: parsed.value.settings,
         actor: actor.userId,
         reason: parsed.value.reason,
+        expectedVersions: parsed.value.expectedVersions,
       });
     } catch (error) {
+      if (error instanceof SettingsVersionConflictError) {
+        setResponseStatus(event, 409);
+        return { error: "settings_version_conflict", conflicts: error.conflicts };
+      }
       if (error instanceof SettingsValidationError) {
         throw createError({ statusCode: 400, statusMessage: error.message });
       }

@@ -58,3 +58,18 @@ export async function handleSettingsPatch(
     body: await request.text(),
   });
 }
+
+/** Removing one stored setting: "Remove stored value" on the Settings page.
+ *  The worker owns the owner-only rule, the refusals and the version check, so
+ *  the body travels untouched and a 403, 400 or 409 comes back as it was
+ *  answered for the form to show. */
+export async function handleSettingsReset(
+  request: Request,
+  workerProxy: WorkerProxy,
+) {
+  return forward(workerProxy, "/api/v1/settings/reset", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: await request.text(),
+  });
+}

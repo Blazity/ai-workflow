@@ -18,7 +18,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 
 import { settingDefinitions } from "@integrations/registry";
-import { SETTING_LIST_ENTRY_RULE } from "@shared/contracts";
+import { SETTING_LIST_ENTRY_RULE, canResetSettings } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization, settings, settingsVersions } from "../../db/schema.js";
@@ -508,6 +508,66 @@ describe("settings.set", () => {
   });
 });
 
+describe("settings.set with the version the caller read", () => {
+  it("refuses a stale write with CONFLICT, says what won, and writes nothing", async () => {
+    const client = await connectedClient();
+    // Two clients read COLUMN_AI with no recorded change: version 0.
+    const first = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "COLUMN_AI",
+        value: "QA-A",
+        reason: "first",
+        expectedVersion: 0,
+        idempotencyKey: KEY_ONE,
+      },
+    });
+    expect(first.isError).not.toBe(true);
+
+    const stale = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "COLUMN_AI",
+        value: "QA-B",
+        reason: "second",
+        expectedVersion: 0,
+        idempotencyKey: KEY_TWO,
+      },
+    });
+
+    const refusal = errorOf(stale);
+    expect(refusal.code).toBe("CONFLICT");
+    expect(refusal.message).toContain("COLUMN_AI");
+    expect(refusal.message).toContain('"QA-A"');
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "COLUMN_AI", value: "QA-A" }),
+    ]);
+    expect(await db.select().from(settingsVersions)).toHaveLength(1);
+  });
+
+  it("writes when the version is the current one", async () => {
+    const client = await connectedClient();
+    const first = await client.callTool({
+      name: "settings.set",
+      arguments: { key: "COLUMN_AI", value: "QA-A", reason: "first", idempotencyKey: KEY_ONE },
+    });
+    const current = (dataOf(first).versions as Array<{ id: number }>)[0]!.id;
+
+    const fresh = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "COLUMN_AI",
+        value: "QA-B",
+        reason: "read it first",
+        expectedVersion: current,
+        idempotencyKey: KEY_TWO,
+      },
+    });
+    expect(fresh.isError).not.toBe(true);
+    expect(dataOf(fresh).setting).toMatchObject({ value: "QA-B", source: "stored" });
+  });
+});
+
 describe("settings.reset", () => {
   it("clears the stored row so the registry default answers again, and records it", async () => {
     const client = await connectedClient();
@@ -629,6 +689,50 @@ describe("settings.reset", () => {
   // The lock that does not depend on somebody remembering to keep a role list
   // closed: a token with no `sub` never holds workflows:write in the first
   // place (withoutAuthoringScopes), and these lists refuse it again.
+  it("refuses to clear a value somebody changed after it was read", async () => {
+    const client = await connectedClient();
+    const first = await client.callTool({
+      name: "settings.set",
+      arguments: { key: "COLUMN_AI", value: "QA-A", reason: "first", idempotencyKey: KEY_ONE },
+    });
+    const seen = (dataOf(first).versions as Array<{ id: number }>)[0]!.id;
+    await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "COLUMN_AI",
+        value: "QA-B",
+        reason: "somebody else",
+        idempotencyKey: KEY_TWO,
+      },
+    });
+
+    const result = await client.callTool({
+      name: "settings.reset",
+      arguments: {
+        key: "COLUMN_AI",
+        reason: "tidy",
+        expectedVersion: seen,
+        idempotencyKey: "44444444-4444-4444-8444-444444444444",
+      },
+    });
+
+    expect(errorOf(result)).toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining('"QA-B"'),
+    });
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "COLUMN_AI", value: "QA-B" }),
+    ]);
+  });
+
+  // One rule for removing a stored value, whichever door is used: the HTTP
+  // route asks canResetSettings, this surface asks its policy's role list.
+  it("admits the same roles as the HTTP reset route", () => {
+    for (const role of ["owner", "admin", "member"] as const) {
+      expect(policyFor("settings.reset").roles.includes(role)).toBe(canResetSettings(role));
+    }
+  });
+
   it("keeps the owner-only, person-only policy on the two clearing tools", () => {
     expect(policyFor("settings.reset").roles).toEqual(["owner"]);
     expect(policyFor("repositories.activate").roles).toEqual(["owner"]);

@@ -22,6 +22,7 @@ import {
   type PrePrCheckConfig,
   type RepoScriptsConfig,
 } from "../../engine/pre-pr-checks/config.js";
+import { repositoryKey } from "../../engine/support/repository-access.js";
 import {
   getConnectedCurrentPrePrCheckConfig,
   listConnectedPrePrCheckConfigVersions,
@@ -136,7 +137,7 @@ async function fanOutRepositoryProfiles(input: {
     const gateGroups = Array.isArray(entry.gateGroups)
       ? (entry.gateGroups as string[])
       : (repository.gateGroups ?? null);
-    named.add(`${repository.provider}:${repository.repoPath.toLowerCase()}`);
+    named.add(repositoryKey(repository));
     if (await profileAlreadyMatches({ repository, entry, gateGroups })) continue;
     await upsertConnectedRepositoryProfile({
       provider: repository.provider,

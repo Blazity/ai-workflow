@@ -1,3 +1,0 @@
-- MCP `tickets.transition` now accepts a target named after the status it lands on, not only the transition's own label, so it matches every status name the tool's own error message offers.
-- Run logs keep a cost value's decimal digits as they are instead of masking them as a payment card.
-- The `runs.stats` cost breakdown now lists spend by each workflow definition's name instead of combining every ticket workflow into one total.

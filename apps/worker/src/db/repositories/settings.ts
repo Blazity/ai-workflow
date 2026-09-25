@@ -63,6 +63,19 @@ export async function readAllSettings(db: Db): Promise<SettingRow[]> {
   }));
 }
 
+/** A key a guarded write refused, and the version it is at now. */
+interface StaleSettingRow {
+  key: string;
+  currentVersion: number;
+}
+
+/** What a guarded write did: the rows it recorded, or, when any key was stale,
+ *  nothing at all and the keys that were. */
+export interface SettingsWriteOutcome {
+  versions: SettingsVersionRow[];
+  stale: StaleSettingRow[];
+}
+
 /**
  * Apply a patch and record what it changed, in one statement.
  *
@@ -80,6 +93,15 @@ export async function readAllSettings(db: Db): Promise<SettingRow[]> {
  * submissions, and a key with no row yet is always recorded even when its
  * value matches what the environment was already resolving to: the decision
  * being recorded is "this is now stored", not "this number changed".
+ *
+ * `expectedVersions` guards the write in the same statement, so there is no
+ * window between a check and the write it guards. A key is stale when its
+ * newest version row is no longer the one the caller named (0 for none) AND
+ * the value stored now differs from the one this write would store: somebody
+ * else decided something else in between. One stale key refuses the whole
+ * patch, and the answer names every stale key. Two writes landing in the same
+ * instant still see the same snapshot and can both pass; the history keeps
+ * both rows, so the rarer race is recorded rather than silent.
  */
 export async function writeManySettings(
   db: Db,
@@ -87,26 +109,44 @@ export async function writeManySettings(
     patch: Readonly<Record<string, SettingValue>>;
     actor: string;
     reason: string;
+    expectedVersions?: Readonly<Record<string, number>>;
   },
-): Promise<SettingsVersionRow[]> {
+): Promise<SettingsWriteOutcome> {
   const entries = Object.entries(input.patch).map(([key, value]) => ({
     key,
     value: JSON.stringify(value ?? null),
+    // Null for a key the caller did not name: that key is written
+    // unconditionally, which is what a client without the token gets.
+    expected: input.expectedVersions?.[key] ?? null,
   }));
-  if (entries.length === 0) return [];
+  if (entries.length === 0) return { versions: [], stale: [] };
 
   const result = (await db.execute(sql`
     with input as (
-      select entry.key, entry.value::jsonb as value
+      select entry.key, entry.value::jsonb as value, entry.expected
       from jsonb_to_recordset(${JSON.stringify(entries)}::jsonb)
-        as entry(key text, value text)
+        as entry(key text, value text, expected bigint)
     ), previous as (
       select ${settings.key} as key, ${settings.value} as value
       from ${settings}
       where ${settings.key} in (select key from input)
+    ), latest as (
+      select ${settingsVersions.key} as key, max(${settingsVersions.id}) as id
+      from ${settingsVersions}
+      where ${settingsVersions.key} in (select key from input)
+      group by ${settingsVersions.key}
+    ), stale as (
+      select input.key, coalesce(latest.id, 0) as current_version
+      from input
+      left join latest on latest.key = input.key
+      left join previous on previous.key = input.key
+      where input.expected is not null
+        and coalesce(latest.id, 0) <> input.expected
+        and previous.value is distinct from input.value
     ), written as (
       insert into ${settings} (key, value, updated_at, updated_by)
       select input.key, input.value, now(), ${input.actor} from input
+      where not exists (select 1 from stale)
       on conflict (key) do update
         set value = excluded.value,
             updated_at = excluded.updated_at,
@@ -120,6 +160,7 @@ export async function writeManySettings(
       returning id, key, previous_value, new_value, actor, reason, created_at
     )
     select
+      'recorded' as kind,
       id,
       key,
       previous_value as "previousValue",
@@ -128,9 +169,26 @@ export async function writeManySettings(
       reason,
       created_at as "createdAt"
     from recorded
-    order by key
-  `)) as ExecuteRows<RawVersionRow>;
-  return result.rows.map(toVersionRow);
+    union all
+    select
+      'stale' as kind,
+      current_version as id,
+      key,
+      null,
+      null,
+      null,
+      null,
+      null
+    from stale
+    order by kind, key
+  `)) as ExecuteRows<RawVersionRow & { kind: "recorded" | "stale" }>;
+  const versions: SettingsVersionRow[] = [];
+  const stale: StaleSettingRow[] = [];
+  for (const row of result.rows) {
+    if (row.kind === "stale") stale.push({ key: row.key, currentVersion: Number(row.id) });
+    else versions.push(toVersionRow(row));
+  }
+  return { versions, stale };
 }
 
 /** One key's history, newest first. */
@@ -179,7 +237,7 @@ export function readAllConnectedSettings(): Promise<SettingRow[]> {
 /** Apply a patch on the deployment's own connection. */
 export function writeManyConnectedSettings(
   input: Parameters<typeof writeManySettings>[1],
-): Promise<SettingsVersionRow[]> {
+): Promise<SettingsWriteOutcome> {
   return writeManySettings(getDb(), input);
 }
 

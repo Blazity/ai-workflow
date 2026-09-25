@@ -10,6 +10,7 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 const MISSING_VALUE = "n/a";
 
@@ -145,7 +146,7 @@ export function TicketScreen({
                 )}
                 <div className="flex items-center gap-2">
                   <CkStatusPill status={r.status} />
-                  <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
+                  <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
                 </div>
                 {r.statusReason && (r.status === "blocked" || r.status === "failed") && (
                   <div

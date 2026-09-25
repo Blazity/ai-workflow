@@ -245,7 +245,24 @@ export interface RepoScriptsGroupCoverage {
    *  because the walk stopped first. The configuration says nothing either way
    *  about them, so they are neither covered nor a gap. */
   skipped: string[];
+  /** Which of those it was, for each repository in `skipped`, in the same
+   *  order. Output recorded before this field existed has none, and a reader
+   *  then knows only that the repository was not entered. */
+  skippedReasons: Array<{ repo: string; reason: RepoScriptsSkipReason }>;
 }
+
+/**
+ * Why a configured repository is in a group's `skipped` list.
+ *
+ * - `not_in_workspace`, `unchanged`: what the launch step said, or, for a
+ *   repository with none of the selected groups, what the run's own list of
+ *   repositories says (no launch step is asked about one of those).
+ * - `not_reached`: the walk stopped before it (a stalled batch, an exhausted
+ *   checks budget).
+ * - `unrecorded`: the launch step's result was journaled by a deployment that
+ *   kept no reason.
+ */
+type RepoScriptsSkipReason = RepoCheckSkipReason | "not_reached" | "unrecorded";
 
 /**
  * What a repository's tree looked like around one batch.

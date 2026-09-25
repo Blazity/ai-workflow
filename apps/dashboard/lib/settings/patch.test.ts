@@ -5,6 +5,7 @@ import type { SettingsEntryView } from "@shared/contracts";
 import {
   buildSettingsPatch,
   draftValueFor,
+  expectedVersionsFor,
   isSettingChanged,
   localSettingIssue,
   localSettingIssues,
@@ -308,4 +309,29 @@ test("an integration's list setting is read from the form like any list", () => 
   // shape from the joined list, so pasted ids arrive as a list, not a string
   // the worker would refuse as the wrong type.
   assert.deepEqual(toSettingValue("SLACK_ALLOWED_USER_IDS", "U01, U02\nU03,,"), ["U01", "U02", "U03"]);
+});
+
+test("expectedVersionsFor sends, per changed key, the version the form loaded", () => {
+  // The token a second tab is caught by: the id of the newest history row the
+  // page showed, or 0 when the key had never been changed.
+  const loaded = [
+    entry("MAX_CONCURRENT_AGENTS", 5, {
+      source: "stored",
+      lastVersion: {
+        id: 41,
+        key: "MAX_CONCURRENT_AGENTS",
+        previousValue: 3,
+        newValue: 5,
+        actor: "usr_1",
+        reason: "more",
+        createdAt: "2026-09-23T12:00:00.000Z",
+      },
+    }),
+    entry("COLUMN_AI", "AI"),
+    entry("ENABLE_REPO_MEMORY", false),
+  ];
+  assert.deepEqual(
+    expectedVersionsFor(loaded, { MAX_CONCURRENT_AGENTS: 6, COLUMN_AI: "Agent" }),
+    { MAX_CONCURRENT_AGENTS: 41, COLUMN_AI: 0 },
+  );
 });

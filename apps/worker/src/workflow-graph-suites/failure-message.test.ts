@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   clampBothEnds,
   classifyProviderFailure,
+  curatedProviderFailureOf,
   deriveFailureMessage,
   operatorFailureDetail,
   sanitizeDetail,
@@ -26,12 +27,13 @@ const PROD_DIAGNOSTIC_ID =
 describe("classifyProviderFailure", () => {
   it("maps the credit/billing cause, including the real Anthropic wording", () => {
     const billing =
-      "The AI provider rejected the request: the account credit or billing balance is too low.";
+      "The AI provider rejected the request: the account credit or billing balance is too low. An admin must top up the AI provider account; nothing is wrong with the ticket, and a rerun fails the same way until then.";
     expect(classifyProviderFailure("Credit balance is too low")).toBe(billing);
     expect(
       classifyProviderFailure("Your account has insufficient credits remaining"),
     ).toBe(billing);
-    expect(classifyProviderFailure("billing account is past due")).toBe(billing);
+    // Anthropic's 402 type, the one place a provider says billing on its own.
+    expect(classifyProviderFailure('API Error: 402 {"type":"error","error":{"type":"billing_error"}}')).toBe(billing);
   });
 
   it("maps rate-limit causes", () => {
@@ -43,7 +45,7 @@ describe("classifyProviderFailure", () => {
 
   it("maps auth causes", () => {
     const msg =
-      "The AI provider rejected the credentials (authentication failed). Check the API key.";
+      "The AI provider rejected the credentials (authentication failed). An admin must check and replace the API key; nothing is wrong with the ticket, and a rerun fails the same way until then.";
     expect(classifyProviderFailure("401 Unauthorized")).toBe(msg);
     expect(classifyProviderFailure("authentication_error")).toBe(msg);
     expect(classifyProviderFailure("invalid x-api-key header")).toBe(msg);
@@ -63,7 +65,7 @@ describe("classifyProviderFailure", () => {
     const capture =
       "stream disconnected before completion: Your project has reached its configured enforced spend limit. Update your limit at https://platform.openai.com/settings/proj_test1234/limits.";
     const spendMessage =
-      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.";
+      "The AI provider rejected the request: the account has reached its configured spend limit. An admin must raise or remove the spend limit in the provider's billing settings, or wait for it to reset; nothing is wrong with the ticket, and a rerun fails the same way until then.";
     expect(classifyProviderFailure(capture)).toBe(spendMessage);
     expect(classifyProviderFailure(capture, true)).toBe(spendMessage);
     expect(classifyProviderFailure("monthly spend limit reached")).toBe(spendMessage);
@@ -82,7 +84,7 @@ describe("classifyProviderFailure", () => {
         "stream disconnected before completion: You have no credits remaining.",
       ),
     ).toBe(
-      "The AI provider rejected the request: the account credit or billing balance is too low.",
+      "The AI provider rejected the request: the account credit or billing balance is too low. An admin must top up the AI provider account; nothing is wrong with the ticket, and a rerun fails the same way until then.",
     );
   });
 
@@ -611,7 +613,7 @@ describe("deriveFailureMessage", () => {
         genericMessage: providerGeneric,
       }),
     ).toBe(
-      "The AI provider rejected the request: the account credit or billing balance is too low.",
+      "The AI provider rejected the request: the account credit or billing balance is too low. An admin must top up the AI provider account; nothing is wrong with the ticket, and a rerun fails the same way until then.",
     );
   });
 
@@ -678,7 +680,7 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
     "stream disconnected before completion: You have no credits remaining. " +
     "Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.";
   const BILLING_MESSAGE =
-    "The AI provider rejected the request: the account credit or billing balance is too low.";
+    "The AI provider rejected the request: the account credit or billing balance is too low. An admin must top up the AI provider account; nothing is wrong with the ticket, and a rerun fails the same way until then.";
   /** Captured verbatim from Arthur run wrun_01M0J7D367ZQW6Q487T467M0PV
    *  (2026-08-21), the outage AIW-312 was filed on; the proj_ id is replaced. */
   const SPEND_LIMIT =
@@ -703,21 +705,44 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
         },
       }),
     ).toBe(
-      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+      "The AI provider rejected the request: the account has reached its configured spend limit. An admin must raise or remove the spend limit in the provider's billing settings, or wait for it to reset; nothing is wrong with the ticket, and a rerun fails the same way until then.",
     );
   });
 
-  it("classifies exhausted provider credits out of the captured stdout tail", () => {
+  // Flipped on purpose. The stdout tail is the agent's own stream, and reading
+  // a cause out of it blamed the account for whatever the agent printed. The
+  // provider's refusal reaches this function as `providerError` now, out of the
+  // Codex error event (AIW-312) and the Claude error envelope, and the next
+  // tests prove that path; the stream is only quoted.
+  it("quotes the agent's stdout stream but never classifies a cause out of it", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 1.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stdoutTail: `some earlier chatter\n${EXHAUSTED_CREDITS}`,
+      },
+    });
+    expect(message).not.toBe(BILLING_MESSAGE);
+    expect(message.startsWith(AGENT_LEAD)).toBe(true);
+    // Quoted, clamped from both ends like any raw snippet.
+    expect(message).toContain("(stream disconnected before completion: You have no credits");
+  });
+
+  it("classifies exhausted provider credits out of the structured provider error", () => {
     expect(
       deriveFailureMessage({
         category: "provider",
-        detail: "The CLI exited with code 1.",
+        detail: "Codex emitted a provider error event.",
         genericMessage: providerGeneric,
         explicitMessage: AGENT_LEAD,
         evidence: {
-          failureKind: "cli_exit",
+          failureKind: "provider_error",
           exitCode: 1,
-          stdoutTail: `some earlier chatter\n${EXHAUSTED_CREDITS}`,
+          providerError: EXHAUSTED_CREDITS,
         },
       }),
     ).toBe(BILLING_MESSAGE);
@@ -930,7 +955,7 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
     // wrong curated sentence replaces the whole message, so it is worse than the
     // generic line it displaced.
     expect(classifyProviderFailure("provider said: permission denied")).toBe(
-      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+      "The AI provider rejected the credentials (authentication failed). An admin must check and replace the API key; nothing is wrong with the ticket, and a rerun fails the same way until then.",
     );
     expect(
       classifyProviderFailure("chmod: /vercel/sandbox/w.sh: permission denied", true),
@@ -966,7 +991,7 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
         },
       }),
     ).toBe(
-      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+      "The AI provider rejected the credentials (authentication failed). An admin must check and replace the API key; nothing is wrong with the ticket, and a rerun fails the same way until then.",
     );
   });
 
@@ -1218,5 +1243,227 @@ describe("an authored lead reaches the person whole", () => {
     expect(out.startsWith("The workspace environment could not complete this block."))
       .toBe(true);
     expect(out).toContain("GitLab projects list timed out after 15000ms");
+  });
+});
+
+/**
+ * A provider refusal that is about the ACCOUNT (no credit, a spend limit, a plan
+ * limit, a rejected key) is not a bug and is not fixed by rerunning, and the
+ * person reading the ticket cannot fix it either: an admin of that provider
+ * account can. Production run wrun_01M3755BR7PYPCZ7VVSJ7RGM88 (2026-09-23) told
+ * the ticket "The AI provider rejected the request", which names neither the
+ * provider nor who acts. The harness says which provider it was, so the
+ * sentence names it.
+ *
+ * Every refusal text below is a string the pinned CLIs or the provider APIs
+ * really emit: "Credit balance is too low" was observed on that run; the other
+ * Claude CLI strings are constants in the Claude Code binary; the Codex strings
+ * are the `CodexErr` displays in codex-rs at rust-v0.144.6
+ * (codex-rs/protocol/src/error.rs); the API sentences are from
+ * platform.claude.com/docs/en/api/rate-limits and
+ * developers.openai.com/api/docs/guides/error-codes.
+ */
+describe("provider account failures name the provider and who fixes them", () => {
+  const providerGeneric = "An external service could not complete this block.";
+  const AGENT_LEAD = "The current agent phase could not be completed.";
+  const ADMIN_NOT_TICKET =
+    "nothing is wrong with the ticket, and a rerun fails the same way until then.";
+
+  function fromHarness(
+    provider: "claude" | "codex",
+    providerError: string,
+  ): string {
+    return deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 1.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: { provider, failureKind: "provider_error", exitCode: 1, providerError },
+    });
+  }
+
+  it.each([
+    ["claude", "Credit balance is too low", "Anthropic"],
+    [
+      "claude",
+      "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      "Anthropic",
+    ],
+    ["codex", "Quota exceeded. Check your plan and billing details.", "OpenAI"],
+    ["codex", "Your workspace is out of credits. Add credits to continue.", "OpenAI"],
+    [
+      "codex",
+      "stream disconnected before completion: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.",
+      "OpenAI",
+    ],
+    [
+      "codex",
+      "unexpected status 429 Too Many Requests: You exceeded your current quota, please check your plan and billing details.",
+      "OpenAI",
+    ],
+    ["codex", "unexpected status 429 Too Many Requests: credit_balance_exhausted", "OpenAI"],
+  ] as const)("reads %s's \"%s\" as the %s account out of credit", (provider, text, account) => {
+    const message = fromHarness(provider, text);
+    expect(message).toBe(
+      `The ${account} account has no credit left, so ${account} refused the request. ` +
+        `An admin must top up the ${account} account; ${ADMIN_NOT_TICKET}`,
+    );
+  });
+
+  it.each([
+    [
+      "claude",
+      'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits: your organization has crossed its monthly API usage threshold, set based on your organization\'s API tier. You will regain access on 2026-09-01 at 00:00 UTC."}}',
+      "Anthropic",
+    ],
+    [
+      "claude",
+      "API Error: 400 You have reached your specified API usage limits. You will regain access on 2026-10-01 at 00:00 UTC.",
+      "Anthropic",
+    ],
+    [
+      "codex",
+      "You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+      "OpenAI",
+    ],
+    ["codex", "unexpected status 429 Too Many Requests: project_spend_limit_exceeded", "OpenAI"],
+  ] as const)("reads %s's spend limit \"%s\" as an admin action, never as a retry", (provider, text, account) => {
+    const message = fromHarness(provider, text);
+    expect(message).toMatch(new RegExp(`^The ${account} account has reached its spend limit`));
+    expect(message).toContain(`An admin must raise or remove the spend limit in the ${account} billing settings`);
+    expect(message).not.toMatch(/retry shortly/i);
+  });
+
+  it.each([
+    ["claude", "Invalid API key · Fix external API key", "Anthropic"],
+    ["claude", "OAuth token revoked · Please run /login", "Anthropic"],
+    ["claude", "Login expired · Please run /login", "Anthropic"],
+    [
+      "claude",
+      "Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable",
+      "Anthropic",
+    ],
+    ["codex", "unexpected status 401 Unauthorized: Incorrect API key provided: sk-proj-****abcd", "OpenAI"],
+  ] as const)("reads %s's \"%s\" as a credential an admin replaces", (provider, text, account) => {
+    expect(fromHarness(provider, text)).toBe(
+      `${account} rejected the credential AI Workflow uses for it (authentication failed). ` +
+        `An admin must replace the ${account} API key or login; ${ADMIN_NOT_TICKET}`,
+    );
+  });
+
+  it("reads a plan usage limit as waiting for the reset or a larger plan", () => {
+    const message = fromHarness(
+      "codex",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:05 PM.",
+    );
+    expect(message).toMatch(/^The OpenAI plan this deployment signs in with has hit its usage limit/);
+    expect(message).toContain("nothing is wrong with the ticket");
+  });
+
+  it("keeps a real rate limit a retry, and says whose", () => {
+    expect(
+      fromHarness(
+        "claude",
+        'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}',
+      ),
+    ).toBe("Anthropic rate-limited the request. Please retry shortly.");
+    expect(fromHarness("codex", "exceeded retry limit, last status: 429 Too Many Requests")).toBe(
+      "OpenAI rate-limited the request. Please retry shortly.",
+    );
+  });
+
+  it("still says what to do when nothing says which provider it was", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "Credit balance is too low",
+      genericMessage: providerGeneric,
+    });
+    // The first sentence is the one every earlier run recorded, so a diagnosis
+    // of an old run and of a new one read the same lead.
+    expect(message).toBe(
+      "The AI provider rejected the request: the account credit or billing balance is too low. " +
+        `An admin must top up the AI provider account; ${ADMIN_NOT_TICKET}`,
+    );
+  });
+
+  it("recognises every curated lead, named or not, and the sentences old runs recorded", () => {
+    expect(curatedProviderFailureOf(fromHarness("claude", "Credit balance is too low"))).toEqual({
+      cause: "credit",
+      account: "Anthropic",
+    });
+    expect(
+      curatedProviderFailureOf(fromHarness("codex", "unexpected status 401 Unauthorized: bad key")),
+    ).toEqual({ cause: "auth", account: "OpenAI" });
+    // Recorded before this change, verbatim.
+    expect(
+      curatedProviderFailureOf(
+        "The AI provider rejected the request: the account credit or billing balance is too low. Diagnostic ID: AIW-DIAG-wrun_x-implementation-1",
+      ),
+    ).toEqual({ cause: "credit", account: null });
+    expect(
+      curatedProviderFailureOf(
+        "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+      ),
+    ).toEqual({ cause: "spend_limit", account: null });
+    expect(curatedProviderFailureOf("The AI provider is overloaded. Please retry shortly.")).toEqual({
+      cause: "overloaded",
+      account: null,
+    });
+    expect(curatedProviderFailureOf("The checks could not be started.")).toBeUndefined();
+  });
+});
+
+/**
+ * The agent's own words are not the provider's (follow-up to the named
+ * accounts). An agent working on a billing module prints "billing", and before
+ * this the curated table read that as the provider refusing the account: the
+ * ticket was told an admin had to top up Anthropic for a run that failed for an
+ * ordinary reason.
+ */
+describe("only the provider's own error channel can name an account failure", () => {
+  const providerGeneric = "An external service could not complete this block.";
+  const AGENT_LEAD = "The current agent phase could not be completed.";
+  /** A Claude stream-json assistant event, the shape the agent's stdout has. */
+  const AGENT_LOG =
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"Now fixing billing module: src/billing/invoice.ts"}]}}';
+
+  it("does not read an agent log line about a billing module as an empty balance", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 137.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: { provider: "claude", failureKind: "cli_exit", exitCode: 137, stdoutTail: AGENT_LOG },
+    });
+    expect(curatedProviderFailureOf(message)).toBeUndefined();
+    expect(message).not.toMatch(/credit|admin must/i);
+    expect(message.startsWith(AGENT_LEAD)).toBe(true);
+  });
+
+  it("does not read a repository called billing in a composed detail as an empty balance", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "github:acme/billing: canonical clone failed: fatal: the remote end hung up unexpectedly",
+      genericMessage: providerGeneric,
+    });
+    expect(curatedProviderFailureOf(message)).toBeUndefined();
+    expect(message).toContain("acme/billing");
+  });
+
+  it("still names the account when the refusal is in the CLI's own stderr", () => {
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The agent runtime could not be prepared.",
+        genericMessage: providerGeneric,
+        explicitMessage: "The agent runtime could not be prepared.",
+        evidence: {
+          provider: "codex",
+          failureKind: "setup_failed",
+          exitCode: 1,
+          stderrTail: "Error: unexpected status 401 Unauthorized: Incorrect API key provided",
+        },
+      }),
+    ).toMatch(/^OpenAI rejected the credential AI Workflow uses for it/);
   });
 });

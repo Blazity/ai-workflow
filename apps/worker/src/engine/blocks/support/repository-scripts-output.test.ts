@@ -300,6 +300,10 @@ describe("countUncoveredGroups", () => {
       declaredIn: ["github:acme/web"],
       missing: [],
       skipped: ["github:acme/api", "github:acme/infra"],
+      skippedReasons: [
+        { repo: "github:acme/api", reason: "unchanged" },
+        { repo: "github:acme/infra", reason: "not_in_workspace" },
+      ],
     };
 
     expect(countUncoveredGroups([skippedOnly])).toBe(0);

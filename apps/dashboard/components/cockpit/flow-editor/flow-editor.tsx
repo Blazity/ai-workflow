@@ -1363,6 +1363,16 @@ function FlowCanvas({
   );
 }
 
+/** An action the phone header keeps behind More, where the laptop header shows
+ *  it as a button (`headerExtra`). */
+export interface FlowEditorMenuAction {
+  id: string;
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+  title?: string;
+}
+
 export function FlowEditor({
   nodes,
   edges,
@@ -1401,7 +1411,9 @@ export function FlowEditor({
   headerTitle,
   headerVersionBadge,
   headerInlineExtra,
+  headerPrimaryAction,
   headerExtra,
+  headerMenuActions = [],
   options,
   runStatuses,
   runErrors,
@@ -1460,7 +1472,13 @@ export function FlowEditor({
   headerTitle: string;
   headerVersionBadge: string;
   headerInlineExtra?: React.ReactNode;
+  /** Shown beside Save on every screen size (Deploy). */
+  headerPrimaryAction?: React.ReactNode;
+  /** The rest of the laptop header's actions. A phone has no room for them in
+   *  its action row and reaches them through More (`headerMenuActions`). */
   headerExtra?: React.ReactNode;
+  /** `headerExtra`, said once more for the phone's More sheet. */
+  headerMenuActions?: readonly FlowEditorMenuAction[];
   options: WorkflowEditorOptions;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
@@ -2027,6 +2045,88 @@ export function FlowEditor({
   );
   const displayedError = interactionError ?? error;
   const [issuesOpenRequest, setIssuesOpenRequest] = useState(0);
+  const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
+
+  // The header is two layouts in one, switched by CSS at the lg breakpoint like
+  // the rest of the cockpit (a hook would paint the laptop header first on a
+  // phone). The laptop header keeps every action in one wrapping row. A phone
+  // gets a row of its own: Undo and Redo, which it has no shortcut for, then
+  // More, Deploy and Save; More opens a sheet with the rest. Wrapping the laptop
+  // row onto a 400 px screen put Save off screen and Deploy over Paste (QA).
+  const historyActions = [
+    {
+      label: "Undo",
+      shortcut: workflowShortcutLabel("undo", shortcutPlatform),
+      onClick: onUndo,
+      disabled: !canEdit || !canUndo,
+    },
+    {
+      label: "Redo",
+      shortcut: workflowShortcutLabel("redo", shortcutPlatform),
+      onClick: onRedo,
+      disabled: !canEdit || !canRedo,
+    },
+    {
+      label: "Copy",
+      shortcut: workflowShortcutLabel("copy", shortcutPlatform),
+      onClick: copySelection,
+      disabled: selection.nodeIds.length === 0,
+    },
+    {
+      label: "Paste",
+      shortcut: workflowShortcutLabel("paste", shortcutPlatform),
+      onClick: pasteSelection,
+      disabled: !canEdit,
+    },
+  ];
+  const historyButton = (action: (typeof historyActions)[number]) => (
+    <Button
+      key={action.label}
+      type="button"
+      variant="secondary"
+      size="sm"
+      onClick={action.onClick}
+      disabled={action.disabled}
+      title={`${action.label} (${action.shortcut})`}
+      aria-label={`${action.label} (${action.shortcut})`}
+      className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
+    >
+      {action.label}
+    </Button>
+  );
+  const phoneMenu: FlowEditorMenuAction[] = [
+    ...historyActions.slice(2).map((action) => ({
+      id: action.label,
+      label: action.label,
+      onSelect: action.onClick,
+      disabled: action.disabled,
+      title: `${action.label} (${action.shortcut})`,
+    })),
+    ...headerMenuActions,
+  ];
+  const issuesButton =
+    canEdit && saveIssues.length > 0 ? (
+      <Button
+        type="button"
+        variant="danger-soft"
+        size="sm"
+        title={saveIssues.map((issue) => issue.message).join(" ")}
+        onClick={() => setSelectedId(saveIssues[0]!.nodeId)}
+        className="appearance-none cursor-pointer rounded-full border border-red-400 bg-red-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-red-700"
+      >
+        {saveIssues.length === 1
+          ? "1 block has an error"
+          : `${saveIssues.length} blocks have an error`}
+      </Button>
+    ) : null;
+  const saveButton = canEdit ? (
+    <Button
+      variant="primary"
+      onClick={onSave}
+      disabled={!saveEnabled || saving}
+      className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
+    >{saving ? "Saving…" : saveLabel}</Button>
+  ) : null;
 
   return (
     <div
@@ -2037,9 +2137,7 @@ export function FlowEditor({
       onBlurCapture={handleEditorBlurCapture}
     >
       {/* Editor toolbar */}
-      {/* Wraps rather than overlaps: on a phone the pills and the actions do not
-          fit one row, and a row that cannot wrap draws them over each other. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 px-6 bg-panel border-b border-neutral-200">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 px-4 lg:px-6 bg-panel border-b border-neutral-200">
         <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           <div className="font-display font-semibold text-sm leading-[1.2] text-coal truncate">{headerTitle}</div>
           <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">{headerVersionBadge}</span>
@@ -2056,91 +2154,68 @@ export function FlowEditor({
             onSelectNode={setSelectedId}
             openIssuesRequest={issuesOpenRequest}
           />
+          {/* On a phone the error count sits with the other states. */}
+          {issuesButton && <span className="lg:hidden">{issuesButton}</span>}
           <div
-            className="ml-1 flex items-center gap-1"
+            className="ml-1 hidden items-center gap-1 lg:flex"
             role="group"
             aria-label="Workflow editing history and clipboard"
           >
-            {[
-              {
-                label: "Undo",
-                shortcut: workflowShortcutLabel(
-                  "undo",
-                  shortcutPlatform,
-                ),
-                onClick: onUndo,
-                disabled: !canEdit || !canUndo,
-              },
-              {
-                label: "Redo",
-                shortcut: workflowShortcutLabel(
-                  "redo",
-                  shortcutPlatform,
-                ),
-                onClick: onRedo,
-                disabled: !canEdit || !canRedo,
-              },
-              {
-                label: "Copy",
-                shortcut: workflowShortcutLabel(
-                  "copy",
-                  shortcutPlatform,
-                ),
-                onClick: copySelection,
-                disabled: selection.nodeIds.length === 0,
-              },
-              {
-                label: "Paste",
-                shortcut: workflowShortcutLabel(
-                  "paste",
-                  shortcutPlatform,
-                ),
-                onClick: pasteSelection,
-                disabled: !canEdit,
-              },
-            ].map((action) => (
-              <Button
-                key={action.label}
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={action.onClick}
-                disabled={action.disabled}
-                title={`${action.label} (${action.shortcut})`}
-                aria-label={`${action.label} (${action.shortcut})`}
-                className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
-              >
-                {action.label}
-              </Button>
-            ))}
+            {historyActions.map(historyButton)}
           </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        <div className="ml-auto hidden flex-wrap items-center justify-end gap-2 lg:flex">
+          {headerPrimaryAction}
           {headerExtra}
-          {canEdit && saveIssues.length > 0 && (
-            <Button
-              type="button"
-              variant="danger-soft"
-              size="sm"
-              title={saveIssues.map((issue) => issue.message).join(" ")}
-              onClick={() => setSelectedId(saveIssues[0]!.nodeId)}
-              className="appearance-none cursor-pointer rounded-full border border-red-400 bg-red-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-red-700"
-            >
-              {saveIssues.length === 1
-                ? "1 block has an error"
-                : `${saveIssues.length} blocks have an error`}
-            </Button>
-          )}
-          {canEdit && (
-            <Button
-              variant="primary"
-              onClick={onSave}
-              disabled={!saveEnabled || saving}
-              className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
-            >{saving ? "Saving…" : saveLabel}</Button>
-          )}
+          {issuesButton}
+          {saveButton}
+        </div>
+        <div
+          data-phone-actions=""
+          role="group"
+          aria-label="Workflow actions"
+          className="flex w-full items-center gap-1.5 lg:hidden"
+        >
+          {historyActions.slice(0, 2).map(historyButton)}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            aria-haspopup="dialog"
+            aria-expanded={phoneMenuOpen}
+            onClick={() => setPhoneMenuOpen(true)}
+            className="ml-auto appearance-none rounded-[3px] border border-neutral-200 bg-panel px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg"
+          >
+            More
+          </Button>
+          {headerPrimaryAction}
+          {saveButton}
         </div>
       </div>
+      <MobileSheet
+        open={phoneMenuOpen}
+        onClose={() => setPhoneMenuOpen(false)}
+        title="Workflow actions"
+      >
+        <div className="flex flex-col py-1">
+          {phoneMenu.map((action) => (
+            <Button
+              key={action.id}
+              type="button"
+              variant="text"
+              disabled={action.disabled}
+              title={action.title}
+              onClick={() => {
+                setPhoneMenuOpen(false);
+                action.onSelect();
+              }}
+              className="appearance-none w-full cursor-pointer border-none bg-transparent px-[18px] py-3.5 text-left font-body text-[15px] text-neutral-900 disabled:cursor-default disabled:opacity-40"
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      </MobileSheet>
       <ExecutionLimitsBar limits={limits} canEdit={canEdit} onChange={onLimitsChange} />
       <RepositoryScopeBar
         scope={repositoryScope}

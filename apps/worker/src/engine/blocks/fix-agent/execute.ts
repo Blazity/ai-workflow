@@ -31,6 +31,7 @@ import { planBlockAgentBriefing } from "../../agent-visibility/block.js";
 import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { pollPhaseUntilDone, stopPhaseCommand } from "../poll-phase.js";
+import { isSameRepository } from "../../support/repository-access.js";
 import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
@@ -114,11 +115,7 @@ async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Pr
       `Refusing to push a fix for ${pr.provider}:${pr.repoPath}#${pr.prNumber}: workflow PR ownership is unknown (${lookup.reason}).`,
     );
   }
-  if (
-    lookup.current.provider !== pr.provider ||
-    lookup.current.repoPath !== pr.repoPath ||
-    lookup.current.id !== pr.prNumber
-  ) {
+  if (!isSameRepository(lookup.current, pr) || lookup.current.id !== pr.prNumber) {
     throw new Error(
       `Refusing to push a fix for ${pr.provider}:${pr.repoPath}#${pr.prNumber}: the PR is not present in a workflow publication.`,
     );
@@ -159,7 +156,7 @@ function buildPrFixPublicationInput(
   // the push will create, so anti-recursion can be armed before pushing.
   let intendedHead: string | undefined;
   for (const commit of workspace?.commits ?? []) {
-    if (commit.provider === pr.provider && commit.repoPath === pr.repoPath) {
+    if (isSameRepository(commit, pr)) {
       intendedHead = commit.sha;
     }
   }
@@ -225,8 +222,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
 
   const pushedPrRepository = result.repositories.find(
     (repository) =>
-      repository.provider === input.pr.provider &&
-      repository.repoPath === input.pr.repoPath &&
+      isSameRepository(repository, input.pr) &&
       repository.pushed &&
       typeof repository.pushedHead === "string",
   );
@@ -236,12 +232,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
     upsertConnectedWorkflowOwnedBranch,
   } = await import("../../../db/repositories/runs.js");
   for (const repository of result.repositories) {
-    if (
-      repository.provider !== input.pr.provider ||
-      repository.repoPath !== input.pr.repoPath
-    ) {
-      continue;
-    }
+    if (!isSameRepository(repository, input.pr)) continue;
     if (!repository.pushed || !repository.pushedHead) continue;
     const owned = await findConnectedWorkflowOwnedPullRequestIdentity({
       provider: repository.provider,
@@ -252,7 +243,10 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
     await upsertConnectedWorkflowOwnedBranch({
       ticketKey: owned.ticketKey,
       provider: repository.provider,
-      repoPath: repository.repoPath,
+      // The row's own spelling: the upsert keys on the exact path, and the
+      // workspace may spell the same repository differently, which would add a
+      // second row instead of moving this one.
+      repoPath: owned.repoPath,
       branchName: repository.branchName,
       publishedHeadSha: repository.pushedHead,
       targetBranch: repository.defaultBranch,

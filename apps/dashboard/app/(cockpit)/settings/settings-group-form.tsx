@@ -3,10 +3,17 @@
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { settingDefinition } from "@integrations/registry";
-import type { SettingsEntryView } from "@shared/contracts";
+import type { SettingsConflictView, SettingsEntryView } from "@shared/contracts";
 
 import { Button, CkChip, Input, type ChipTone } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
+import {
+  conflictLines,
+  isSettingsVersionConflict,
+  keepEditsOver,
+  takeTheirs,
+  withConflictsLoaded,
+} from "@/lib/settings/conflict";
 import {
   RESOLVED_VALUE_LABEL,
   appliesToNote,
@@ -19,6 +26,8 @@ import {
 import { selectGroupKeys, storedRowCount, type SettingsGroupView } from "@/lib/settings/groups";
 import {
   buildSettingsPatch,
+  draftValueFor,
+  expectedVersionsFor,
   isSettingChanged,
   localSettingIssues,
   settingsDraftFrom,
@@ -26,6 +35,7 @@ import {
 } from "@/lib/settings/patch";
 import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 
+import { RemoveStoredValue } from "./remove-stored-value";
 import { SettingControl } from "./setting-control";
 import { SettingHistory } from "./setting-history";
 
@@ -47,6 +57,24 @@ function defaultNote(entry: SettingsEntryView): string {
   return `Default: ${displaySettingValue(entry.default)}.`;
 }
 
+/** Whether this field offers removing its stored value, says who may, or
+ *  says nothing (nothing stored, or a reader who can change nothing here). */
+type Removal =
+  | { kind: "none" }
+  | { kind: "owner_only" }
+  | {
+      kind: "allowed";
+      onRemoved: (setting: SettingsEntryView, removed: boolean) => void;
+      onConflict: (conflicts: readonly SettingsConflictView[]) => void;
+    };
+
+/** Somebody changed these keys first, and whether it was a store or a removal
+ *  of this form's that the worker refused: only a store has edits to keep. */
+type Conflict = {
+  refused: "store" | "remove";
+  conflicts: readonly SettingsConflictView[];
+};
+
 function SettingField({
   entry,
   value,
@@ -54,6 +82,7 @@ function SettingField({
   changed,
   issue,
   historyOpen,
+  removal,
   onToggleHistory,
   onChange,
 }: {
@@ -63,6 +92,7 @@ function SettingField({
   changed: boolean;
   issue: string | undefined;
   historyOpen: boolean;
+  removal: Removal;
   onToggleHistory: () => void;
   onChange: (next: string | boolean) => void;
 }) {
@@ -96,6 +126,22 @@ function SettingField({
         {sourceHint(entry.source)} {appliesToNote(entry.appliesToRunsInFlight, entry.requiresRedeploy)}.
       </p>
       {issue && <p className="m-0 font-body text-[11px] text-fail-fg">{issue}</p>}
+      {removal.kind === "allowed" && (
+        <div>
+          <RemoveStoredValue
+            entry={entry}
+            discardsEdit={changed}
+            disabled={disabled}
+            onRemoved={removal.onRemoved}
+            onConflict={removal.onConflict}
+          />
+        </div>
+      )}
+      {removal.kind === "owner_only" && (
+        <p className="m-0 font-body text-[11px] text-neutral-500">
+          Only an owner can remove a stored value.
+        </p>
+      )}
       <div>
         <Button
           variant="text"
@@ -124,6 +170,7 @@ function SettingField({
 export function SettingsGroupForm({
   group,
   canEdit,
+  canReset,
   keys,
   heading,
   description,
@@ -132,6 +179,10 @@ export function SettingsGroupForm({
   group: SettingsGroupView;
   /** The role rule: false renders every control read only with the notice. */
   canEdit: boolean;
+  /** canResetSettings(role): true offers "Remove stored value", false says
+   *  who may. Left out, the form offers neither, so a panel that mounts it
+   *  without deciding keeps what it had. */
+  canReset?: boolean;
   /** Renders only these keys. The area panels pass a module level list. */
   keys?: readonly string[];
   heading?: string;
@@ -150,18 +201,22 @@ export function SettingsGroupForm({
   const [issues, setIssues] = useState<Record<string, string>>({});
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
+  const [conflict, setConflict] = useState<Conflict | null>(null);
   const [saving, setSaving] = useState(false);
   const [openHistory, setOpenHistory] = useState<string | null>(null);
 
-  // A fresh server render supersedes the local copy: the values the worker
-  // resolved always win over what this form was holding.
+  // A fresh server render supersedes the local copy for every field nobody
+  // here is editing. A field with an unsaved edit keeps it, and keeps the
+  // version it was typed against: Live refreshes this page, and re-seeding the
+  // whole form threw away an edit the moment another tab stored anything in
+  // the same group.
   useEffect(() => {
     if (visibleKey === appliedKey) return;
-    setSaved(visible);
-    setDraft(settingsDraftFrom(visible));
-    setIssues({});
+    const next = keepEditsOver(saved, draft, visible);
+    setSaved(next.saved);
+    setDraft(next.draft);
     setAppliedKey(visibleKey);
-  }, [visibleKey, appliedKey, visible]);
+  }, [visibleKey, appliedKey, visible, saved, draft]);
 
   const patch = buildSettingsPatch(saved, draft);
   const changedCount = Object.keys(patch).length;
@@ -177,6 +232,59 @@ export function SettingsGroupForm({
     setDraft(settingsDraftFrom(saved));
     setIssues({});
     setMessage(null);
+    setConflict(null);
+  }
+
+  /**
+   * Somebody changed some of these keys after this form loaded them, and the
+   * worker stored nothing. What was typed stays; the form now shows, and
+   * carries the version of, what won, so storing again is a decision made
+   * with both values on screen.
+   */
+  function showConflicts(refused: Conflict["refused"], found: readonly SettingsConflictView[]) {
+    // A field nobody here edited shows what won; an edited one keeps the edit.
+    const loaded = new Map(saved.map((entry) => [entry.key, entry]));
+    setDraft((current) => {
+      const next: Record<string, string | boolean> = { ...current };
+      for (const conflictView of found) {
+        const before = loaded.get(conflictView.key);
+        if (!before || !isSettingChanged(before, current)) {
+          next[conflictView.key] = draftValueFor(conflictView.setting);
+        }
+      }
+      return next;
+    });
+    setSaved((current) => withConflictsLoaded(current, found));
+    setConflict({ refused, conflicts: found });
+    setMessage(null);
+    router.refresh();
+  }
+
+  function takeTheirValues() {
+    if (!conflict) return;
+    setDraft((current) => takeTheirs(current, conflict.conflicts));
+    setConflict(null);
+  }
+
+  function removedStoredValue(setting: SettingsEntryView, removed: boolean) {
+    setSaved((current) =>
+      current.map((entry) => (entry.key === setting.key ? setting : entry)),
+    );
+    setDraft((current) => ({ ...current, [setting.key]: draftValueFor(setting) }));
+    setIssues((current) => {
+      const next = { ...current };
+      delete next[setting.key];
+      return next;
+    });
+    setConflict(null);
+    const resolves = `${displaySettingValue(setting.value)} (${sourceLabel(setting.source).toLowerCase()})`;
+    setMessage({
+      tone: "ok",
+      text: removed
+        ? `Removed the stored value of ${settingLabel(setting.key)}. It now resolves to ${resolves}.`
+        : `Nothing was stored for ${settingLabel(setting.key)} any more. It resolves to ${resolves}.`,
+    });
+    router.refresh();
   }
 
   async function save() {
@@ -189,11 +297,17 @@ export function SettingsGroupForm({
     }
     setSaving(true);
     setMessage(null);
+    setConflict(null);
     try {
       const result = await apiClient.settings.update({
         settings: patch,
         reason: reason.trim(),
+        expectedVersions: expectedVersionsFor(saved, patch),
       });
+      if (!result.ok && result.status === 409 && isSettingsVersionConflict(result.error)) {
+        showConflicts("store", result.error.conflicts);
+        return;
+      }
       if (!result.ok) {
         const named = settingIssuesFromMessage(result.errorMessage);
         setIssues(named);
@@ -272,6 +386,17 @@ export function SettingsGroupForm({
               changed={isSettingChanged(entry, draft)}
               issue={issues[entry.key]}
               historyOpen={openHistory === entry.key}
+              removal={
+                !canEdit || entry.source !== "stored" || canReset === undefined
+                  ? { kind: "none" }
+                  : canReset
+                    ? {
+                        kind: "allowed",
+                        onRemoved: removedStoredValue,
+                        onConflict: (found) => showConflicts("remove", found),
+                      }
+                    : { kind: "owner_only" }
+              }
               onToggleHistory={() =>
                 setOpenHistory((current) => (current === entry.key ? null : entry.key))
               }
@@ -282,6 +407,46 @@ export function SettingsGroupForm({
           ))
         )}
       </div>
+
+      {conflict && conflict.conflicts.length > 0 && (
+        <div
+          role="alert"
+          className="mx-4 mb-3 mt-0 flex flex-col gap-2 rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[11px] text-fail-fg"
+        >
+          {conflictLines(conflict.conflicts).map((line) => (
+            <p key={line} className="m-0">
+              {line}
+            </p>
+          ))}
+          {conflict.refused === "remove" ? (
+            <p className="m-0">
+              Nothing was removed. The field now shows the new value; remove it
+              again if you still mean to.
+            </p>
+          ) : (
+            <p className="m-0">
+              Nothing was stored. Your edits are kept below: store them over the
+              new value, or take theirs.
+            </p>
+          )}
+          {conflict.refused === "store" && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={save}
+                disabled={!dirty || saving || reasonMissing}
+                loading={saving}
+              >
+                Store mine anyway
+              </Button>
+              <Button variant="secondary" size="sm" onClick={takeTheirValues} disabled={saving}>
+                Use theirs
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {message && (
         <p

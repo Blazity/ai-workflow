@@ -185,3 +185,63 @@ describe("codex 0.144.6 incident replay (AIW-312)", () => {
     expect(JSON.stringify(record)).not.toContain("PATH aliases");
   });
 });
+
+describe("claude 2.1.216 incident replay (Anthropic credit exhausted, 2026-09-23)", () => {
+  // Production run wrun_01M3755BR7PYPCZ7VVSJ7RGM88 on AWP-279: the CLI exited 1
+  // after one API call and its only output was an error result envelope saying
+  // "Credit balance is too low". The ticket comment said "The AI provider
+  // rejected the request", which names neither the provider nor who can fix it.
+  const loaded = fixture("claude", "2.1.216", "credit-exhausted-exit");
+  const runId = "wrun_01M3755BR7PYPCZ7VVSJ7RGM88";
+
+  function reasonFor(result: ReturnType<ClaudeAgentAdapter["validateFreeformProtocol"]>) {
+    if (result.ok) throw new Error("expected a failure");
+    const state = createWorkflowExecutionErrorState(
+      runId,
+      "implementation",
+      1,
+      agentProtocolExecutionError(result).error,
+    );
+    return formatExecutionErrorForUser(state);
+  }
+
+  it("keeps the provider's own refusal, not only the exit code", () => {
+    const result = new ClaudeAgentAdapter().validateFreeformProtocol(
+      loaded.artifacts,
+      "impl-v2-4-a1",
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      category: "provider",
+      diagnostic: {
+        provider: "claude",
+        failureKind: "provider_error",
+        exitCode: 1,
+        providerError: "Credit balance is too low",
+      },
+    });
+  });
+
+  it("tells the person it is the Anthropic account, that an admin fixes it, and that the ticket is fine", () => {
+    const reason = reasonFor(
+      new ClaudeAgentAdapter().validateFreeformProtocol(loaded.artifacts, "impl-v2-4-a1"),
+    );
+    expect(reason).toMatch(/^The Anthropic account has no credit left/);
+    expect(reason).toContain("An admin must top up the Anthropic account");
+    expect(reason).toContain("nothing is wrong with the ticket");
+    expect(reason).not.toContain("The AI provider");
+    expect(reason).toContain(`AIW-DIAG-${runId}-implementation-1`);
+  });
+
+  it("names the same account when the structured parse path fails the same way", () => {
+    const result = new ClaudeAgentAdapter().parseAgentOutputProtocol(
+      loaded.artifacts,
+      "impl-v2-4-a1",
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: { failureKind: "provider_error", providerError: "Credit balance is too low" },
+    });
+    expect(reasonFor(result as never)).toMatch(/^The Anthropic account has no credit left/);
+  });
+});

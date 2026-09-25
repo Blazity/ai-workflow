@@ -1,4 +1,4 @@
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import { repositoryCatalogKey, type WorkflowRepositoryScope } from "@shared/contracts";
 
 /**
  * What core still says about a repository listing.
@@ -94,14 +94,14 @@ export function isRepositoryWithinPinnedScope(
   return filterPinnedRepositories([repository], scope).length === 1;
 }
 
-/** A pinned repoPath is stored in the case the operator picked, so every
- *  comparison lowercases it, exactly like repositoryKey in
- *  pre-sandbox/steps/repo-selection.ts and repositoryCatalogKey. */
+/** A pinned repoPath is stored in the case the operator picked, so it is
+ *  compared by the catalog's key, which lowercases the path. (The engine's
+ *  `repositoryKey` is the same key; adapters may not import the engine.) */
 function pinnedRepositoryKey(repository: {
   provider: VcsProvider;
   repoPath: string;
 }): string {
-  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+  return repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath });
 }
 
 export interface WorkflowOwnedBranch {

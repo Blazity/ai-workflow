@@ -25,11 +25,13 @@ import {
   renderScriptOutput,
   replayAttemptDetailResult,
   replayAttemptFailureCause,
+  replayEnvelopeRenderer,
   replaySelectionForRun,
   selectReplayAttempt,
   shouldPollAttemptDetail,
   shouldPollReplay,
 } from "./workflow-replay";
+import { STORED_LOGS } from "@/lib/test-support/replay-logs";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -702,6 +704,55 @@ test("coverage gaps render a Not entered line per group with skipped repositorie
   assert.doesNotMatch(html, /Not declared here/);
 });
 
+test("coverage gaps say why a repository was not entered when the run recorded it", () => {
+  // Red when the replay ignores skippedReasons: every repository then reads
+  // "was not part of this run", which sends an operator looking for a missing
+  // repository when the run simply stopped before reaching it.
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      {
+        group: "e2e",
+        declaredIn: ["github:acme/web"],
+        missing: [],
+        skipped: ["github:acme/api", "github:acme/cli", "github:acme/infra"],
+        skippedReasons: [
+          { repo: "github:acme/api", reason: "not_in_workspace" },
+          { repo: "github:acme/cli", reason: "not_reached" },
+          { repo: "github:acme/infra", reason: "not_in_workspace" },
+        ],
+      },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /e2e: github:acme\/api, github:acme\/infra \(not in this run&#x27;s workspace\)/);
+  assert.match(html, /e2e: github:acme\/cli \(not reached before the run stopped\)/);
+  assert.doesNotMatch(html, /was not part of this run/);
+});
+
+test("coverage gaps keep the old sentence for a reason the run did not record", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      {
+        group: "e2e",
+        declaredIn: [],
+        missing: [],
+        skipped: ["github:acme/api"],
+        skippedReasons: [{ repo: "github:acme/api", reason: "unrecorded" }],
+      },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /e2e: github:acme\/api \(repository was not part of this run\)/);
+});
+
 test("coverage gaps render nothing when groupCoverage is absent or fully covered", () => {
   const withoutField: JsonValue = { ok: true, allPassed: true, groupStatuses: [] };
   const withoutFieldHtml = renderToStaticMarkup(<>{renderScriptOutput(withoutField)}</>);
@@ -779,4 +830,31 @@ test("a graph somebody placed keeps the places they gave it", () => {
   const lefts = [...html.matchAll(/left:(-?\d+)px;top:(-?\d+)px/g)].map((match) => Number(match[1]));
   assert.equal(lefts.length, 2);
   assert.equal(Math.abs(lefts[1]! - lefts[0]!), 260);
+});
+
+// Red when: the Logs tab shows the stored logs as one JSON dump. The agent
+// CLI's tail is JSON lines whose fields hold JSON, so the dump escaped it three
+// times over (QA P1 round 2) and the one sentence that mattered, why the run
+// stopped, sat inside a wall of backslashes.
+test("the Logs tab reads each event's fields, with the raw JSON one click away", () => {
+  const render = replayEnvelopeRenderer("logs", "implementation_agent");
+  assert.ok(render, "the Logs tab has a readable view");
+  const html = renderToStaticMarkup(
+    <ReplayEnvelope envelope={envelope(STORED_LOGS)} emptyLabel="No logs" render={render} />,
+  );
+  assert.ok(html.includes("Raw JSON"), "a readable view renders, with the raw dump behind a toggle");
+  const readable = html.slice(0, html.indexOf("Raw JSON"));
+  assert.match(readable, /Credit balance is too low/);
+  assert.match(readable, /stdout/);
+  // The plan, a JSON document inside the event's `result`, reads as text with
+  // its own line breaks, and no quote in it is escaped.
+  assert.match(readable, /## Add `formatMoneyPl` to src\/pricing\/format\.ts\n\n1\. Add a new exported function\./);
+  assert.doesNotMatch(readable, /\\(&quot;|")/);
+  assert.doesNotMatch(readable, /\\n/);
+});
+
+test("only the Logs tab and a script block's output get a readable view", () => {
+  assert.equal(replayEnvelopeRenderer("input", "implementation_agent"), undefined);
+  assert.equal(replayEnvelopeRenderer("output", "implementation_agent"), undefined);
+  assert.equal(replayEnvelopeRenderer("output", "run_scripts"), renderScriptOutput);
 });

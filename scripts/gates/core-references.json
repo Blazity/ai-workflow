@@ -88,16 +88,6 @@
     },
     {
       "ids": [
-        "github"
-      ],
-      "stage": "kept",
-      "reason": "the cockpit activity drawer, whose rows are hardcoded sample events (invented pull request numbers, invented tickets) with an invented source label beside each. Nothing here asks which providers are connected, because nothing here reads anything real. The drawer showing fabricated activity to a person is worth fixing on its own, and the provider name is the smallest thing wrong with it.",
-      "paths": [
-        "apps/dashboard/components/cockpit/activity-drawer.tsx"
-      ]
-    },
-    {
-      "ids": [
         "slack"
       ],
       "stage": "R1",

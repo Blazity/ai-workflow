@@ -761,6 +761,48 @@ describe("runs.diagnose", () => {
     },
   );
 
+  // AWP-280, wrun_01M375BB1PC0CG3F8KR0DGEWJ6: a person moved the ticket out of
+  // Ai, and the tool answered "unknown". Through the tool, because the reason
+  // passes the response sanitizer before the classifier reads it.
+  it("says a run stopped because its ticket left the trigger column, and when", async () => {
+    const runId = await seedRun({
+      status: "blocked",
+      statusReason: "Ticket left the AI column (Ai → To Do) via Jira webhook",
+      completedAt: new Date("2026-09-23T12:56:35.055Z"),
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.diagnose", arguments: { runId } });
+    const envelope = result.structuredContent as Envelope<{
+      category: string;
+      nextActions: string[];
+    }>;
+
+    expect(envelope.data.category).toBe("ticket_left_trigger_column");
+    expect(envelope.data.nextActions[0]).toContain("at 2026-09-23T12:56:35.055Z");
+  });
+
+  // wrun_01M3755BR7PYPCZ7VVSJ7RGM88: the reason the harness pipeline now records
+  // for an empty Anthropic balance, read back through the tool.
+  it("sends an Anthropic account out of credit to an admin", async () => {
+    const runId = await seedRun({
+      status: "failed",
+      statusReason:
+        "The Anthropic account has no credit left, so Anthropic refused the request. An admin must top up the Anthropic account; nothing is wrong with the ticket, and a rerun fails the same way until then. Diagnostic ID: AIW-DIAG-wrun_01M3755BR7PYPCZ7VVSJ7RGM88-implementation-1",
+      completedAt: new Date("2026-09-23T12:57:56.106Z"),
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.diagnose", arguments: { runId } });
+    const envelope = result.structuredContent as Envelope<{
+      category: string;
+      nextActions: string[];
+    }>;
+
+    expect(envelope.data.category).toBe("provider_account");
+    expect(envelope.data.nextActions.join(" ")).toContain("The Anthropic account has no credit left");
+  });
+
   it("carries the run's frozen repository list beside the diagnosis", async () => {
     const access = { activated: true, enabledKeys: ["github:acme/api"] } as const;
     const runId = await seedRun({

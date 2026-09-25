@@ -631,6 +631,81 @@ describe("workflow-owned branch records", () => {
     ).resolves.toMatchObject({ ticketKey: "AIW-140", pr: { id: 88 } });
   });
 
+  it("recognises its own pull request whatever case the repository path is asked in", async () => {
+    // The row carries GitHub's spelling; a run started from a URL someone
+    // typed may carry another. GitHub resolves both to one repository, so an
+    // exact comparison answered "not ours": dispatch refused a workflow-owned
+    // pull request, and a fix push was left unarmed against its own webhook.
+    const db = await createTestDb();
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-case",
+      provider: "github",
+      repoPath: "Acme/Web",
+      branchName: "ai-workflow/aiw-case",
+      publishedHeadSha: "published-sha",
+      targetBranch: "main",
+      pr: {
+        id: 7,
+        url: "https://github.com/Acme/Web/pull/7",
+        branch: "ai-workflow/aiw-case",
+      },
+    });
+    const asked = { provider: "github", repoPath: "acme/web", prNumber: 7 };
+
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        ...asked,
+        branchName: "ai-workflow/aiw-case",
+        publishedHeadSha: "published-sha",
+        baseBranch: "main",
+      }),
+    ).resolves.toMatchObject({ ticketKey: "AIW-case", repoPath: "Acme/Web" });
+    await expect(
+      recordWorkflowOwnedPullRequestPublishedHead(db, { ...asked, headSha: "fix-head" }),
+    ).resolves.toBe(true);
+    await expect(findWorkflowOwnedPullRequestIdentity(db, asked)).resolves.toMatchObject({
+      ticketKey: "AIW-case",
+      publishedHeadSha: "fix-head",
+    });
+    // Still the provider, the number and the repository: a same-numbered pull
+    // request in another repository is not this one.
+    await expect(
+      findWorkflowOwnedPullRequestIdentity(db, { ...asked, repoPath: "acme/api" }),
+    ).resolves.toBeNull();
+  });
+
+  it("binds a pending publication intent whatever case the event spells the path in", async () => {
+    const db = await createTestDb();
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-intent",
+      provider: "github",
+      repoPath: "Acme/Web",
+      branchName: "ai-workflow/aiw-intent",
+      publishedHeadSha: "intent-sha",
+      targetBranch: "main",
+      prCorrelationPending: true,
+    });
+    const event = {
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "ai-workflow/aiw-intent",
+      publishedHeadSha: "intent-sha",
+      baseBranch: "main",
+    };
+
+    await expect(findWorkflowOwnedPullRequestIntent(db, event)).resolves.toMatchObject({
+      ticketKey: "AIW-intent",
+    });
+    await expect(
+      bindWorkflowOwnedPullRequestIntent(db, {
+        ...event,
+        ticketKey: "AIW-intent",
+        prNumber: 9,
+        prUrl: "https://github.com/Acme/Web/pull/9",
+      }),
+    ).resolves.toMatchObject({ pr: { id: 9 } });
+  });
+
   it("does not match an unknown-branch lookup when the head sha differs", async () => {
     const db = await createTestDb();
     await upsertWorkflowOwnedBranch(db, {

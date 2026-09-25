@@ -8,17 +8,20 @@
  * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
  * state.
  *
- * Three value imports, on purpose (the fourth import is type-only and is
- * erased). The third is isRunCompletionPending from this
+ * Four value imports, on purpose (the first import is type-only and is
+ * erased). One is the stop sentences of engine/support/ticket-left-column.ts,
+ * pure text whose reader belongs next to its writer for the reason given below.
+ * One is isRunCompletionPending from this
  * cluster's own contracts module, which is a pure predicate over three fields
  * and side-effect free: `completion_fields_pending` has to answer exactly what
  * `completionPending` answers on runs.get, runs.result and tickets.list_runs,
  * and a second copy of that rule here is how the two would come to disagree
  * about the same run. The other two are of one kind: the per-category
  * sentences this file matches on live in exactly one place each
- * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts,
- * the repository scripts classes in engine/blocks/support/repository-scripts-
- * output.ts) and the repository enforces the first with
+ * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts and
+ * the curated provider sentences read through `curatedProviderFailureOf` beside
+ * them, the repository scripts classes in engine/blocks/support/repository-
+ * scripts-output.ts) and the repository enforces the first with
  * `engine/execution-error-invariant.test.ts`: a copy of the table
  * is how the scheduler path once drifted into producing a right-looking
  * sentence while skipping derivation. Re-typing those sentences here to keep
@@ -30,13 +33,20 @@
 
 import type { IntegrationUnavailableReason, RunFailureCode } from "@shared/contracts";
 import {
+  curatedProviderFailureOf,
   SAFE_EXECUTION_ERROR_MESSAGES,
   WORKSPACE_GATE_NOT_RECORDED_PREFIX,
+  type ProviderAccount,
+  type ProviderFailureCause,
 } from "@shared/workflow-graph";
 import {
   isRepositoryScriptsRefusal,
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
 } from "../../engine/blocks/support/repository-scripts-output.js";
+import {
+  isLeftColumnReason,
+  isPrematureReviewReason,
+} from "../../engine/support/ticket-left-column.js";
 import { isRunCompletionPending } from "./contracts.js";
 
 
@@ -50,6 +60,9 @@ type RunDiagnosisCategory =
   | "never_started"
   | "no_workflow_matched"
   | "stopped_without_reason"
+  | "ticket_left_trigger_column"
+  | "ticket_moved_to_review_early"
+  | "provider_account"
   | "dependency_auth"
   | "dependency_unavailable"
   | "sandbox_timeout"
@@ -102,6 +115,10 @@ export interface DiagnoseRunInput {
   }>;
 }
 
+/** The half of every account answer that tells the reader it is not their bug. */
+const RERUN_AFTER_ACCOUNT_FIX =
+  "Nothing is wrong with the ticket or the workflow: rerun once the account is fixed, and a rerun before that fails the same way.";
+
 /** Closed, code-owned action phrases per category. Never assembled from
  *  input data, so a poisoned message/log can never inject a phrase here. */
 const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
@@ -140,6 +157,22 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   stopped_without_reason: [
     "The run was most likely cancelled or swept up as an orphan; no failure was recorded.",
     "Check whether the ticket moved out of the AI column or the run's clarification/approval was superseded.",
+  ],
+  // Overridden per match by leftColumnActions, which adds the moment; this is
+  // the answer for a run whose completion time was never recorded.
+  ticket_left_trigger_column: [
+    "Stopped because the ticket left the trigger column: a person moved it, so nothing failed.",
+    "To run it again, move the ticket back into the trigger column; a new run starts from the beginning.",
+  ],
+  // Overridden per match by reviewTooEarlyActions, which adds the moment.
+  ticket_moved_to_review_early: [
+    "Stopped because the ticket was moved to the review column before this run had published a pull request: a person moved it, so nothing failed.",
+    "To have the work done, move the ticket back into the trigger column; a new run starts from the beginning.",
+  ],
+  // Overridden per cause and account by providerAccountActions.
+  provider_account: [
+    "An AI provider account refused the run; an admin of that account has to act (credit, spend limit or plan).",
+    RERUN_AFTER_ACCOUNT_FIX,
   ],
   dependency_auth: [
     "Verify the AI provider API key is valid and has not expired or been revoked.",
@@ -309,49 +342,132 @@ const VALIDATION_FAILED_PREFIXES = [
   SAFE_EXECUTION_ERROR_MESSAGES.parsing,
 ];
 
-// Curated PROVIDER_CAUSES sentence for an AI-provider auth rejection
-// (packages/workflow-graph/failure-message.ts:148-152). classifyProviderFailure
-// gives this trusted match first shot at the raw provider error text, so this
-// rule matches ONLY the sentence it already decided on, never the raw text.
-const DEPENDENCY_AUTH_PREFIX =
-  "The AI provider rejected the credentials (authentication failed).";
-
-// Curated provider sentence for an account/project spend-limit rejection
-// (packages/workflow-graph/failure-message.ts:130-143). This is deliberately a
-// whole trusted lead rather than a raw `spend limit` search: runs.diagnose
-// receives the already-sanitized run reason, and only this code-owned sentence
-// is safe to route to billing remediation. It stays distinct from
-// `budget_exhausted`, which describes the workflow's own configured budget.
-const PROVIDER_SPEND_LIMIT_PREFIX =
-  "The AI provider rejected the request: the account has reached its configured spend limit.";
-const PROVIDER_SPEND_LIMIT_ACTIONS = [
-  "Raise or remove the provider project's configured spend limit in billing settings before retrying.",
-  "Confirm the intended provider project/account is selected and that the new limit has propagated before rerunning.",
-] as const;
-
-// The other PROVIDER_CAUSES sentences (packages/workflow-graph/
-// failure-message.ts:102-181): billing/credit, rate limit, model unavailable,
-// and overloaded. Plus SAFE_EXECUTION_ERROR_MESSAGES.provider
-// (same table), the uncurated fallback for a "provider"-category failure
-// that matched none of those. Plus
-// the agent-CLI runtime-prep/execution sentences set directly as
-// `options.message` (protocol.ts:138/147/259/453 "The agent runtime could not
-// be prepared."; protocol.ts:189/201 "The current agent phase could not be
-// completed."): both are AgentRuntimeError (sandbox/agents/runtime-error.ts:11)
+// The curated provider sentences (packages/workflow-graph/failure-message.ts,
+// PROVIDER_CAUSES) are read through curatedProviderFailureOf, which matches the
+// leads that table itself produces, named after an account or not, and the
+// unnamed ones are the sentences runs recorded before accounts were named. So
+// this file holds no copy of them: a copy is how a reworded sentence once went
+// on being produced while its rule matched nothing.
+//
+// The remaining prefixes: SAFE_EXECUTION_ERROR_MESSAGES.provider (same table as
+// the other generic sentences), the uncurated fallback for a "provider"-category
+// failure that matched no curated cause, plus the agent-CLI runtime-prep and
+// execution sentences set directly as `options.message` (protocol.ts "The agent
+// runtime could not be prepared." and "The current agent phase could not be
+// completed."): both are AgentRuntimeError (sandbox/agents/runtime-error.ts)
 // with category "provider" (AgentProtocolFailureCategory, sandbox/agents/
-// types.ts:529), and the exposed text cannot distinguish "missing credentials"
-// from "CLI install/exit failed", so they land here rather than under
+// types.ts), and the exposed text cannot distinguish "missing credentials" from
+// "CLI install/exit failed", so they land here rather than under
 // dependency_auth. All describe an external/tooling dependency being
 // unreachable or broken right now, distinct from a rejected credential.
 const DEPENDENCY_UNAVAILABLE_PREFIXES = [
-  "The AI provider rejected the request: the account credit or billing balance is too low.",
-  "The AI provider rate-limited the request.",
-  "The requested AI model is unavailable or access is denied.",
-  "The AI provider is overloaded.",
   SAFE_EXECUTION_ERROR_MESSAGES.provider,
   "The agent runtime could not be prepared.",
   "The current agent phase could not be completed.",
 ];
+
+/**
+ * What to do about an account the provider refused on, per cause and account.
+ *
+ * The account comes out of the curated sentence, and it is one of two names this
+ * build owns, so naming it here is naming a member of a closed set, not copying
+ * run text into an action.
+ */
+function providerAccountActions(
+  cause: ProviderFailureCause,
+  account: ProviderAccount | null,
+): readonly string[] {
+  const who = account ? `The ${account} account` : "The AI provider account";
+  const where = account ? `the ${account} billing settings` : "the provider's billing settings";
+  switch (cause) {
+    case "credit":
+      return [`${who} has no credit left; an admin must top it up in ${where}.`, RERUN_AFTER_ACCOUNT_FIX];
+    case "spend_limit":
+      return [
+        `${who} reached its spend limit; an admin must raise or remove it in ${where}, or wait for it to reset.`,
+        RERUN_AFTER_ACCOUNT_FIX,
+      ];
+    default:
+      return [
+        `The ${account ?? "AI provider"} plan this deployment signs in with hit its usage limit; rerun after it resets, or have an admin move to a larger plan or an API key.`,
+        "Nothing is wrong with the ticket or the workflow.",
+      ];
+  }
+}
+
+/** Actions for a rejected credential, naming whose it was when the sentence did. */
+function providerAuthActions(account: ProviderAccount | null): readonly string[] {
+  if (!account) return NEXT_ACTIONS.dependency_auth;
+  return [
+    `${account} rejected the credential AI Workflow uses for it; an admin must replace the ${account} API key or login.`,
+    "Nothing is wrong with the ticket: rerun once the credential is replaced.",
+  ];
+}
+
+/** Actions for a provider that is refusing for now rather than for good. */
+function providerUnavailableActions(
+  cause: ProviderFailureCause,
+  account: ProviderAccount | null,
+): readonly string[] {
+  if (!account) return NEXT_ACTIONS.dependency_unavailable;
+  switch (cause) {
+    case "rate_limit":
+      return [
+        `${account} rate-limited the request; wait a few minutes and rerun.`,
+        "Nothing is wrong with the ticket; if this keeps happening, the account's rate limits are too low for this workload.",
+      ];
+    case "model":
+      return [
+        `${account} refused the requested model; choose one this account can use in the harness profile, then rerun.`,
+      ];
+    default:
+      return [
+        "Retry the run after a short delay.",
+        `Check ${account}'s status page for ongoing incidents.`,
+      ];
+  }
+}
+
+const PROVIDER_ACCOUNT_CAUSES: ReadonlySet<ProviderFailureCause> = new Set([
+  "credit",
+  "spend_limit",
+  "usage_limit",
+]);
+
+/**
+ * The moment the run stopped, from its own completion time, or nothing.
+ *
+ * The one piece of the run this file puts into an action, and it is safe to:
+ * it is re-rendered from a parsed Date, so whatever the column held, what comes
+ * out is an ISO timestamp or nothing at all. The column names in the recorded
+ * reason come from the tracker and are never copied.
+ */
+function leftColumnActions(completedAt: string | null | undefined): readonly string[] {
+  const at = stopMoment(completedAt);
+  if (!at) return NEXT_ACTIONS.ticket_left_trigger_column;
+  return [
+    `Stopped because the ticket left the trigger column at ${at}: a person moved it, so nothing failed.`,
+    NEXT_ACTIONS.ticket_left_trigger_column[1] as string,
+  ];
+}
+
+/** The same, for a ticket moved to the review column before anything was
+ *  published: the run was stopped rather than left to publish into a column a
+ *  person had already moved on from. */
+function reviewTooEarlyActions(completedAt: string | null | undefined): readonly string[] {
+  const at = stopMoment(completedAt);
+  if (!at) return NEXT_ACTIONS.ticket_moved_to_review_early;
+  return [
+    `Stopped because the ticket was moved to the review column at ${at}, before this run had published a pull request: a person moved it, so nothing failed.`,
+    NEXT_ACTIONS.ticket_moved_to_review_early[1] as string,
+  ];
+}
+
+/** The run's completion time re-rendered from a parsed Date, or null. */
+function stopMoment(completedAt: string | null | undefined): string | null {
+  const at = completedAt ? new Date(completedAt) : null;
+  return at && !Number.isNaN(at.getTime()) ? at.toISOString() : null;
+}
 
 // SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts),
 // composed whenever a block reports `category: "timeout"` (e.g. engine/blocks/
@@ -535,6 +651,40 @@ const RULES: readonly Rule[] = [
     },
   },
   {
+    // Ahead of "cancelled": the poll's wording for this move says "cancelled by
+    // reconciler", and a person moving a ticket is a more specific answer than
+    // a cancellation of unknown origin. Low confidence like every rule that
+    // reads a sentence, although both sentences are this build's own.
+    category: "ticket_left_trigger_column",
+    match: (input) => {
+      if (input.status !== "blocked") return null;
+      const message = input.error?.message;
+      if (!message || !isLeftColumnReason(message)) return null;
+      return {
+        confidence: "low",
+        evidenceRefs: evidenceFrom(input),
+        nextActions: leftColumnActions(input.completedAt),
+      };
+    },
+  },
+  {
+    // Its own sentence, written only by the ticket webhook and the reconciler
+    // when a ticket reaches the review column while its run has published
+    // nothing (services/tickets/ai-review-transition.ts); the tracker's name in
+    // front of it is never copied into an action.
+    category: "ticket_moved_to_review_early",
+    match: (input) => {
+      if (input.status !== "blocked") return null;
+      const message = input.error?.message;
+      if (!message || !isPrematureReviewReason(message)) return null;
+      return {
+        confidence: "low",
+        evidenceRefs: evidenceFrom(input),
+        nextActions: reviewTooEarlyActions(input.completedAt),
+      };
+    },
+  },
+  {
     category: "cancelled",
     match: (input) => {
       if (input.status !== "blocked") return null;
@@ -613,26 +763,26 @@ const RULES: readonly Rule[] = [
     },
   },
   {
-    category: "dependency_auth",
+    category: "provider_account",
     match: (input) => {
-      const message = input.error?.message;
-      if (!message || !message.startsWith(DEPENDENCY_AUTH_PREFIX)) return null;
-      return { confidence: "low", evidenceRefs: evidenceFrom(input) };
-    },
-  },
-  {
-    // This is a provider dependency failure, but the operator action is
-    // billing remediation rather than a blind retry or a status-page check.
-    // Keep it ahead of the generic dependency_unavailable rule below so the
-    // stable curated spend-limit sentence gets its specific guidance.
-    category: "dependency_unavailable",
-    match: (input) => {
-      const message = input.error?.message;
-      if (!message || !message.startsWith(PROVIDER_SPEND_LIMIT_PREFIX)) return null;
+      const curated = curatedProviderFailureOf(input.error?.message ?? "");
+      if (!curated || !PROVIDER_ACCOUNT_CAUSES.has(curated.cause)) return null;
       return {
         confidence: "low",
         evidenceRefs: evidenceFrom(input),
-        nextActions: PROVIDER_SPEND_LIMIT_ACTIONS,
+        nextActions: providerAccountActions(curated.cause, curated.account),
+      };
+    },
+  },
+  {
+    category: "dependency_auth",
+    match: (input) => {
+      const curated = curatedProviderFailureOf(input.error?.message ?? "");
+      if (curated?.cause !== "auth") return null;
+      return {
+        confidence: "low",
+        evidenceRefs: evidenceFrom(input),
+        nextActions: providerAuthActions(curated.account),
       };
     },
   },
@@ -640,7 +790,16 @@ const RULES: readonly Rule[] = [
     category: "dependency_unavailable",
     match: (input) => {
       const message = input.error?.message;
-      if (!message || !startsWithAny(message, DEPENDENCY_UNAVAILABLE_PREFIXES)) return null;
+      if (!message) return null;
+      const curated = curatedProviderFailureOf(message);
+      if (curated) {
+        return {
+          confidence: "low",
+          evidenceRefs: evidenceFrom(input),
+          nextActions: providerUnavailableActions(curated.cause, curated.account),
+        };
+      }
+      if (!startsWithAny(message, DEPENDENCY_UNAVAILABLE_PREFIXES)) return null;
       return { confidence: "low", evidenceRefs: evidenceFrom(input) };
     },
   },
