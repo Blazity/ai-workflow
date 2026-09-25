@@ -237,7 +237,12 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
   const rows: WorkflowRow[] = options.registry.map((workflow) => {
     const selected = windowRows.filter((row) => row.workflowId === workflow.id);
     const gateway = observedGateway(selected.map((row) => row.harnessProviders));
-    const durations = selected.map((row) => row.durationSec).filter((value): value is number => value !== null);
+    // Latency of successful runs, as the Overview's p95 tile reads it: a run
+    // that failed at its first block would make the workflow look fast.
+    const durations = selected
+      .filter((row) => coerceStatus(row.status) === "success")
+      .map((row) => row.durationSec)
+      .filter((value): value is number => value !== null);
     const failed = selected.filter((row) => coerceStatus(row.status) === "failed").length;
     const times = selected.map((row) => (row.startedAt ?? row.firstSeenAt).getTime());
     const latest = latestById.get(workflow.id);
