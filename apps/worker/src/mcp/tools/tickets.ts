@@ -13,6 +13,7 @@ import { requireIssueTracker } from "../issue-tracker-access.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 const DEFAULT_COMMENTS_LIMIT = 20;
+const EVERY_COMMENT = new Date(0).toISOString();
 const DEFAULT_RUNS_LIMIT = 20;
 
 type TicketGetData = {
@@ -62,7 +63,16 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           let ticket;
           try {
-            ticket = await issueTracker.fetchTicket(input.ticketKey);
+            // With comments wanted, ask for every comment. An issue read may
+            // embed only a first page, so without a window the newest ones,
+            // usually the latest human instruction, can be exactly the ones
+            // missing. A window from the start of time is "all of them" by the
+            // port's own contract, and the adapter bounds how far it pages.
+            ticket = input.includeComments
+              ? await issueTracker.fetchTicket(input.ticketKey, {
+                  commentsSince: EVERY_COMMENT,
+                })
+              : await issueTracker.fetchTicket(input.ticketKey);
           } catch (error) {
             // Only the specific "no such ticket" case gets a public code; any
             // other adapter failure (auth, network, malformed response) falls
@@ -74,20 +84,17 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             throw error;
           }
 
-          // fetchTicket always returns every comment (no includeComments
-          // param, no pagination on the adapter side); this tool decides how
-          // much of that to hand back: the newest, since the reply somebody
-          // just wrote is what a caller reads a ticket for, kept in the order
-          // they were written so the thread still reads top to bottom.
+          // Adapters hand comments over oldest first (Jira reads them
+          // orderBy=created). The newest `commentsLimit` are the ones kept:
+          // cutting the tail instead dropped the latest human instruction on
+          // any long ticket.
           const commentsLimit = input.commentsLimit ?? DEFAULT_COMMENTS_LIMIT;
           const comments = input.includeComments
-            ? inWrittenOrder(ticket.comments)
-                .slice(-commentsLimit)
-                .map((c) => ({
-                  author: c.author,
-                  body: c.body,
-                  createdAt: utcInstant(c.createdAt),
-                }))
+            ? ticket.comments.slice(-commentsLimit).map((c) => ({
+                author: c.author,
+                body: c.body,
+                createdAt: utcInstant(c.createdAt),
+              }))
             : null;
 
           return {
@@ -101,8 +108,11 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             statusId: ticket.trackerStatusId ?? null,
             commentCount: ticket.comments.length,
             comments,
+            // Also true when the adapter itself stopped short of the whole
+            // list: comments exist that neither side handed over.
             commentsTruncated:
-              Boolean(input.includeComments) && ticket.comments.length > commentsLimit,
+              Boolean(input.includeComments) &&
+              (ticket.comments.length > commentsLimit || ticket.commentsComplete === false),
             attachments: ticket.attachments.map((a) => ({
               id: a.id,
               filename: a.filename,
@@ -183,17 +193,6 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
       };
     },
   );
-}
-
-/** Oldest first by the instant each was written. When any instant does not
- * parse there is no order to trust but the tracker's, so that one is kept. */
-function inWrittenOrder<T extends { createdAt: string }>(comments: readonly T[]): T[] {
-  const at = comments.map((comment) => Date.parse(comment.createdAt));
-  if (at.some(Number.isNaN)) return [...comments];
-  return comments
-    .map((comment, index) => ({ comment, index }))
-    .sort((a, b) => at[a.index]! - at[b.index]! || a.index - b.index)
-    .map(({ comment }) => comment);
 }
 
 /** Jira writes `+0200` offsets; every other time on this surface is ISO in Z. */

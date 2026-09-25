@@ -443,7 +443,7 @@ describe("workflows.dispatch", () => {
     expect(errorText(first)).toContain("no run has started yet");
     // Says when to look for the run, and sends a dispatch that never appears to a
     // new key rather than back to this one, which cannot serve it any more.
-    expect(errorText(first)).toContain("60000");
+    expect(errorText(first)).toContain("up to 15 minutes");
     expect(errorText(first)).toContain("NEW idempotency key");
     // The first attempt's dispatch row is alive and the recovery pass will pick
     // it up, so this key is spent: the retry is answered from the record and the

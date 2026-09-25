@@ -752,7 +752,6 @@ Hard rules:
 - One exception to that bar: also contradict an already-known entry that names a platform-managed path or states what the platform permits, blocks or requires, even though it is true. It is not knowledge about this repository, and a retraction is the only way it leaves the document.
 - At most ${MAX_CONTRADICTED} contradicted facts and ${MAX_CONTRADICTED} contradicted lessons per repository.
 - Never include a ticket id, a customer or client name, a person name, an email address, a URL carrying credentials, or any other personal data.
-- Never restate what the repository already documents in CLAUDE.md or AGENTS.md.
 - Never write a fact or lesson that mentions a platform-managed path (ai-workflow/memory, blazebot/memory, aiw-repos.json, /vercel/sandbox), the sandbox, or what the platform permits, blocks or requires. Such a statement can be permanently true and still not be knowledge: it is identical for every repository the platform runs on, so it says nothing about this one. Quoting such an entry in a contradicted list is required and is not a violation of this rule. Paths the repository itself owns are not covered: .ai/memory is written by the repository, so a fact about it is ordinary repository knowledge.
 - Never repeat an entry already listed under "Already known" for that repository, in any wording.
 - One entry is one line, at most ${MAX_ITEM_CHARS} characters, no bullet markers, no numbering.

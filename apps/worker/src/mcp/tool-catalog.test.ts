@@ -97,7 +97,10 @@ const CATALOGUED = [
   "memory.list",
   "memory.get",
   "memory.forget",
-  "harness_profiles.list",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

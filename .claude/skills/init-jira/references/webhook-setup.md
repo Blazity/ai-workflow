@@ -1,4 +1,4 @@
-# Webhook setup — phase 2 detail
+# Webhook setup: phase 2 detail
 
 **Don't skip this if you can avoid it.** Without webhooks, AI Workflow only polls every 15 minutes via cron (`apps/worker/vercel.json`), so every ticket waits up to 15 minutes before the agent even *starts*. With webhooks, dispatch is sub-second.
 
@@ -8,7 +8,7 @@ The handler dispatches when the ticket lands in the configured AI status and can
 
 ### Optional: instant create / comment dispatch
 
-If you want creates and new comments to dispatch immediately (rather than waiting for the next `jira:issue_updated` from a transition or edit), also check **Issue → Issue created** and **Comment → Comment created**. Tradeoff: more webhook traffic, but no perceptible latency on freshly-created tickets or replies. The handler still applies the same column/state filters either way — extra events are filtered out, not acted on.
+If you want creates and new comments to dispatch immediately (rather than waiting for the next `jira:issue_updated` from a transition or edit), also check **Issue → Issue created** and **Comment → Comment created**. Tradeoff: more webhook traffic, but no perceptible latency on freshly-created tickets or replies. The handler still applies the same column/state filters either way: extra events are filtered out, not acted on.
 
 Clarification answers do not need **Comment created**: the `jira:issue_updated` event from moving the ticket back to the AI column triggers the resume, and the cron poller is the backstop if that webhook is missed.
 
@@ -20,7 +20,7 @@ ${JIRA_BASE_URL}/plugins/servlet/webhooks
 
 Concrete: `https://acme.atlassian.net/plugins/servlet/webhooks`.
 
-If you land on a "you don't have permission" page, you need **site admin** or **Jira admin** rights — grab someone with admin or have admin grant you the role.
+If you land on a "you don't have permission" page, you need **site admin** or **Jira admin** rights: grab someone with admin or have admin grant you the role.
 
 Manual menu fallback: gear icon (⚙) at top-right → System → WebHooks (under "Advanced").
 

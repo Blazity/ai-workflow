@@ -148,7 +148,7 @@ function safeReplayMessage(code: McpErrorCode): string {
 function replayedFailure(code: McpErrorCode): McpPublicError {
   return new McpPublicError(
     code,
-    `${safeReplayMessage(code)}. This idempotency key already carries the outcome of an earlier attempt: confirm the state with runs.get, and dispatch again under a new idempotency key.`,
+    `${safeReplayMessage(code)}. This idempotency key already carries the outcome of an earlier attempt, and repeating it returns that outcome again: read the current state with the matching read tool, and send the call under a new idempotency key only if the change is still needed.`,
     false,
   );
 }

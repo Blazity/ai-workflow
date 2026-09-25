@@ -1,6 +1,6 @@
 ---
 name: init-slack
-description: Configure or rotate the Slack bot integration for AI Workflow notifications: bot token, channel ID, signing secret. Use for "set up slack bot", "rotate slack token", "change slack channel", "configure ai-workflow slack".
+description: Configure or rotate the Slack bot integration for AI Workflow notifications (bot token, channel ID, signing secret). Use for "set up slack bot", "rotate slack token", "change slack channel", "configure ai-workflow slack".
 ---
 
 # Initialize Slack
@@ -15,7 +15,7 @@ Slack is an integration (ADR-010). The variables below still configure it, and a
 
 ## Precondition
 
-`.vercel/project.json` must exist. If missing:
+`apps/worker/.vercel/project.json` must exist: the worker is linked from `apps/worker` (SETUP.md section 3), and this skill's commands run there. If missing:
 
 ```
 ERROR: no Vercel project linked. Run `vercel link` first, or invoke `init-env`
@@ -24,31 +24,31 @@ for the full first-time setup.
 
 Halt.
 
-## Step 1 — Bot app and token
+## Step 1: Bot app and token
 
-If an AI Workflow Slack app already exists in the workspace, the user just needs the bot token and a channel ID — skip to step 2.
+If an AI Workflow Slack app already exists in the workspace, the user just needs the bot token and a channel ID: skip to step 2.
 
 Otherwise, walk the user through `references/bot-app-setup.md` to create the Slack app with the right scopes.
 
-## Step 2 — Collect values
+## Step 2: Collect values
 
 Ask:
 
-- `CHAT_SDK_SLACK_TOKEN` — bot token, starts with `xoxb-`
-- `CHAT_SDK_CHANNEL_ID` — channel ID like `C0123456789` (not `#channel-name`)
+- `CHAT_SDK_SLACK_TOKEN`: bot token, starts with `xoxb-`
+- `CHAT_SDK_CHANNEL_ID`: channel ID like `C0123456789` (not `#channel-name`)
 - `SLACK_SIGNING_SECRET`: needed only for the `/ai-workflow` slash command. App settings → **Basic Information** → **App Credentials** → **Signing Secret**. Used to verify inbound `/ai-workflow` slash command requests. See `references/slash-commands.md` for the full slash-command setup.
-- `SLACK_ALLOWED_USER_IDS` — optional. Comma-separated Slack user IDs (`U…`) allowed to run `/ai-workflow`. Defaults to empty, which lets anyone in the workspace run the slash command. Only ask if the user wants to restrict access.
+- `SLACK_ALLOWED_USER_IDS`: optional. Comma-separated Slack user IDs (`U…`) allowed to run `/ai-workflow`. Defaults to empty, which lets anyone in the workspace run the slash command. Only ask if the user wants to restrict access.
 
 ### Finding the channel ID
 
-The user-friendly `#channel-name` doesn't work — AI Workflow needs the `C…` ID. Two ways to find it:
+The user-friendly `#channel-name` doesn't work: AI Workflow needs the `C…` ID. Two ways to find it:
 
 - Open the channel in Slack web → URL ends in `/C0123456789`. That's the ID.
 - Right-click channel in Slack desktop → "View channel details" → bottom of the modal shows the ID.
 
 The bot must be invited to the channel: `/invite @ai-workflow` from inside the channel. Otherwise Slack answers `not_in_channel`.
 
-## Step 3 — Emit paste-template
+## Step 3: Emit paste-template
 
 ```bash
 CHAT_SDK_SLACK_TOKEN=<value>
@@ -63,7 +63,7 @@ SLACK_ALLOWED_USER_IDS=U0123,U4567
 
 Tell the user to paste into Vercel → Project Settings → Environment Variables (all three environments), save, and reply when done. A variable takes effect on the next deployment; values saved on the Integrations page take effect at once.
 
-## Step 4 — Register the slash command
+## Step 4: Register the slash command
 
 After the env vars are saved and the project has been deployed at least once, the operator must register the slash command in Slack:
 

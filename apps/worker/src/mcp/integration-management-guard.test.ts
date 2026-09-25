@@ -98,14 +98,20 @@ const REVIEWED_TOOLS: readonly string[] = [
   "memory.list",
   "memory.get",
   "memory.forget",
-  // Which Harness Profiles an agent block can pin. Profiles are not
-  // integrations: nothing here connects, tests or chooses a provider.
-  "harness_profiles.list",
   // Reads of what a run's agents were sent. Neither touches a connection: they
   // return recorded prompt text addressed by run or by definition node, and a
   // briefing names an integration only where the prompt it recorded did.
   "runs.briefing",
   "workflows.node_briefing",
+  // Harness profiles: which skills a profile pins and which workflows pin it,
+  // pointing a pinned skill at the bytes its source holds now, and publishing
+  // the draft. A skill is
+  // content the deployment carries, not a connection, and none of the three
+  // names a provider or touches a credential.
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ];
 
 /**

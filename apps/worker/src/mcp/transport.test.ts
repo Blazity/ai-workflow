@@ -165,7 +165,10 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
-  "harness_profiles.list",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

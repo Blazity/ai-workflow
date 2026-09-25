@@ -991,9 +991,9 @@ export const FIRST_SLICE_TOOLS = [
   "memory.list",
   "memory.get",
   "memory.forget",
-  // Appended for the same reason again. An agent block chooses its model by
-  // pinning a Harness Profile, and nothing on this surface named one, so a graph
-  // authored here could only take the built-in default.
-  "harness_profiles.list",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

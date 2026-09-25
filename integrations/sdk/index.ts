@@ -29,6 +29,9 @@
  * The port of `agent_tools` is reserved (see `INTEGRATION_CAPABILITIES`).
  *
  * `checkIntegrationConformance` is what CI runs over every integration.
+ * `MemoryStore` is version 2 of the memory port, beside `MemoryAdapter` until
+ * core moves onto it, and `checkMemoryStoreConformance` is what every memory
+ * store passes, the built-in one included.
  * ADR-010 records why the contract has this shape and every later change.
  *
  * This entry reaches no Node module; a test bundles it for the browser.
@@ -310,6 +313,42 @@ export type {
   MemoryWrite,
 } from "./memory";
 export { MEMORY_ITEMS_MAX, MEMORY_NOTEBOOK_MAX_BYTES, MEMORY_PROMPT_BUDGET_BYTES } from "./memory";
+
+export type {
+  MemoryEntryOrigin,
+  MemoryHolding,
+  MemoryKind,
+  MemoryRecalledEntry,
+  MemoryRemovalReason,
+  MemoryStore,
+  MemoryStoreAddition,
+  MemoryStoreAnswer,
+  MemoryStoreApplied,
+  MemoryStoreApplyOutcome,
+  MemoryStoreApplyRequest,
+  MemoryStoreEntry,
+  MemoryStoreFailure,
+  MemoryStoreFailureReason,
+  MemoryStoreForgetRequest,
+  MemoryStoreForgotten,
+  MemoryStoreHeld,
+  MemoryStoreHeldRequest,
+  MemoryStoreHoldings,
+  MemoryStoreItemFailure,
+  MemoryStoreRecall,
+  MemoryStoreRecallRequest,
+  MemoryStoreRefusal,
+  MemoryStoreRemoval,
+  MemoryStoreTraits,
+  MemoryStoreUpdate,
+} from "./memory";
+export { memoryTextHash, normalizeMemoryText } from "./memory";
+export {
+  checkMemoryStoreConformance,
+  type MemoryStoreConformanceCase,
+  type MemoryStoreConformanceHarness,
+  type MemoryStoreConformanceIssue,
+} from "./memory-conformance";
 
 export type {
   MessageRetrievalFailure,

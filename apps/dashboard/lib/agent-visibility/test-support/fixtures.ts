@@ -158,7 +158,7 @@ const REPOSITORY_ACCESS_PROTOCOL = `
 
 ## Repository Access Protocol
 
-This protocol extends and overrides any older Output Format instructions above.
+This protocol adds to the Output Format in the block instructions above; where the two differ, follow this protocol.
 
 - Inspect only repositories already attached to the workspace.
 - If an additional repository is required, return \`status: "repositories_needed"\`

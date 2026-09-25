@@ -1605,7 +1605,7 @@ describe("runtime parts", () => {
     expect(ids.slice(-2)).toEqual(["repository-access-protocol", "resolution-check"]);
     expect(byId(parts, "repository-access-protocol").origin.kind).toBe("platform");
     expect(byId(parts, "repository-access-protocol").content).toContain(
-      "This protocol extends and overrides any older Output Format instructions above.",
+      "This protocol adds to the Output Format in the block instructions above; where the two differ, follow this protocol.",
     );
     expect(byId(parts, "resolution-check")).toMatchObject({
       origin: { kind: "platform" },

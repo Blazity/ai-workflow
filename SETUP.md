@@ -344,16 +344,16 @@ Two timing rules matter:
 - A run reads the catalog **once, at its start**, and finishes under the list it started with. Disabling a repository stops the next run, not one already in flight. The same is true of every setting on the Settings page: `appliesToRunsInFlight` in the settings registry says which.
 - A pull request or merge request event is checked at dispatch, and a pending event queued while the deployment was busy is checked again on the tick that drains it, so a repository disabled in the meantime is dropped rather than dispatched late.
 
-`AGENT_ALLOWED_REPOS` has been unused since H2: neither startup, a build, nor a
-run reads it. If an existing Vercel environment still defines it, remove it at
+`AGENT_ALLOWED_REPOS` is no longer read: neither startup, a build, nor a run
+reads it. If an existing Vercel environment still defines it, remove it at
 leisure; its presence does not change behavior and does not currently block
 boot. A follow-up cleanup should add it to the retired-variable startup check
 after operators have removed it everywhere. Configure access on the
 Repositories page instead.
 
-Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
-**Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned
-with one-click restore.
+Repository scripts (per-repo commands run before push/PR creation) are configured per repository on
+the dashboard's **Repositories** page. Admins and owners can edit; every save is a new version of
+the repository's profile ([repository scripts](docs/architecture/repository-scripts.md)).
 
 ---
 

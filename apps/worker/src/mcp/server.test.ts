@@ -82,7 +82,10 @@ const PUBLISHED: McpToolName[] = [
   "memory.list",
   "memory.get",
   "memory.forget",
-  "harness_profiles.list",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -163,6 +166,17 @@ describe("createMcpServer", () => {
     expect(listed.tools.map((tool) => tool.name).sort()).toEqual([...PUBLISHED].sort());
   });
 
+  // The envelope, error and idempotency rules hold for every tool, so they
+  // travel once in the handshake instead of in each description.
+  it("tells a connecting client the rules every tool result follows", async () => {
+    const client = await connectedClient();
+
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain("external_untrusted");
+    expect(instructions).toContain("retryable");
+    expect(instructions).toContain("idempotencyKey");
+  });
+
   it("publishes the hints its policy defines, tool by tool", async () => {
     const client = await connectedClient();
 
@@ -205,7 +219,7 @@ describe("createMcpServer", () => {
           "settings",
           "work_scope",
           "memory",
-          "harness_profiles",
+          "profiles",
         ],
         // These deps carry no messaging adapter, which is the same answer a
         // deployment with no chat credentials gives: the authoring announcements

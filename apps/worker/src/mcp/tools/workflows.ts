@@ -38,10 +38,10 @@ type PublicBlockerError = {
 // different.
 const AT_CAPACITY_RETRY_AFTER_MS = 60_000;
 
-// The recovery pass runs inside /cron/poll, scheduled every minute
-// (apps/worker/vercel.json), so looking for the run any sooner can only see the
-// same unfinished dispatch.
-const RECOVERY_POLL_AFTER_MS = 60_000;
+// The recovery pass runs inside /cron/poll, scheduled every 15 minutes
+// (apps/worker/vercel.json, pinned by tool-catalog.test.ts), so a queued dispatch
+// may wait that long before its run starts.
+const RECOVERY_POLL_AFTER_MINUTES = 15;
 
 const BLOCKER_ERRORS: Record<ManualDispatchBlockerCode, PublicBlockerError> = {
   // Not retryable: the agent has to wait for the run that already owns this
@@ -322,7 +322,7 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
             // that this key can no longer serve.
             throw new McpPublicError(
               "DEPENDENCY_UNAVAILABLE",
-              `Dispatch accepted and queued, but no run has started yet: the recovery pass may start one within about ${RECOVERY_POLL_AFTER_MS} ms. Look for a new run on this subject, and if none ever appears, dispatch again under a NEW idempotency key.`,
+              `Dispatch accepted and queued, but no run has started yet: the recovery pass runs with the next poll, so a run may start up to ${RECOVERY_POLL_AFTER_MINUTES} minutes from now. Look for a new run on this subject, and only if none has appeared after that, dispatch again under a NEW idempotency key.`,
               false,
               undefined,
               false,

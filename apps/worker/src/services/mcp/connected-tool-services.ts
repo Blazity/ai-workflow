@@ -36,6 +36,12 @@ import {
   preflightConnectedManualDispatch,
 } from "../manual-dispatch/index.js";
 import { requirePromptLibraryEditRole, saveConnectedPromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
+import {
+  listHarnessProfilesForOrganization,
+  publishHarnessProfileDraft,
+  readHarnessProfileDetail,
+  refreshHarnessProfileSkill,
+} from "../harness/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { listHarnessProfilePinOptions } from "../harness/index.js";
 import { createConnectedMcpGateServices } from "./gate-services.js";
@@ -94,6 +100,11 @@ export function createConnectedMcpToolServices(
         body: validatePromptBody(input.body),
       });
     },
+    listHarnessProfiles: (organizationId) =>
+      listHarnessProfilesForOrganization({ organizationId, includeArchived: false }),
+    readHarnessProfileDetail,
+    refreshHarnessProfileSkill,
+    publishHarnessProfileDraft,
     fetchRunDetail: (runId, ticketLinks, secrets) =>
       fetchConnectedRunDetailFromDb({ runId, ticketLinks, secrets }),
     getRunReplay: getConnectedRunReplay,

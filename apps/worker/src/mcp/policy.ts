@@ -423,6 +423,26 @@ const MEMORY_FORGET_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * Harness profiles, on the authoring scope and the two roles the dashboard's
+ * profile routes admit (`canManageHarnessProfiles`). A profile is part of what a
+ * workflow node runs with, so consent to author workflows is the consent that
+ * covers it; a scope of its own would ask every client for a second agreement
+ * to the same thing. No "service": a profile decides what every sandboxed agent
+ * on it is handed, which is not a change an unattended client should make.
+ *
+ * Refreshing a skill moves only the draft, which no run reads. It is open
+ * world because a skill sourced from a repository is read back from that
+ * provider.
+ */
+const PROFILE_DRAFT_POLICY = {
+  ...WORKFLOW_WRITE_POLICY,
+  annotations: {
+    ...WORKFLOW_WRITE_POLICY.annotations,
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -522,10 +542,16 @@ const TOOL_POLICY = {
   "memory.list": READ_POLICY,
   "memory.get": READ_POLICY,
   "memory.forget": MEMORY_FORGET_POLICY,
-  // What an agent block can pin, read the way the dashboard's profile list is:
-  // any member of the organization may see which profiles exist and which model
-  // each runs. Nothing here authors or publishes a profile.
-  "harness_profiles.list": READ_POLICY,
+  // A plain read, as on the dashboard, where every member sees the profiles
+  // list: which skills a profile pins is configuration, not a customer's data.
+  "profiles.list": READ_POLICY,
+  "profiles.get": READ_POLICY,
+  "profiles.refresh_skill": PROFILE_DRAFT_POLICY,
+  // Publishing adds a version and replaces nothing: every workflow node pins an
+  // exact profile version (engine/definition/harness-profile-runtime.ts), so no
+  // run resolves the new one until a graph is edited to name it and published.
+  // That later workflows.publish is the destructive step, and it says so.
+  "profiles.publish": WORKFLOW_WRITE_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

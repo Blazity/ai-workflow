@@ -16,11 +16,6 @@ paths:
   content's min-content, which blows the layout out and makes the cockpit shell
   scroll sideways. Any `1fr` track holding wide content needs
   `minmax(0, 1fr)`, and its grid item needs `min-w-0`.
-- iOS Safari fires `pointerleave` spuriously mid-gesture, even with pointer
-  capture set, so `onPointerLeave={onPointerUp}` ends a canvas drag one move
-  in. Gate it to non-touch pointers. Keep the non-passive native `touchmove`
-  listener with `preventDefault()`: React's `onTouchMove` is passive on iOS and
-  cannot stop the page-scroll hijack.
 - The dashboard reads KPIs from the deployed worker (`WORKER_BASE_URL`), so a
   worker-side fix does not show on localhost until redeploy.
   `apps/dashboard/lib/api/derive-kpis.ts` derives the tiles from the runs list as

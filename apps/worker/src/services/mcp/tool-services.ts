@@ -19,6 +19,12 @@ import {
 } from "../../db/repositories/prompts.js";
 import { requirePromptLibraryEditRole, savePromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
 import {
+  listHarnessProfilesForOrganization,
+  publishHarnessProfileDraft,
+  readHarnessProfileDetail,
+  refreshHarnessProfileSkill,
+} from "../harness/index.js";
+import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
   getRunReplay,
@@ -147,6 +153,27 @@ export interface McpToolServices extends McpGateServices {
   savePromptVersion(
     input: Parameters<typeof savePromptVersionWithPolicy>[1],
   ): ReturnType<typeof savePromptVersionWithPolicy>;
+
+  // --- harness profiles -------------------------------------------------
+  // The dashboard's own profile paths, one call each. They bind their own
+  // connection and check the actor's role themselves, so a tool reaching a
+  // profile through here is held to exactly what the profile routes hold a
+  // person to.
+  /** The organization's live profiles, archived ones left out. */
+  listHarnessProfiles(
+    organizationId: string,
+  ): ReturnType<typeof listHarnessProfilesForOrganization>;
+  /** One profile with its published version and the workflows that pin it,
+   *  or null when it names nothing this organization can see. */
+  readHarnessProfileDetail(
+    input: Parameters<typeof readHarnessProfileDetail>[0],
+  ): ReturnType<typeof readHarnessProfileDetail>;
+  refreshHarnessProfileSkill(
+    input: Parameters<typeof refreshHarnessProfileSkill>[0],
+  ): ReturnType<typeof refreshHarnessProfileSkill>;
+  publishHarnessProfileDraft(
+    input: Parameters<typeof publishHarnessProfileDraft>[0],
+  ): ReturnType<typeof publishHarnessProfileDraft>;
 
   // --- run reads ---------------------------------------------------------
   /** `failureCode` is the machine-readable half of a failed run's reason, read
@@ -300,6 +327,13 @@ export function createMcpToolServices(
       requirePromptLibraryEditRole(input.actor.role as import("@shared/contracts").DashboardRole);
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
+    // The profile services bind their own connection (getDb), so these do not
+    // take `db`; a test that points getDb at its database reaches the same one.
+    listHarnessProfiles: (organizationId) =>
+      listHarnessProfilesForOrganization({ organizationId, includeArchived: false }),
+    readHarnessProfileDetail,
+    refreshHarnessProfileSkill,
+    publishHarnessProfileDraft,
 
     fetchRunDetail: (runId, ticketLinks, secrets) =>
       fetchRunDetailFromDb({
