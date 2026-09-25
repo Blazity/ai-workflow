@@ -90,8 +90,11 @@ export function sourceLabel(source: SettingsSource): string {
 
 /** The sentence under the badge, so the badge does not have to be learned. */
 export function sourceHint(source: SettingsSource): string {
+  // Where the value lives, not who put it there: a stored row may carry no
+  // change recorded here (its history says so), and an MCP client stores
+  // values too.
   if (source === "stored") {
-    return "Stored from this dashboard. A stored value shadows the environment variable until it is removed.";
+    return "Stored in this deployment's settings. A stored value shadows the environment variable until it is removed.";
   }
   if (source === "environment") return "Read from this deployment's environment.";
   return "Nothing is stored, so the built-in default is what the store resolves.";

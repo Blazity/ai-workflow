@@ -1283,6 +1283,10 @@ export interface IntegrationConnectionFieldDto {
   readonly format: "text" | "multiline" | "url" | "integer";
   /** Whether this deployment's environment sets the variable. */
   readonly envSet: boolean;
+  /** What the environment sets a non-secret field to, so a screen can say
+   *  which site, project or account this deployment is connected to. Absent
+   *  for a secret, always, and when the variable is not set. */
+  readonly envValue?: string;
   /** The stored value of a non-secret field, so one field can be corrected
    *  without retyping the rest. Absent for a secret, always. */
   readonly storedValue?: string;

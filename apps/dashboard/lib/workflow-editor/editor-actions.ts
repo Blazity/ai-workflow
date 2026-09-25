@@ -2,6 +2,12 @@ export interface WorkflowEditorActionInput {
   dirty: boolean;
   structurallyValid: boolean;
   hasDraft: boolean;
+  /**
+   * The deployed version the saved draft is identical to, or null when the
+   * draft differs from what is deployed (or either is missing). A saved draft
+   * that is already live is nothing to deploy.
+   */
+  draftDeployedAs: number | null;
 }
 
 export function workflowEditorActions(input: WorkflowEditorActionInput) {
@@ -10,7 +16,9 @@ export function workflowEditorActions(input: WorkflowEditorActionInput) {
     // Deploy performs an immediate authoritative validation. Cached background
     // validation may be stale and must never decide whether the action is
     // available.
-    canDeploy: input.structurallyValid && (input.dirty || input.hasDraft),
+    canDeploy:
+      input.structurallyValid &&
+      (input.dirty || (input.hasDraft && input.draftDeployedAs === null)),
   };
 }
 
@@ -24,6 +32,7 @@ export function deployUnavailableReason(input: {
   saveIssueCount: number;
   dirty: boolean;
   hasDraft: boolean;
+  draftDeployedAs: number | null;
 }): string | null {
   if (!input.hasTrigger) return "Add a trigger block before deploying.";
   if (input.saveIssueCount === 1) {
@@ -35,7 +44,29 @@ export function deployUnavailableReason(input: {
   if (!input.dirty && !input.hasDraft) {
     return "Nothing to deploy: the canvas holds no change and no saved draft.";
   }
+  if (!input.dirty && input.draftDeployedAs !== null) {
+    return `Nothing to deploy: the saved draft is already deployed as v${input.draftDeployedAs}.`;
+  }
   return null;
+}
+
+/**
+ * The deployed version a saved draft is identical to, for
+ * `workflowEditorActions`. Compared by the same semantic keys as
+ * `draftDiffersFromDeployed`, so the badge saying they differ and a Deploy
+ * that stays off never disagree.
+ */
+export function draftDeployedAs(
+  draftSemanticKey: string | null,
+  deployedSemanticKey: string | null,
+  deployedVersion: number | null,
+): number | null {
+  return draftSemanticKey !== null &&
+    deployedSemanticKey !== null &&
+    deployedVersion !== null &&
+    draftSemanticKey === deployedSemanticKey
+    ? deployedVersion
+    : null;
 }
 
 /**

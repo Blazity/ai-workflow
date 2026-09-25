@@ -424,8 +424,14 @@ const workflowIssue = {
   message: "A block cannot be reached from any trigger.",
 };
 
-/** A deployed v2 workflow with a saved draft: Deploy is enabled on load. */
-function deployableDetail(): WorkflowDefinitionDetailResponse {
+/** A deployed v2 workflow with a saved draft that differs from it: Deploy is
+ *  enabled on load. `upToDate` makes the saved draft the deployed version. */
+function deployableDetail(
+  { upToDate = false }: { upToDate?: boolean } = {},
+): WorkflowDefinitionDetailResponse {
+  const deployedDefinition = upToDate
+    ? seed
+    : { ...seed, nodes: seed.nodes.map((node) => ({ ...node, name: "Ticket, as deployed" })) };
   const version = {
     definitionId: 7,
     version: 3,
@@ -434,7 +440,7 @@ function deployableDetail(): WorkflowDefinitionDetailResponse {
     createdByLabel: "Admin",
     restoredFromVersion: null,
     schema: "v2" as const,
-    definition: seed,
+    definition: deployedDefinition,
   };
   return {
     meta: {
@@ -451,8 +457,10 @@ function deployableDetail(): WorkflowDefinitionDetailResponse {
   } as unknown as WorkflowDefinitionDetailResponse;
 }
 
-async function renderDeployable(): Promise<ReturnType<typeof create>> {
-  const detailResponse = deployableDetail();
+async function renderDeployable(
+  options: { upToDate?: boolean } = {},
+): Promise<ReturnType<typeof create>> {
+  const detailResponse = deployableDetail(options);
   let renderer!: ReturnType<typeof create>;
   await act(async () => {
     renderer = create(
@@ -572,6 +580,39 @@ test("a refusal nobody gave a reason for still says the workflow was not deploye
   await settle();
 
   assert.match(alertText(renderer.root), /Not deployed: the workflow did not pass validation\./);
+  await act(async () => renderer.unmount());
+});
+
+// Red when: Deploy stays green on a workflow whose saved draft is the deployed
+// version (production: DEPLOYED V2, nothing unsaved, Reset to deployed off,
+// Deploy green), or when the reason lives only in a hover tooltip, which a
+// phone never shows.
+test("a workflow whose saved draft is deployed offers nothing to deploy, and says so on every screen size", async (t) => {
+  installFetch(async (url) => {
+    if (url.includes("/validate")) {
+      return Response.json({ valid: true, issues: [], nodeContracts: {}, availableValuesByNode: {} });
+    }
+    if (url.includes("/catalog")) return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const renderer = await renderDeployable({ upToDate: true });
+
+  const reason = "Nothing to deploy: the saved draft is already deployed as v3.";
+  for (const deploy of renderer.root.findAllByType("button").filter((node) => textOf(node.children).trim() === "Deploy")) {
+    assert.equal(deploy.props.disabled, true);
+  }
+  const notes = renderer.root.findAll(
+    (node) => typeof node.type === "string" && textOf(node.children).trim() === reason,
+  );
+  assert.equal(notes.length, 1, "the reason is text on the page, not only a tooltip");
+  for (let node: ReactTestInstance | null = notes[0]!; node; node = node.parent) {
+    assert.doesNotMatch(
+      String(node.props.className ?? ""),
+      /(^|\s)hidden(\s|$)/,
+      "nothing between the reason and the page hides it at some width",
+    );
+  }
   await act(async () => renderer.unmount());
 });
 
