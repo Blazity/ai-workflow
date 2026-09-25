@@ -188,6 +188,12 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ];
 
 const READ_ANNOTATIONS = {
@@ -362,6 +368,18 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     idempotentHint: true,
     openWorldHint: true,
   },
+  // Archiving takes a definition out of every list and out of service: destructive,
+  // though workflows.unarchive gives it back, and closed world. Taking it back
+  // returns it disabled and arms nothing, so it keeps the authoring annotations.
+  "workflows.archive": { ...WORKFLOW_AUTHORING_ANNOTATIONS, destructiveHint: true },
+  "workflows.unarchive": WORKFLOW_AUTHORING_ANNOTATIONS,
+  // Reading the approvals queue and one plan changes nothing.
+  "approvals.list": READ_ANNOTATIONS,
+  "approvals.get": READ_ANNOTATIONS,
+  // Deciding a plan is final either way, reaches the tracker, and approving
+  // starts a run in a sandbox.
+  "approvals.approve": CANCEL_ANNOTATIONS,
+  "approvals.reject": CANCEL_ANNOTATIONS,
 };
 
 const DOMAINS = [
@@ -375,6 +393,7 @@ const DOMAINS = [
   "settings",
   "work_scope",
   "memory",
+  "approvals",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the

@@ -8,7 +8,8 @@
  * way. The refusals are returned as outcomes, so the transport chooses the
  * status code and this file never says 409.
  */
-import type { ApprovalRequest, SettingsSnapshot } from "@shared/contracts";
+import type { ApprovalRequest, DashboardRole, SettingsSnapshot } from "@shared/contracts";
+import { canApproveWorkflowPlans, DashboardAuthError } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import {
   ApprovalStoreError,
@@ -56,11 +57,36 @@ export async function listDashboardApprovals(status: "all" | "pending"): Promise
   return (await listConnectedApprovals({ status })).map(serializeApproval);
 }
 
+/** One plan, whatever its status; null when the id names none. */
+export async function readDashboardApproval(id: string): Promise<ApprovalRequest | null> {
+  const row = await getConnectedApproval(id);
+  return row ? serializeApproval(row) : null;
+}
+
+/** Who is deciding: the person, and the role the decision is allowed by. */
+export interface ApprovalDecider {
+  userId: string;
+  role: DashboardRole;
+}
+
+/**
+ * The one role check a decision has, asked here rather than by each door, so
+ * the dashboard's routes and the MCP tools cannot disagree about who may decide
+ * a plan. Before anything is read, so a refused caller learns nothing about the
+ * row either.
+ */
+function requirePlanDecider(actor: ApprovalDecider): void {
+  if (!canApproveWorkflowPlans(actor.role)) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+}
+
 export async function approveApproval(
   id: string,
-  actor: { userId: string },
+  actor: ApprovalDecider,
   settings: SettingsSnapshot,
 ): Promise<ApprovalDecisionOutcome> {
+  requirePlanDecider(actor);
   const row = await getConnectedApproval(id);
   if (!row) return { kind: "unknown_approval" };
   // A dispatch that failed after the approve CAS leaves the row approved with
@@ -168,10 +194,11 @@ export async function approveApproval(
  *  answer about the row it found. */
 export async function rejectApproval(
   id: string,
-  actor: { userId: string },
+  actor: ApprovalDecider,
 ): Promise<
   Extract<ApprovalDecisionOutcome, { kind: "unknown_approval" | "already_decided" | "decided" }>
 > {
+  requirePlanDecider(actor);
   const row = await getConnectedApproval(id);
   if (!row) return { kind: "unknown_approval" };
   if (row.status !== "pending") return { kind: "already_decided" };

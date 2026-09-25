@@ -97,6 +97,12 @@ const CATALOGUED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

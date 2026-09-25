@@ -165,6 +165,12 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

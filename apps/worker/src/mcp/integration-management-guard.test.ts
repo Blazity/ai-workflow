@@ -103,6 +103,14 @@ const REVIEWED_TOOLS: readonly string[] = [
   // briefing names an integration only where the prompt it recorded did.
   "runs.briefing",
   "workflows.node_briefing",
+  // Archiving a workflow and taking the archive back, and deciding the plans runs
+  // filed. None touches a connection: they move a definition row and a plan row.
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ];
 
 /**

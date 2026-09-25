@@ -11,6 +11,7 @@ import {
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
+import { registerApprovalTools } from "./tools/approvals.js";
 import { registerBlockTools } from "./tools/blocks.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
@@ -28,6 +29,7 @@ import {
   registerWorkflowAuthoringTools,
   registerWorkflowGraphTools,
 } from "./tools/workflow-authoring.js";
+import { registerWorkflowArchiveTools } from "./tools/workflow-archive.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25" as const;
@@ -110,6 +112,8 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerWorkScopeTools(server, deps);
   registerBriefingTools(server, deps);
   registerMemoryTools(server, deps);
+  registerWorkflowArchiveTools(server, deps);
+  registerApprovalTools(server, deps);
 
   return server;
 }

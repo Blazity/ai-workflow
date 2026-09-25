@@ -1001,9 +1001,9 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 
 | Scope | Grants |
 | --- | --- |
-| `mcp:read` | Read tickets, runs and their logs, agent briefings (the full prompt each agent was sent), workflows, prompts, the block catalog, repositories, settings, work scope and agent memory. Enough to inspect a deployment without changing anything. |
-| `runs:dispatch` | Start a manual run and check it first, answer a run's clarification, cancel a run, edit which repositories a ticket's work may touch, and permanently forget one agent memory document. |
-| `workflows:write` | Author workflows: create a definition, read its draft and deployed graph, save a draft, publish it live, and enable or disable it. |
+| `mcp:read` | Read tickets, runs and their logs, agent briefings (the full prompt each agent was sent), workflows, prompts, the block catalog, repositories, settings, work scope, agent memory and the plans waiting for approval. Enough to inspect a deployment without changing anything. |
+| `runs:dispatch` | Start a manual run and check it first, answer a run's clarification, approve or reject a plan (owners and admins, as on the dashboard), cancel a run, edit which repositories a ticket's work may touch, and permanently forget one agent memory document. |
+| `workflows:write` | Author workflows: create a definition, read its draft and deployed graph, save a draft, publish it live, enable or disable it, and archive it or bring it back from the archive. |
 | `prompts:write` | Edit the prompt library. |
 | `tickets:write` | Comment on, transition, or create a ticket in the connected tracker. |
 | `repositories:write` | Configure the repository catalog: save a profile, flip a repository's switch, import from a provider, ask for a suggestion, and end the bridge by activating the catalog. Separate from `workflows:write` because it decides which repositories the platform may enter at all. |
