@@ -1,8 +1,23 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import { getDb, type Db } from "../../client.js";
 import { workflowOwnedBranches } from "../../schema.js";
 
 type VcsProvider = string;
+
+/**
+ * The recorded row names the same repository path, whatever its case.
+ *
+ * A row carries the spelling its publication had (the provider's, `Blazity/x`)
+ * and a caller may hold another (`blazity/x`, from a URL somebody typed). Both
+ * providers resolve paths without regard to case, so an exact comparison
+ * answered "not ours" about our own pull request. This is
+ * `repositoryCatalogKey`'s rule (@shared/contracts) spelled in SQL, and every
+ * lookup here asks it; the upsert's conflict target is the one exception,
+ * because it is the table's primary key and changing it needs a migration.
+ */
+function sameRepositoryPath(repoPath: string): SQL {
+  return sql`lower(${workflowOwnedBranches.repoPath}) = ${repoPath.toLowerCase()}`;
+}
 
 export interface WorkflowOwnedBranchRecord {
   ticketKey: string;
@@ -125,7 +140,7 @@ export async function findWorkflowOwnedPullRequest(
     .where(
       and(
         eq(workflowOwnedBranches.provider, input.provider),
-        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        sameRepositoryPath(input.repoPath),
         eq(workflowOwnedBranches.prId, input.prNumber),
         // issue_comment events cannot know the PR branch name. Dropping only the
         // branch equality still leaves the published-head-SHA and target-branch
@@ -190,7 +205,7 @@ export async function recordWorkflowOwnedPullRequestPublishedHead(
     .where(
       and(
         eq(workflowOwnedBranches.provider, input.provider),
-        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        sameRepositoryPath(input.repoPath),
         eq(workflowOwnedBranches.prId, input.prNumber),
       ),
     )
@@ -215,7 +230,7 @@ export async function findWorkflowOwnedPullRequestIdentity(
     .where(
       and(
         eq(workflowOwnedBranches.provider, input.provider),
-        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        sameRepositoryPath(input.repoPath),
         eq(workflowOwnedBranches.prId, input.prNumber),
       ),
     )
@@ -271,7 +286,7 @@ export async function findWorkflowOwnedPullRequestIntent(
     .where(
       and(
         eq(workflowOwnedBranches.provider, input.provider),
-        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        sameRepositoryPath(input.repoPath),
         eq(workflowOwnedBranches.branchName, input.branchName),
         eq(workflowOwnedBranches.publishedHeadSha, input.publishedHeadSha),
         eq(workflowOwnedBranches.targetBranch, input.baseBranch),
@@ -333,7 +348,7 @@ export async function bindWorkflowOwnedPullRequestIntent(
       and(
         eq(workflowOwnedBranches.ticketKey, input.ticketKey),
         eq(workflowOwnedBranches.provider, input.provider),
-        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        sameRepositoryPath(input.repoPath),
         eq(workflowOwnedBranches.branchName, input.branchName),
         eq(workflowOwnedBranches.publishedHeadSha, input.publishedHeadSha),
         eq(workflowOwnedBranches.targetBranch, input.baseBranch),

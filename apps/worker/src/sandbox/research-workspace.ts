@@ -1,5 +1,6 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { buildVcsUrls, gitAuthArgs } from "../infra/vcs-urls.js";
+import { repositoryCatalogKey } from "@shared/contracts";
 import type { SelectedRepositoryPromptContext } from "./context.js";
 import {
   configureRepositoryExcludes,
@@ -494,10 +495,14 @@ async function requireCommand(
   throw new Error(`${message}: ${await commandError(result)}`);
 }
 
+/** The catalog's repository identity, adapted to the engine's spelling. The
+ *  engine's `repositoryKey` is the same key; the sandbox takes it from the
+ *  contracts package, like `repo-workspace.ts`, because the engine imports the
+ *  sandbox and an import back would close a cycle between them. */
 function repositoryKey(
   repository: Pick<SelectedRepository, "provider" | "repoPath">,
 ): string {
-  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+  return repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath });
 }
 
 async function commandError(result: SandboxCommandResult): Promise<string> {

@@ -67,7 +67,8 @@ export const execute: BlockExecuteFn = async (
     : [];
   const budget = await ctx.observeBudget();
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-  const current = await loadPrePrCheckConfigStep(runChecksScopeKeys(ctx));
+  const repositoryKeys = runChecksScopeKeys(ctx);
+  const current = await loadPrePrCheckConfigStep(repositoryKeys);
   let run: PrePrCheckRunResult;
   try {
     run = await runPrePrChecksWithFixes({
@@ -76,6 +77,7 @@ export const execute: BlockExecuteFn = async (
       agentKind: ctx.runDefaultKind,
       model: ctx.defaults[ctx.runDefaultKind],
       groupSelection: { kind: "named", groups },
+      ...(repositoryKeys ? { workspaceRepositoryKeys: repositoryKeys } : {}),
       defaultCommandTimeoutMinutes: ctx.settings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
       observeBudget: blockBudgetObserver(ctx, execution),
       observeChecksBudget: checksBudgetObserver(ctx, execution),

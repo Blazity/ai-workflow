@@ -285,9 +285,13 @@ async function runConfiguredChecks(
     ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
     // No authored groups means the gate's own selection, which is what this
     // block ran before groups existed. Named groups make it a report-only
-    // runner for any part of the configuration.
+    // runner for any part of the configuration, whose coverage needs to know
+    // which repositories this run holds.
     ...(groups.length > 0
-      ? { groupSelection: { kind: "named" as const, groups } }
+      ? {
+          groupSelection: { kind: "named" as const, groups },
+          ...(repositoryKeys ? { workspaceRepositoryKeys: repositoryKeys } : {}),
+        }
       : {}),
   });
   const failures = run.failures.map(toBlockFailure);

@@ -299,6 +299,115 @@ describe("fix_agent execute", () => {
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });
 
+  it("proves ownership of a pull request its publication recorded in another case", async () => {
+    // The publication recorded GitHub's spelling, and a run dispatched before
+    // dispatch adopted that spelling holds the one somebody typed. Both name one
+    // repository; refusing here stranded the fix with nothing pushed.
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "none",
+      runId: "published-run",
+      current: { provider: "github", repoPath: "Acme/API", id: 42, url: "https://github/pr/42" },
+    });
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_updated",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "any",
+        pr: makePrPayload({ prNumber: 42, repoPath: "acme/api" }),
+      },
+    });
+
+    const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+    expect(JSON.stringify(result)).not.toContain("not present in a workflow publication");
+    expect(mocks.ensureWorkspace).toHaveBeenCalled();
+  });
+
+  it("arms, reports and records its push when the workspace spells the pull request's repository differently", async () => {
+    // The pull request arrives in GitHub's spelling, the workspace was cloned
+    // from a catalog row stored in lower case. One repository: an exact
+    // comparison left anti-recursion unarmed (so the push's own webhook
+    // superseded this run), reported no pushed head, and skipped moving the
+    // workflow-owned row to the new head.
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "none",
+      runId: "published-run",
+      current: { provider: "github", repoPath: "Acme/API", id: 42, url: "https://github/pr/42" },
+    });
+    mocks.inspectFixWorkspace
+      .mockResolvedValueOnce({ commits: [], unresolvedConflicts: [] })
+      .mockResolvedValueOnce({
+        commits: [{ provider: "github", repoPath: "acme/api", sha: "fix-head" }],
+        unresolvedConflicts: [],
+      });
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "feature/manual",
+          defaultBranch: "main",
+          pushed: true,
+          pushedHead: "fix-head",
+        },
+      ],
+    });
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue({
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "Acme/API",
+      branchName: "feature/manual",
+      pr: { id: 42, url: "https://github.com/Acme/API/pull/42", branch: "feature/manual" },
+    });
+    const pr = makePrPayload({ prNumber: 42, repoPath: "Acme/API" });
+    const block = makeNode("fix_agent");
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_updated",
+        subjectKey: "pr:github:Acme/API#42",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "any",
+        pr,
+      },
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: pr.headRef,
+            selectedRationale: "current PR",
+            access: "write",
+          },
+        ],
+      },
+      harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
+    });
+
+    await execute(block, {}, ctx);
+
+    expect(mocks.recordWorkflowOwnedPullRequestPublishedHead).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, headSha: "fix-head" }),
+    );
+    expect(ctx.pushedHeadForPr).toBe("fix-head");
+    // Moved on the row it found, in that row's spelling, never a second row.
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ repoPath: "Acme/API", publishedHeadSha: "fix-head" }),
+    );
+  });
+
   it("does not send read-only sibling findings to the fix agent", async () => {
     const block = makeNode("fix_agent");
     const pr = makePrPayload({ prNumber: 42 });

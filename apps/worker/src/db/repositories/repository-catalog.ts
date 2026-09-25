@@ -8,12 +8,13 @@
  * be one file to review rather than a diff spread over three tiers.
  */
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import type {
-  PrePrCheckRepositoryConfig,
-  RepositoryCatalogSource,
-  RepositoryProfileField,
-  RepositoryRelationship,
-  RepositoryRelationshipKind,
+import {
+  repositoryCatalogKey,
+  type PrePrCheckRepositoryConfig,
+  type RepositoryCatalogSource,
+  type RepositoryProfileField,
+  type RepositoryRelationship,
+  type RepositoryRelationshipKind,
 } from "@shared/contracts";
 import { getDb, type Db } from "../client.js";
 import {
@@ -103,10 +104,6 @@ export interface CurrentCheckConfiguration {
 const LEGACY_CONFIGURATION_VERSION_FALLBACK = 1;
 
 const DEFAULT_VERSION_LIST_LIMIT = 50;
-
-function repositoryKeyOf(repository: { provider: string; path: string }): string {
-  return `${repository.provider}:${repository.path.toLowerCase()}`;
-}
 
 export function listRepositoryCatalogRows(
   db: Db,
@@ -962,7 +959,10 @@ export async function listRepositoryCatalogMapRows(
     }
     entry.relationships.push({
       direction: row.direction === "incoming" ? "incoming" : "outgoing",
-      targetKey: `${String(row.related_provider)}:${String(row.related_path).toLowerCase()}`,
+      targetKey: repositoryCatalogKey({
+        provider: String(row.related_provider),
+        path: String(row.related_path),
+      }),
       targetEnabled: Boolean(row.related_enabled),
       kind: row.kind as RepositoryRelationshipKind,
       note: row.note === null || row.note === undefined ? null : String(row.note),
@@ -1106,7 +1106,7 @@ export async function listClaimedRepositoriesNotEnabled(
       }
     ).rows ?? [];
   return rows.map((row) => ({
-    key: `${row.provider}:${row.repo_path.toLowerCase()}`,
+    key: repositoryCatalogKey({ provider: row.provider, path: row.repo_path }),
     displayName: row.repo_path,
     ticketKeys: [...(row.ticket_keys ?? [])].sort(),
     runIds: [...(row.run_ids ?? [])].sort(),
@@ -1186,7 +1186,7 @@ export async function getCurrentCheckConfiguration(
   for (const { repository, profile } of withProfiles) {
     if (!profile?.scriptGroups) continue;
     if (!newest || profile.createdAt > newest.createdAt) newest = profile;
-    const key = repositoryKeyOf(repository);
+    const key = repositoryCatalogKey(repository);
     const entry = {
       ...(profile.scriptGroups as Record<string, unknown>),
       provider: repository.provider,
@@ -1377,7 +1377,7 @@ export async function seedRepositoryCatalogEntries(
   const seen = new Set<string>();
   const unique: Array<{ provider: string; path: string; defaultBranch?: string }> = [];
   for (const repository of input.repositories) {
-    const key = `${repository.provider}:${repository.path.toLowerCase()}`;
+    const key = repositoryCatalogKey(repository);
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(repository);

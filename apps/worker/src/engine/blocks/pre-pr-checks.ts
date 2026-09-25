@@ -87,6 +87,17 @@ export interface PrePrChecksOptions {
   maxFixCycles?: number;
   /** Groups to run. Defaults to the gate's own selection. */
   groupSelection?: RepoScriptsGroupSelection;
+  /**
+   * The run's repositories, as `repositoryKey` spells them, when the caller
+   * knows them (`runChecksScopeKeys`).
+   *
+   * The configuration is every profiled repository in the catalog, and one that
+   * declares none of the selected groups launches nothing, so no launch step
+   * says whether this run's workspace holds it. Without this list every such
+   * repository counted as a gap in coverage, although the run never had it.
+   * Absent, nothing is known and the walk reads them as it always did.
+   */
+  workspaceRepositoryKeys?: readonly string[];
   /** The operator's PRE_PR_COMMAND_TIMEOUT_MINUTES, taken from the run's frozen
    *  settings by the block that calls this, and handed to the batch steps as an
    *  input. Used only where the repository names no bound of its own. */
@@ -1405,8 +1416,10 @@ interface RepoCoverageEntry {
    *  state is "ran". */
   selected: string[];
   state: RepoCoverageState;
-  /** Set when the launch step declined the repository, and why. Absent for a
-   *  repository the walk never reached, which the failure already names. */
+  /** Set when the launch step declined the repository, and why, or when the
+   *  run's own repository list says the workspace does not hold one that
+   *  launched nothing. Absent for a repository the walk never reached, which
+   *  the failure already names. */
   declined?: RepoDeclineReason;
 }
 
@@ -1433,18 +1446,24 @@ function groupCoverageFrom(
   return [...new Set(selection.groups)].sort().map((group) => {
     const declaredIn: string[] = [];
     const missing: string[] = [];
-    const skipped: string[] = [];
+    const skipped: RepoScriptsGroupCoverage["skippedReasons"] = [];
     for (const entry of walk) {
-      if (entry.state === "absent") skipped.push(entry.repoKey);
-      else if (entry.state === "ran" && entry.selected.includes(group)) {
+      if (entry.state === "absent") {
+        // A repository the walk never got to has no decline of its own.
+        skipped.push({ repo: entry.repoKey, reason: entry.declined ?? "not_reached" });
+      } else if (entry.state === "ran" && entry.selected.includes(group)) {
         declaredIn.push(entry.repoKey);
       } else missing.push(entry.repoKey);
     }
+    const skippedReasons = skipped.sort((left, right) =>
+      left.repo < right.repo ? -1 : left.repo > right.repo ? 1 : 0,
+    );
     return {
       group,
       declaredIn: declaredIn.sort(),
       missing: missing.sort(),
-      skipped: skipped.sort(),
+      skipped: skippedReasons.map((entry) => entry.repo),
+      skippedReasons,
     };
   });
 }
@@ -1605,6 +1624,9 @@ async function runCheckBatches(
   let ranChecks = 0;
 
   const configuredRepositories = uniqueConfiguredRepositories(config);
+  const workspaceKeys = options.workspaceRepositoryKeys
+    ? new Set(options.workspaceRepositoryKeys)
+    : null;
   // What the walk does with each repository, recorded as it goes. Every entry
   // starts "absent" so a walk that stops early (an exhausted budget, a stall)
   // leaves the repositories it never reached saying exactly that, instead of
@@ -1622,8 +1644,14 @@ async function runCheckBatches(
       // This run asked for groups this repository does not have, so nothing is
       // launched and nothing is claimed. Not "absent" for coverage: the
       // repository was reached and its configuration is precisely the reason
-      // nothing ran, which is the gap groupCoverage exists to report.
-      coverage.state = "no_selection";
+      // nothing ran, which is the gap groupCoverage exists to report. Unless
+      // this run never had it: then it is absent for the reason a launch step
+      // would have given, and not a gap in anything this run could cover.
+      if (workspaceKeys && !workspaceKeys.has(repositoryKey(repo))) {
+        coverage.declined = "not_in_workspace";
+      } else {
+        coverage.state = "no_selection";
+      }
       groupStatuses.push(...groupStatusesFor(repo, selectedGroups, groupCommands, null));
       continue;
     }

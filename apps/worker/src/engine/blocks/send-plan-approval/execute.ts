@@ -2,6 +2,7 @@ import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/typ
 import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
 import type { TicketTransitionOwner } from "../../support/ticket-transition.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { repositoryKey } from "../../support/repository-access.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 import type { ApprovedRepositoryScope } from "@shared/contracts";
 import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";
@@ -33,11 +34,7 @@ function approvedRepositoryScopeFromManifest(
   // so the manifest is still all-read. The research write set carries which repos
   // the plan intends to change; overlay it here so the approved implementation run
   // promotes exactly those repos, exactly as it did when planning promoted eagerly.
-  const writeKeys = new Set(
-    writeRepositories.map(
-      (repository) => `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-    ),
-  );
+  const writeKeys = new Set(writeRepositories.map(repositoryKey));
   return {
     repositories: manifest.repositories.map((repository) => {
       if (!repository.researchBaseSha) {
@@ -45,9 +42,10 @@ function approvedRepositoryScopeFromManifest(
           `Repository ${repository.provider}:${repository.repoPath} is missing its trusted research baseline`,
         );
       }
-      const key = `${repository.provider}:${repository.repoPath.toLowerCase()}`;
       const access =
-        repository.access === "write" || writeKeys.has(key) ? "write" : "read";
+        repository.access === "write" || writeKeys.has(repositoryKey(repository))
+          ? "write"
+          : "read";
       return {
         provider: repository.provider,
         repoPath: repository.repoPath,

@@ -7,6 +7,7 @@ import {
   type WorkspaceRepoV2,
 } from "../../sandbox/repo-workspace.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
+import { isSameRepository, repositoryKey } from "../support/repository-access.js";
 
 interface CommandResult {
   exitCode: number;
@@ -398,11 +399,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
       getResearchBranchSha: (repository) =>
         adapterFor(repository).getBranchSha(repository.branchName),
       findOwnedBranch: async (repository) =>
-        owned.find(
-          (candidate) =>
-            candidate.provider === repository.provider &&
-            candidate.repoPath.toLowerCase() === repository.repoPath.toLowerCase(),
-        ) ?? null,
+        owned.find((candidate) => isSameRepository(candidate, repository)) ?? null,
       getBranchShaIfExists: (repository, branchName) =>
         adapterFor(repository).getBranchShaIfExists(branchName),
       createBranchIfMissing: async (repository, branchName, baseSha) => {
@@ -512,11 +509,4 @@ async function commandError(result: CommandResult): Promise<string> {
   const stderr = result.stderr ? (await result.stderr()).trim() : "";
   const stdout = (await result.stdout()).trim();
   return stderr || stdout || "command failed";
-}
-
-function repositoryKey(repository: {
-  provider: string;
-  repoPath: string;
-}): string {
-  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
 }
