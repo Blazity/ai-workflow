@@ -577,7 +577,7 @@ and `integrations/mem0`, a hosted engine that only adds, which is the one to
 copy from.
 
 **Who serves.** Connecting a memory integration **replaces** the built-in
-store; disabling the integration returns the deployment to the built-in
+store for facts and lessons; disabling the integration returns the deployment to the built-in
 store, which was not touched in between. Two things never fall back to the
 built-in store, because either would split a deployment's memory across two
 stores with nobody told: settings that cannot be read, and a memory
@@ -588,10 +588,16 @@ the same rule (`memoryProviderChoice` in
 `apps/worker/src/engine/definition/integration-availability.ts`), so a block
 that requires `memory` is offered exactly where runs remember.
 
+**A ticket's notebook is never an engine's.** Core keeps every notebook in the
+built-in store, whichever provider serves facts and lessons, because a run
+reads it back byte for byte and an engine that extracts or merges could
+rewrite it. No notebook call reaches your adapter, and the memory screen lists
+the built-in notebooks beside your documents.
+
 **Switching is not migrating.** Nothing is copied when an admin connects an
-engine: the first runs after it find nothing, the repository seed writes
-again (with repository memory on, below), and the next run of a ticket in
-flight starts without the notebook it had. Disconnecting
+engine: the first runs after it find no facts or lessons, and the repository
+seed writes again (with repository memory on, below). A ticket in flight keeps
+its notebook, which stays in the built-in store. Disconnecting
 sends nothing to the engine and deletes nothing there; reconnecting the same
 project brings its memory back as it was. Your README says all of this, and
 your manifest's `description` says the first part in one line, because the
@@ -655,7 +661,10 @@ do them and cannot get them wrong:
 
 #### Where a run calls memory, and where you see it
 
-Six places. A minimal workflow reaches the first and the fourth: a ticket
+Six places. The notebook calls (the first and fourth rows, and the distill's
+notebook recall) are the built-in store's on every deployment and never reach
+an engine; they are listed because a run's memory starts and ends there. A
+minimal workflow reaches the first and the fourth: a ticket
 trigger and one agent block that works on a repository (an implementation,
 planning or review agent) prepares a workspace, which hydrates the notebook,
 and tears it down, which persists it. The other three run only while the
@@ -665,14 +674,14 @@ off by default); promotion to an owner's facts also needs
 
 | When | What it calls | Subject and scope | Logged as | Seen by a person |
 |---|---|---|---|---|
-| A workspace is prepared, once per run (`hydrateWorkspaceMemoryStep`, `apps/worker/src/engine/steps/memory-steps.ts`) | `recall`; an `observe` of a `document` only when nothing is held and the checkout carries an old committed notebook | `ticket:<tracker>:<KEY>` (or a pull request's key), `notebook` | `memory_document_hydrated_from_store`, `memory_document_seeded_from_repo`; `memory_provider_unavailable` and `memory_document_seed_refused`, both with `provider`, `code` and `detail`; `memory_document_hydrate_failed` | a refusal is a `memory_unavailable` observation (`where: "hydrate"`) on the block attempt: the Metadata tab of the run's trace (`/trace/<runId>`), `runs.trace` over MCP |
+| A workspace is prepared, once per run (`hydrateWorkspaceMemoryStep`, `apps/worker/src/engine/steps/memory-steps.ts`) | `recall`; an `observe` of a `document` only when nothing is held and the checkout carries an old committed notebook | `ticket:<tracker>:<KEY>` (or a pull request's key), `notebook` | `memory_document_hydrated_from_store`, `memory_document_seeded_from_repo`; `memory_provider_unavailable` and `memory_document_seed_refused`, both with `store` (always `builtin`), `code` and `detail`; `memory_document_hydrate_failed` | a refusal is a `memory_unavailable` observation (`where: "hydrate"`) on the block attempt: the Metadata tab of the run's trace (`/trace/<runId>`), `runs.trace` over MCP |
 | Right after it, repository memory on (`seedRepoMemoryStep`, `repo-seed-steps.ts`) | per repository: `recall` of facts; an `observe` of `items` marked `derived` and `onlyIfEmpty` when nothing is held; an `observe` with only `refuted` to retract a script the repository no longer has | `repo:<provider>:<path>`, `facts` | `repo_memory_seeded`, `repo_memory_seed_refused`, `repo_memory_prune_refused`, `memory_provider_unavailable` | `memory_unavailable` (`where: "seed"`), as above |
 | Every agent invocation, repository memory on (`loadRepoMemorySourcesStep`, `repo-memory-steps.ts`) | `recall` of each owner's facts, then each repository's facts and lessons: up to 1 + 2N calls | `org:<provider>:<owner>` facts; `repo:...` facts and lessons | `repo_memory_injected` (documents, bytes, dropped, truncated), `repo_memory_injection_budget_exceeded`, `memory_provider_unavailable` (`provider`, how many refused), `repo_memory_load_deadline_exceeded` | the memory sections of what the agent was sent: `runs.briefing` over MCP and the node's last briefing in the editor; a refusal as `memory_unavailable` (`where: "prompt"`) |
-| Teardown, whatever the outcome, failed and cancelled runs included (`persistWorkspaceMemoryStep`) | `observe` of the agent's notebook `document`; when the workspace started without an answer from `recall`, a `recall` first, and no write over a notebook you hold | as the first row | `memory_document_persisted`; `memory_provider_unavailable` (`provider`, `code`, `detail`); `memory_capture_unavailable` with the run id; `memory_document_persist_withheld` and `memory_capture_withheld` when a stored notebook was kept | **logs only** |
+| Teardown, whatever the outcome, failed and cancelled runs included (`persistWorkspaceMemoryStep`) | `observe` of the agent's notebook `document`; when the workspace started without an answer from `recall`, a `recall` first, and no write over a notebook you hold | as the first row | `memory_document_persisted`; `memory_provider_unavailable` (`store`, always `builtin`, `code`, `detail`); `memory_capture_unavailable` with the run id; `memory_document_persist_withheld` and `memory_capture_withheld` when a stored notebook was kept | **logs only** |
 | After a run that succeeded and published, repository memory on (`distillRepoMemoryStep`) | `recall` of the notebook and of each write-scoped repository's facts and lessons; an `observe` of `items` (`learned`, `refuted`) per repository and scope; with promotion on, facts again and an `observe` on the owner: up to 1 + 4N calls, and with promotion on, N more recalls and one `observe` per owner | notebook, `repo:...`, `org:...` | `repo_memory_distilled` on every path, with an `outcome`; `repo_memory_write_refused`; `memory_provider_unavailable`; `memory_distill_unavailable` with the run id | **logs only** |
 | The memory screen (`/memory`) and the `memory.list`, `memory.get` and `memory.forget` MCP tools | `store.list`, `store.read`, `store.forget` | the pairs your `list` returned | | the screen shows your listing and, when you cannot answer, your sentence; `complete: false` adds a notice that the list may be partial |
 
-Which provider answered is on those log lines (`provider`) and nowhere else: no
+Which provider answered is on those log lines (`provider`, or `store` on the notebook lines) and nowhere else: no
 run field records it yet, and the persist and distill outcomes reach no screen.
 Read them in the worker's runtime logs by the run id.
 
@@ -963,14 +972,17 @@ The operator's half of "Prove it", for a memory integration:
    agent wrote a notebook), `repo_memory_distilled` with an `outcome` other
    than `memory_unavailable`, and no `memory_provider_unavailable`, whose
    `provider` field would name who refused.
-5. **In the engine's own console**: memories under the ticket's subject key and
-   under `repo:<provider>:<path>`, carrying your namespace. The memory screen
-   (`/memory`) lists the same documents by your `docPath`s.
+5. **In the engine's own console**: memories under `repo:<provider>:<path>`,
+   carrying your namespace, and none under the ticket's subject key, whose
+   notebook stays in the built-in store. The memory screen (`/memory`) lists
+   the same documents by your `docPath`s, and the ticket's notebook beside
+   them at `ai-workflow/memory/<KEY>.md`.
 6. **Run the same ticket again**: the notebook the first run wrote is back in
    the agent's workspace (`memory_document_hydrated_from_store`), and the seed
    writes nothing (no `repo_memory_seeded` line).
 7. **Disable the integration**: the next run uses the built-in store, and the
-   memory screen shows the built-in documents as they were before step 2.
+   memory screen shows its facts and lessons as they were before step 2, and
+   the ticket's notebook as the last run left it.
 
 ## One connection
 
