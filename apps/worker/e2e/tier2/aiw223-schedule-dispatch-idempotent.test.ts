@@ -1,10 +1,11 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { callCronPoll } from "../helpers/cron.js";
 import {
   cleanupSeededSchedule,
   getActiveRunBySubject,
   listScheduleOccurrences,
   seedDueScheduleDefinition,
+  sweepStaleScheduleFixtures,
   type SeededSchedule,
 } from "../helpers/schedule.js";
 import { waitFor } from "../helpers/wait.js";
@@ -36,10 +37,17 @@ import { waitFor } from "../helpers/wait.js";
 describe("AIW-223: schedule trigger dispatch is idempotent", () => {
   let seeded: SeededSchedule | undefined;
 
+  beforeAll(async () => {
+    // A runner killed mid-suite never reaches afterAll, so each run first
+    // retires what an earlier one could not.
+    await sweepStaleScheduleFixtures();
+  });
+
   afterAll(async () => {
-    // Runs even when an assertion above throws: this suite runs against a
-    // Neon branch shared with every other e2e test, so a failed run must not
-    // leave the fixture behind for the next one.
+    // Runs even when an assertion above throws, and throws itself when the
+    // fixture could not be retired: this suite writes to the database the
+    // deployment under test reads, and an enabled fixture left behind shows up
+    // in that deployment's workflow list (e2e/helpers/schedule.ts).
     if (seeded) await cleanupSeededSchedule(seeded);
   });
 

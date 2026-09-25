@@ -28,7 +28,20 @@ export type LiveScheduleTriggerTarget =
       definitionVersion: number;
       reason: typeof RETIRED_SCHEMA_MESSAGE;
     }
-  | null;
+  | { kind: "not-live"; reason: ScheduleNotLiveReason };
+
+/**
+ * Why a schedule row no longer belongs to a live workflow, for the log line the
+ * dispatcher writes when it revokes one. An operator reading "revoked" needs to
+ * know which of these it was, because only "not_deployed" and "node_removed"
+ * mean the stored definition and its schedule rows disagree.
+ */
+type ScheduleNotLiveReason =
+  | "definition_missing"
+  | "disabled"
+  | "archived"
+  | "not_deployed"
+  | "node_removed";
 
 type ScheduleTargetReads = {
   getDefinition(definitionId: number): ReturnType<typeof getWorkflowDefinition>;
@@ -62,13 +75,17 @@ async function resolveWithReads(
   reads: ScheduleTargetReads,
 ): Promise<LiveScheduleTriggerTarget> {
   const definition = await reads.getDefinition(input.definitionId);
-  if (!definition || !definition.enabled || definition.archivedAt !== null) return null;
+  if (!definition) return notLive("definition_missing");
+  if (definition.archivedAt !== null) return notLive("archived");
+  if (!definition.enabled) return notLive("disabled");
+  // The stored enabled flag is not a deployed head: a definition can say
+  // enabled with nothing deployed behind it, and such a schedule must never fire.
   const head = await reads.getDeployed(input.definitionId);
-  if (!head) return null;
+  if (!head) return notLive("not_deployed");
   if (head.schema !== "v2") {
     return { kind: "retired-head", definitionVersion: head.version, reason: RETIRED_SCHEMA_MESSAGE };
   }
-  if (!scheduleNodeOf(head, input.nodeId)) return null;
+  if (!scheduleNodeOf(head, input.nodeId)) return notLive("node_removed");
 
   const version = input.definitionVersion ?? head.version;
   const source = version === head.version ? head : await reads.getVersion(input.definitionId, version);
@@ -76,7 +93,7 @@ async function resolveWithReads(
     return { kind: "retired-pinned", definitionVersion: source.version, reason: RETIRED_SCHEMA_MESSAGE };
   }
   const node = source ? scheduleNodeOf(source, input.nodeId) : null;
-  if (!node) return null;
+  if (!node) return notLive("node_removed");
   const configuration = node.configuration ?? {};
   return {
     kind: "runnable",
@@ -85,6 +102,10 @@ async function resolveWithReads(
     taskDescription: typeof configuration.taskDescription === "string" ? configuration.taskDescription : "",
     rateLimit: readTriggerRateLimitParams(configuration),
   };
+}
+
+function notLive(reason: ScheduleNotLiveReason): LiveScheduleTriggerTarget {
+  return { kind: "not-live", reason };
 }
 
 function readTriggerRateLimitParams(

@@ -42,12 +42,21 @@ async function persistPreparedReplayAttempt(input: {
  * Returned as one value rather than two, because the two are written into one
  * INSERT and a code without its sentence is a row that explains nothing to the
  * person who actually opens it.
+ *
+ * A "blocked" run the workflow ended itself carries its reason the same way:
+ * today that is only a pull request run whose pull request moved on, and its
+ * sentence and code are the whole explanation of why it stopped.
  */
 function failureReasonOf(payload: {
-  status: "success" | "failed" | "awaiting";
+  status: "success" | "failed" | "awaiting" | "blocked";
   executionError: { message: string; failureCode?: RunFailureCode | null } | null;
   budgetFailure: RunBudgetFailure | null;
 }): RunStatusReason | null {
+  if (payload.status === "blocked") {
+    const error = payload.executionError;
+    if (!error) return null;
+    return error.failureCode ? { text: error.message, code: error.failureCode } : error.message;
+  }
   if (payload.status !== "failed") return null;
   const error = payload.executionError;
   if (error) {
@@ -71,7 +80,7 @@ function failureReasonOf(payload: {
 export async function recordRunTelemetryStep(payload: {
   runId: string;
   subjectKey: string;
-  status: "success" | "failed" | "awaiting";
+  status: "success" | "failed" | "awaiting" | "blocked";
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -227,7 +236,7 @@ async function persistRunTelemetryBestEffort(
 
 async function closeTerminalPrChecksStep(payload: {
   runId: string;
-  intent: "timed_out" | "cancelled";
+  intent: "timed_out" | "cancelled" | "superseded";
   details: string;
   integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
 }): Promise<{ closed: number; pending: number }> {

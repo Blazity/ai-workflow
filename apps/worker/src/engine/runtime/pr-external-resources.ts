@@ -43,6 +43,11 @@ import {
   findRunPrSiblings,
 } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
+import {
+  pullRequestMovedOn,
+  SUPERSEDED_BY_NEWER_COMMIT,
+  type PullRequestMovedOnResult,
+} from "../support/pull-request-moved-on.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";
 export type CheckTerminalIntent =
@@ -120,7 +125,7 @@ function checkProviderUpdate(
     summary:
       details ||
       (conclusion === "superseded"
-        ? "Superseded by a newer pull request commit."
+        ? SUPERSEDED_BY_NEWER_COMMIT
         : `Workflow ${conclusion}.`),
   };
 }
@@ -134,7 +139,7 @@ export async function createRunOwnedPrCheck(args: {
   activationScope: string;
   name: string;
   integrationPins?: readonly IntegrationConnectionPin[];
-}): Promise<WorkflowPrCheckReference> {
+}): Promise<WorkflowPrCheckReference | PullRequestMovedOnResult> {
   const { db, ...input } = args;
   return createRunOwnedPrCheckWithPersistence(
     input,
@@ -142,10 +147,16 @@ export async function createRunOwnedPrCheck(args: {
   );
 }
 
+/**
+ * Creates the pending check for the exact head the run was started for, or
+ * reports that the pull request moved on first. A newer commit or a closed pull
+ * request is not a provider failure: the run for the older head simply has
+ * nothing left to check, and the engine ends it as moved on.
+ */
 async function createRunOwnedPrCheckWithPersistence(
   args: Omit<Parameters<typeof createRunOwnedPrCheck>[0], "db">,
   persistence: PrExternalResourcesPersistence,
-): Promise<WorkflowPrCheckReference> {
+): Promise<WorkflowPrCheckReference | PullRequestMovedOnResult> {
   const existing = await persistence.findPrCheckForAttempt({
     runId: args.owner.runId!, nodeId: args.nodeId, attempt: args.attempt,
     activationScope: args.activationScope,
@@ -168,13 +179,11 @@ async function createRunOwnedPrCheckWithPersistence(
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
   }
-  const current = await vcs.getPRHead(args.target.prNumber);
-  if (
-    current.headSha !== args.target.headSha ||
-    current.state !== "open"
-  ) {
-    throw new Error("The pull request changed before its check could be created.");
-  }
+  const movedOn = pullRequestMovedOn(
+    args.target.headSha,
+    await vcs.getPRHead(args.target.prNumber),
+  );
+  if (movedOn) return { movedOn };
 
   const id = existing?.id ?? randomUUID();
   if (!existing) {
@@ -205,7 +214,7 @@ async function createRunOwnedPrCheckWithPersistence(
 
 export function createConnectedRunOwnedPrCheck(
   args: Omit<Parameters<typeof createRunOwnedPrCheck>[0], "db">,
-): Promise<WorkflowPrCheckReference> {
+): Promise<WorkflowPrCheckReference | PullRequestMovedOnResult> {
   return createRunOwnedPrCheckWithPersistence(
     args,
     connectedPrExternalResourcesPersistence(),
@@ -221,7 +230,7 @@ export async function completeRunOwnedPrCheck(args: {
   details: string;
   refreshHead?: boolean;
   integrationPins?: readonly IntegrationConnectionPin[];
-}): Promise<void> {
+}): Promise<PullRequestMovedOnResult | void> {
   const { db, ...input } = args;
   return completeRunOwnedPrCheckWithPersistence(
     input,
@@ -229,10 +238,16 @@ export async function completeRunOwnedPrCheck(args: {
   );
 }
 
+/**
+ * Posts the verdict on the check, or reports that the pull request moved on
+ * before it could. A check whose head was pushed over is closed as superseded
+ * on the provider first, so the pull request never keeps a pending check for a
+ * commit nobody reviews.
+ */
 async function completeRunOwnedPrCheckWithPersistence(
   args: Omit<Parameters<typeof completeRunOwnedPrCheck>[0], "db">,
   persistence: PrExternalResourcesPersistence,
-): Promise<void> {
+): Promise<PullRequestMovedOnResult | void> {
   const storedCheck = await persistence.findPrCheckById(args.reference.id);
   if (!storedCheck || storedCheck.runId !== args.owner.runId || storedCheck.name !== args.reference.name) {
     throw new Error(
@@ -256,7 +271,7 @@ async function completeRunOwnedPrCheckWithPersistence(
     await persistence.assertOwner(args.owner);
     const latest = await runtime.vcs.getPRHead(args.target.prNumber);
     if (latest.state !== "open") {
-      throw new Error("The pull request is no longer open.");
+      return { movedOn: { kind: "closed", state: latest.state } };
     }
     target = { ...args.target, headSha: latest.headSha };
     if (latest.headSha !== check.headSha) {
@@ -297,22 +312,19 @@ async function completeRunOwnedPrCheckWithPersistence(
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
   }
-  const current = await vcs.getPRHead(args.target.prNumber);
-  if (
-    current.headSha !== target.headSha ||
-    current.state !== "open"
-  ) {
+  const movedOn = pullRequestMovedOn(
+    target.headSha,
+    await vcs.getPRHead(args.target.prNumber),
+  );
+  if (movedOn) {
     await vcs.updateGateStatus(
       check.providerReference as VcsOpaqueHandle,
-      checkProviderUpdate(
-        "superseded",
-        "Superseded by a newer pull request commit.",
-      ),
+      checkProviderUpdate("superseded", SUPERSEDED_BY_NEWER_COMMIT),
     );
     await persistence.completePrCheck({
       id: check.id, conclusion: "superseded", closureIntent: "superseded",
     });
-    throw new Error("The PR check was superseded by a newer commit.");
+    return { movedOn };
   }
   await vcs.updateGateStatus(
     check.providerReference as VcsOpaqueHandle,
@@ -323,7 +335,7 @@ async function completeRunOwnedPrCheckWithPersistence(
 
 export function completeConnectedRunOwnedPrCheck(
   args: Omit<Parameters<typeof completeRunOwnedPrCheck>[0], "db">,
-): Promise<void> {
+): Promise<PullRequestMovedOnResult | void> {
   return completeRunOwnedPrCheckWithPersistence(
     args,
     connectedPrExternalResourcesPersistence(),
@@ -1062,12 +1074,15 @@ export async function publishRunOwnedPrReview(args: {
   activationScope: string;
   reviewResults: ReviewResult[];
   integrationPins?: readonly IntegrationConnectionPin[];
-}): Promise<{
-  decision: "approve" | "request_changes";
-  summary: string;
-  inlineCommentCount: number;
-  summaryFallbackCount: number;
-}> {
+}): Promise<
+  | {
+      decision: "approve" | "request_changes";
+      summary: string;
+      inlineCommentCount: number;
+      summaryFallbackCount: number;
+    }
+  | PullRequestMovedOnResult
+> {
   const { db, ...input } = args;
   return publishRunOwnedPrReviewWithPersistence(
     input,
@@ -1090,10 +1105,14 @@ async function publishRunOwnedPrReviewWithPersistence(
   if (!hasPRFilesCapability(vcs) || !hasPRReviewCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR reviews.`);
   }
-  const current = await vcs.getPRHead(args.target.prNumber);
-  if (current.headSha !== args.target.headSha || current.state !== "open") {
-    throw new Error("The pull request changed before the review could be published.");
-  }
+  // A review of a head the pull request has left is not published: the next
+  // round owns the summary comment, and this one would overwrite it out of
+  // order. The engine ends the run as moved on rather than failed.
+  const movedOn = pullRequestMovedOn(
+    args.target.headSha,
+    await vcs.getPRHead(args.target.prNumber),
+  );
+  if (movedOn) return { movedOn };
   const files = await vcs.listPRFiles(args.target.prNumber);
   const siblingLookup = await persistence.findRunPrSiblings({
     provider: args.target.provider,
@@ -1289,15 +1308,11 @@ async function publishRunOwnedPrReviewWithPersistence(
   // Unconditional: a round with a published row returned above, so nothing here
   // is on record as published. A review can still be on the pull request without
   // a row that says so, and the adapter's marker lookup is what covers that.
-  const beforePublish = await vcs.getPRHead(args.target.prNumber);
-  if (
-    beforePublish.headSha !== args.target.headSha ||
-    beforePublish.state !== "open"
-  ) {
-    throw new Error(
-      "The pull request changed before the review could be published.",
-    );
-  }
+  const movedOnBeforePublish = pullRequestMovedOn(
+    args.target.headSha,
+    await vcs.getPRHead(args.target.prNumber),
+  );
+  if (movedOnBeforePublish) return { movedOn: movedOnBeforePublish };
   let published;
   try {
     published = await vcs.publishPRReview(args.target.prNumber, {

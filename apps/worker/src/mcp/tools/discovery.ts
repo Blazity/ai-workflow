@@ -12,6 +12,7 @@ import { isLegacyStoredWorkflowDefinition } from "../../services/mcp/app-depende
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
+import { dormantTriggerNodeIds } from "./trigger-liveness.js";
 
 const DEFAULT_WORKFLOWS_LIMIT = 50;
 const DEFAULT_PROMPTS_LIMIT = 50;
@@ -30,13 +31,20 @@ type WorkflowTrigger = {
   // refused as not_eligible. Saying so here is what keeps an agent from paying a
   // preflight to find out.
   manuallyDispatchable: boolean;
+  /** Fires on its own source right now: the definition is enabled and, for a
+   *  schedule or a webhook, the row it fires from is live (trigger-liveness.ts). */
+  armed: boolean;
 };
 
 type WorkflowListData = {
   workflows: Array<{
     definitionId: number;
     name: string;
+    /** The stored switch. Not the truth about what fires: see `armed`. */
     enabled: boolean;
+    /** At least one trigger of the deployed graph is armed. False for a
+     *  definition with nothing deployed, whatever `enabled` says. */
+    armed: boolean;
     deployedVersion: number | null;
     deployedSchema: "v2" | "legacy-v1";
     retiredMessage?: typeof RETIRED_SCHEMA_MESSAGE;
@@ -79,8 +87,8 @@ const graphScanSchema = z
   .catch({ nodes: [] });
 const graphNodeSchema = z.object({ id: z.string().min(1), type: z.string().min(1) });
 
-function triggersOf(storedDefinition: unknown): WorkflowTrigger[] {
-  const triggers: WorkflowTrigger[] = [];
+function triggersOf(storedDefinition: unknown): Array<Omit<WorkflowTrigger, "armed">> {
+  const triggers: Array<Omit<WorkflowTrigger, "armed">> = [];
   for (const node of graphScanSchema.parse(storedDefinition).nodes) {
     const parsed = graphNodeSchema.safeParse(node);
     if (!parsed.success || !TRIGGER_TYPES.includes(parsed.data.type)) continue;
@@ -134,7 +142,7 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
             {
               deployedSchema: "v2" | "legacy-v1";
               retiredMessage?: typeof RETIRED_SCHEMA_MESSAGE;
-              triggers: WorkflowTrigger[];
+              triggers: Array<Omit<WorkflowTrigger, "armed">>;
             }
           >(
             versionRows.map((row) => {
@@ -155,26 +163,45 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
             }),
           );
 
-          return {
-            workflows: page.map((row) => Object.assign(
-              {
-                definitionId: row.id,
-                name: row.name,
-                enabled: row.enabled,
-                deployedVersion: row.deployedVersion,
-                deployedSchema:
-                  deploymentByDefinition.get(row.id)?.deployedSchema ?? "v2",
-                // Empty for a definition with no deployed version, and also for a
-                // deployed pointer with no readable row behind it: both mean there
-                // is nothing an agent can dispatch today.
-                triggers: deploymentByDefinition.get(row.id)?.triggers ?? [],
-              },
-              deploymentByDefinition.get(row.id)?.retiredMessage
-                ? { retiredMessage: deploymentByDefinition.get(row.id)!.retiredMessage }
-                : {},
-            )),
-            truncated,
-          };
+          // Which listed triggers actually fire, by the same rule the publish
+          // announcement uses. Extra reads only for an enabled definition whose
+          // deployed graph carries a schedule or a webhook trigger; every other
+          // answer follows from the row already in hand.
+          const workflows = await Promise.all(
+            page.map(async (row) => {
+              const deployment = deploymentByDefinition.get(row.id);
+              // Empty for a definition with no deployed version, and also for a
+              // deployed pointer with no readable row behind it: both mean there
+              // is nothing an agent can dispatch today, and nothing that fires.
+              const listed = deployment?.triggers ?? [];
+              const dormant = new Set(
+                await dormantTriggerNodeIds(
+                  deps.services,
+                  row.id,
+                  listed.map((trigger) => ({ id: trigger.triggerNodeId, type: trigger.triggerType })),
+                  row.enabled,
+                ),
+              );
+              const triggers = listed.map((trigger) =>
+                Object.assign({}, trigger, { armed: !dormant.has(trigger.triggerNodeId) }),
+              );
+              return Object.assign(
+                {
+                  definitionId: row.id,
+                  name: row.name,
+                  enabled: row.enabled,
+                  armed: triggers.some((trigger) => trigger.armed),
+                  deployedVersion: row.deployedVersion,
+                  deployedSchema: deployment?.deployedSchema ?? "v2",
+                  triggers,
+                },
+                deployment?.retiredMessage
+                  ? { retiredMessage: deployment.retiredMessage }
+                  : {},
+              );
+            }),
+          );
+          return { workflows, truncated };
         },
       });
       // No trust override: a workflow's name and its node ids are text somebody

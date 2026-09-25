@@ -1,6 +1,7 @@
 /* eslint-disable require-unicode-regexp */
 import { createHook, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "./support/workflow-naming.js";
+import { pullRequestMovedOnKind } from "./support/pull-request-moved-on.js";
 import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links.js";
 // Pure and contracts-only, like the two support modules above it, so the
 // workflow isolate stays free of Node builtins.
@@ -566,6 +567,7 @@ async function agentWorkflowBody(
   | "success"
   | "failed"
   | "awaiting"
+  | "blocked"
   | { kind: "execution_error"; error: WorkflowExecutionErrorState }
   | undefined
 > {
@@ -1234,8 +1236,9 @@ async function agentWorkflowBody(
   // it to "success"; the clarification exits record "awaiting" (the run is
   // parked, not done: the answer endpoint or the re-pickup housekeeping later
   // flips it to success). Every phase failure / timeout / thrown error keeps
-  // "failed".
-  let runOutcome: "success" | "failed" | "awaiting" = "failed";
+  // "failed". "blocked" is the one stop that is not a failure: a pull request
+  // run whose pull request moved on (engine/support/pull-request-moved-on.ts).
+  let runOutcome: "success" | "failed" | "awaiting" | "blocked" = "failed";
   let terminalExecutionError: WorkflowExecutionErrorState | null = null;
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
@@ -5057,7 +5060,23 @@ async function agentWorkflowBody(
         }
       }
       terminalExecutionError = walk.executionError ?? null;
-      if (terminalExecutionError) {
+      if (
+        terminalExecutionError &&
+        pullRequestMovedOnKind(terminalExecutionError.failureCode) !== null
+      ) {
+        // The pull request got a newer commit or was closed before this run
+        // reached it. Nothing failed, so none of the failure exit applies: no
+        // note on the pull request, no ticket comment, no chat message. The
+        // run ends "blocked" with the block's own sentence as its reason, which
+        // the end-of-run write below records.
+        runOutcome = "blocked";
+        console.info(
+          "pull_request_moved_on",
+          workflowRunId,
+          terminalExecutionError.failureCode,
+          terminalExecutionError.nodeId,
+        );
+      } else if (terminalExecutionError) {
         await failureExit(
           failureExitPhase(terminalExecutionError),
           formatExecutionErrorForUser(terminalExecutionError),
@@ -5358,18 +5377,23 @@ async function agentWorkflowBody(
       (runOutcome as string) !== "awaiting"
     ) {
       const successfulWithPendingCheck = runOutcome === "success";
+      const movedOn = runOutcome === "blocked" && terminalExecutionError !== null;
       const details = successfulWithPendingCheck
         ? "Workflow finished without completing a pending PR check."
-        : terminalExecutionError
-          ? formatExecutionErrorForUser(terminalExecutionError)
-          : "Workflow failed before the PR check was completed.";
+        : movedOn
+          ? terminalExecutionError!.message
+          : terminalExecutionError
+            ? formatExecutionErrorForUser(terminalExecutionError)
+            : "Workflow failed before the PR check was completed.";
       const cleanup = await closeTerminalPrChecksStep({
         runId: workflowRunId,
         integrationPins: plan.integrationPins,
-        intent: pendingPrCheckIntent({
-          category: terminalExecutionError?.category,
-          budgetMetric: terminalBudgetFailure?.metric,
-        }),
+        intent: movedOn
+          ? "superseded"
+          : pendingPrCheckIntent({
+              category: terminalExecutionError?.category,
+              budgetMetric: terminalBudgetFailure?.metric,
+            }),
         details,
       }).catch((error: unknown) => {
         // Still swallowed - the pessimistic { pending: 1 } below is what decides
@@ -5433,7 +5457,12 @@ async function agentWorkflowBody(
         prs: prsForTelemetry,
         executionError: terminalExecutionError
           ? {
-              message: formatExecutionErrorForUser(terminalExecutionError),
+              // A stop that is not a failure reads as its own sentence, with
+              // no diagnostic id inviting anyone to go and look for one.
+              message:
+                runOutcome === "blocked"
+                  ? terminalExecutionError.message
+                  : formatExecutionErrorForUser(terminalExecutionError),
               code: terminalExecutionError.diagnosticId,
               failureCode: terminalExecutionError.failureCode ?? null,
             }
@@ -5442,7 +5471,9 @@ async function agentWorkflowBody(
       },
     );
   }
-  return terminalExecutionError
+  // A moved-on run returns rather than throws, so the Workflow run completes
+  // instead of failing and nothing counts it as an error.
+  return terminalExecutionError && runOutcome !== "blocked"
     ? { kind: "execution_error", error: terminalExecutionError }
     : runOutcome;
 }
