@@ -1810,9 +1810,76 @@ describe("a run a person stops by moving its ticket out of the column", () => {
   it("stays silent for a cancel that is not a person moving the ticket", async () => {
     const issueTracker = tracker();
 
-    await stop(issueTracker);
+    const result = await stop(issueTracker);
 
     expect(issueTracker.postComment).not.toHaveBeenCalled();
+    expect(result.stopAnnouncement).toBeUndefined();
+  });
+
+  it("hands the caller the very sentence the ticket comment opens with, for the chat channel", async () => {
+    const issueTracker = tracker();
+
+    const result = await stop(issueTracker, { movedTo: "To Do" });
+
+    const body = vi.mocked(issueTracker.postComment).mock.calls[0]![1] as string;
+    expect(result.stopAnnouncement).toMatch(/^The AI workflow stopped working on this ticket at .+ UTC because the ticket was moved from "Ai" to "To Do"\. Nothing failed\.$/);
+    expect(body.startsWith(result.stopAnnouncement!)).toBe(true);
+  });
+
+  /**
+   * The first attempt tears the run down and then cannot confirm the step drain,
+   * so it stops before settling anything. The redelivered webhook's attempt finds
+   * the Workflow run already cancelled, which reads as "already terminal", and
+   * used to skip the settle, the attempt close and the comment as if the run had
+   * finished on its own: nobody ever closed the attempt or told the ticket.
+   */
+  it("closes the attempts and tells the ticket on the retry after an unconfirmed drain, and only then", async () => {
+    const runningStep = { stepId: "s-1", stepName: "planning", status: "running", attempt: 1 };
+    state.listSteps.mockResolvedValueOnce({ data: [runningStep], cursor: null, hasMore: false });
+    const issueTracker = tracker();
+
+    const first = await stop(issueTracker, { movedTo: "To Do" });
+    expect(first).toMatchObject({ cancelled: false, tornDown: true });
+    expect(state.markBlockedOnCancel).not.toHaveBeenCalled();
+    expect(state.closeOpenAttempts).not.toHaveBeenCalled();
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+
+    // The retry: Workflow says the run is cancelled, by the attempt above.
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("run is already cancelled")),
+      status: Promise.resolve("cancelled"),
+    });
+    const second = await stop(issueTracker, { movedTo: "To Do" });
+
+    expect(second).toMatchObject({ cancelled: true, alreadyTerminal: true });
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1", { fromRunning: true });
+    expect(state.closeOpenAttempts).toHaveBeenCalledWith({
+      runId: "run-1",
+      outcomeStatus: "run_cancelled",
+    });
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    expect(second.stopAnnouncement).toBeDefined();
+
+    // A third look finds the row already settled: nothing is said twice.
+    state.markBlockedOnCancel.mockResolvedValue(false);
+    const third = await stop(issueTracker, { movedTo: "To Do" });
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    expect(third.stopAnnouncement).toBeUndefined();
+  });
+
+  it("still leaves a run that failed on its own alone when a cancel finds it terminal", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("already failed")),
+      status: Promise.resolve("failed"),
+    });
+    const issueTracker = tracker();
+
+    const result = await stop(issueTracker, { movedTo: "To Do" });
+
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1", { fromRunning: false });
+    expect(state.closeOpenAttempts).not.toHaveBeenCalled();
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+    expect(result.stopAnnouncement).toBeUndefined();
   });
 });
 

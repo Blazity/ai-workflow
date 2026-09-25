@@ -612,16 +612,74 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
       });
     });
 
-    it("tells the ticket's channel that the run was cancelled", async () => {
+    // The chat channel reads the same sentence the ticket's comment opens
+    // with, made once by the cancel that recorded the stop. It used to read
+    // "webhook confirmed ticket is outside AI column", which is plumbing.
+    const STOPPED =
+      'The AI workflow stopped working on this ticket at 2026-09-23 12:56 UTC because the ticket was moved from "AI" to "In Progress". Nothing failed.';
+
+    it("tells the ticket's channel that the run stopped, in the ticket comment's own sentence", async () => {
       const connected = adapters();
       state.createAdapters.mockReturnValue(connected);
+      state.cancel.mockResolvedValue({ cancelled: true, released: true, stopAnnouncement: STOPPED });
 
       await send("issue-updated-status-change");
 
+      expect(connected.messaging.notifyForTicket).toHaveBeenCalledTimes(1);
       expect(connected.messaging.notifyForTicket).toHaveBeenCalledWith("TEST-1", {
         kind: "canceled",
-        reason: "webhook confirmed ticket is outside AI column",
+        reason: STOPPED,
       });
+    });
+
+    it("says it once, on the retry that recorded the stop after an unconfirmed first attempt", async () => {
+      const connected = adapters();
+      state.createAdapters.mockReturnValue(connected);
+      // The retry finds the run already cancelled by the first attempt, which
+      // is still this stop and not a run that finished on its own.
+      state.cancel.mockResolvedValue({
+        cancelled: true,
+        released: true,
+        alreadyTerminal: true,
+        stopAnnouncement: STOPPED,
+      });
+
+      const result = await send("issue-updated-status-change");
+
+      expect(result.body).toMatchObject({ status: "cancelled" });
+      expect(connected.messaging.notifyForTicket).toHaveBeenCalledWith("TEST-1", {
+        kind: "canceled",
+        reason: STOPPED,
+      });
+    });
+
+    it("says it even when the attempt that recorded the stop could not release the claim", async () => {
+      const connected = adapters();
+      state.createAdapters.mockReturnValue(connected);
+      state.cancel.mockResolvedValue({
+        cancelled: false,
+        released: false,
+        tornDown: true,
+        stopAnnouncement: STOPPED,
+      });
+
+      const result = await send("issue-updated-status-change");
+
+      expect(result.status).toBe(503);
+      expect(connected.messaging.notifyForTicket).toHaveBeenCalledWith("TEST-1", {
+        kind: "canceled",
+        reason: STOPPED,
+      });
+    });
+
+    it("says nothing about a stop when the run had already closed its own row", async () => {
+      const connected = adapters();
+      state.createAdapters.mockReturnValue(connected);
+      state.cancel.mockResolvedValue({ cancelled: true, released: true });
+
+      await send("issue-updated-status-change");
+
+      expect(connected.messaging.notifyForTicket).not.toHaveBeenCalled();
     });
 
     it("does not cancel when the live ticket is back in the AI column", async () => {

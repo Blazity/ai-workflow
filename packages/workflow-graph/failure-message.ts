@@ -211,8 +211,13 @@ const PROVIDER_CAUSES: ProviderCauseRule[] = [
     //
     // First, ahead of the rate limit: OpenAI answers an empty balance with a
     // 429, and "rerun shortly" is exactly the wrong advice for it.
+    //
+    // No bare `billing`: it matched a repository called billing in a clone
+    // error and an agent's own "fixing the billing module". The provider
+    // sentences that say billing say it next to a phrase matched here, or as
+    // Anthropic's `billing_error` type.
     pattern:
-      /credit[ _]balance|billing|no credits remaining|out of credits|insufficient.*(credit|quota|funds)|quota exceeded|exceeded your current quota/i,
+      /credit[ _]balance|billing_error|no credits remaining|out of credits|insufficient[_ ](?:quota|credits?|funds|balance)|quota exceeded|exceeded your current quota/i,
     lead: (account) =>
       account
         ? `The ${account} account has no credit left, so ${account} refused the request.`
@@ -669,28 +674,48 @@ function trailingLines(text: string, budget: number): string {
   return picked.join(" ");
 }
 
+/**
+ * One piece of evidence and whose words it is.
+ *
+ * `isTail` says it is raw process output rather than text a call site composed,
+ * which decides how a snippet of it is cut. `agentStream` says it is the
+ * coding agent's own output stream: the assistant's messages and every tool
+ * result it saw. That is free text the agent wrote or read out of the
+ * repository, so it may be quoted but never classified: an agent fixing a
+ * billing module prints "billing", and reading that as the provider refusing
+ * the account blamed an admin for the agent's own work.
+ */
+interface EvidenceCandidate {
+  text: string;
+  isTail: boolean;
+  agentStream: boolean;
+}
+
 /** Candidate evidence texts in priority order: the caller's isolated cause, the
  * structured provider error, stderr, stdout, then `detail`. `detail` moves
  * ahead of the tails for the failure kinds whose detail is the cause. */
 function orderedEvidence(
   evidence: FailureEvidence | undefined,
   detail: string,
-): Array<{ text: string; isTail: boolean }> {
+): EvidenceCandidate[] {
   const tails = [
-    { text: evidence?.providerError, isTail: true },
-    { text: evidence?.stderrTail, isTail: true },
-    { text: evidence?.stdoutTail, isTail: true },
+    // The provider's own refusal, out of its error envelope or error event.
+    { text: evidence?.providerError, isTail: true, agentStream: false },
+    // The CLI's own diagnostics: the phase scripts send only the CLI's stderr
+    // here, and the agent's tools report into its stdout stream.
+    { text: evidence?.stderrTail, isTail: true, agentStream: false },
+    { text: evidence?.stdoutTail, isTail: true, agentStream: true },
   ];
-  const detailEntry = { text: detail, isTail: false };
+  const detailEntry = { text: detail, isTail: false, agentStream: false };
   const detailLeads =
     evidence?.failureKind !== undefined &&
     !SHAPE_ONLY_FAILURE_KINDS.has(evidence.failureKind);
   const ordered = [
-    { text: evidence?.cause, isTail: false },
+    { text: evidence?.cause, isTail: false, agentStream: false },
     ...(detailLeads ? [detailEntry, ...tails] : [...tails, detailEntry]),
   ];
   return ordered.filter(
-    (candidate): candidate is { text: string; isTail: boolean } =>
+    (candidate): candidate is EvidenceCandidate =>
       typeof candidate.text === "string" && candidate.text.trim().length > 0,
   );
 }
@@ -857,6 +882,9 @@ export function deriveFailureMessage(params: {
 
   if (category === "provider") {
     for (const candidate of candidates) {
+      // The agent's stream is quoted below, never classified: see
+      // EvidenceCandidate.
+      if (candidate.agentStream) continue;
       const curated = classifyProviderFailure(
         candidate.text,
         candidate.isTail,

@@ -1548,6 +1548,44 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
+  // The poll's half of the chat message: a person moved the ticket and this
+  // pass recorded the stop, so the channel reads the sentence the ticket's
+  // comment opens with, not "workflow run was cancelled after the ticket left AI".
+  it("hands the stop sentence to the channel callback, once, from the pass that recorded the stop", async () => {
+    const STOPPED =
+      'The AI workflow stopped working on this ticket at 2026-09-23 12:56 UTC because the ticket was moved from "AI" to "Done". Nothing failed.';
+    const runRegistry = registry([entry()]);
+    const onCancelled = vi.fn();
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      stopAnnouncement: STOPPED,
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done")), onCancelled);
+
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+    expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run", STOPPED);
+  });
+
+  it("announces a stop the pass recorded even when it could not release the claim", async () => {
+    const STOPPED =
+      'The AI workflow stopped working on this ticket at 2026-09-23 12:56 UTC because the ticket was moved from "AI" to "Done". Nothing failed.';
+    const onCancelled = vi.fn();
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: false,
+      released: false,
+      tornDown: true,
+      stopAnnouncement: STOPPED,
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await reconcileRuns(new Set(), registry([entry()]), connected(issueTracker("Done")), onCancelled);
+
+    expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run", STOPPED);
+  });
+
   it("cancels an orphan under the subject its claim holds, not the one this pass's tracker derives", async () => {
     // The claim was taken while Linear was the tracker; this pass reads Jira.
     // `ticket:jira:PROJ-1`, derived again from the key, is a subject nobody
