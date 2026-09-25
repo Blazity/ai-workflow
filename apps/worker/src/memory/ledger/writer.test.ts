@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../../db/client.js";
-import { listRunMemoryEvents } from "../../db/repositories/memory-events.js";
+import { listMemoryEventHistory, listRunMemoryEvents } from "../../db/repositories/memory-events.js";
 import { getMemoryEntryState, memoryLedgerRepository } from "../../db/repositories/memory-entry-state.js";
 import { createTestDb } from "../../db/test-db.js";
 import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
 import type { KnownSecretsReader } from "../known-secrets.js";
-import { memoryLedgerWriter, type MemoryLedgerLog } from "./writer.js";
+import { MAX_MEMORY_LEDGER_DETAIL_BYTES, MAX_MEMORY_LEDGER_TEXT_BYTES, memoryLedgerWriter, type MemoryLedgerLog } from "./writer.js";
 
 let db: Db;
 let lines: Array<{ fields: Record<string, unknown>; message: string }>;
@@ -39,7 +40,8 @@ const failing = new Proxy({} as Db, {
 });
 
 const subject = "repo:github:acme/api";
-const base = { runId: "run-1", actor: "run" as const, subject, kind: "facts" as const, store: "builtin" };
+const base = { runId: "run-1", actor: "run" as const, subject, kind: "facts" as const, store: "builtin", occurredAt: new Date() };
+const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
 describe("memoryLedgerWriter.record", () => {
   it("stores texts without this deployment's secrets, and hashes the text as stored", async () => {
@@ -79,6 +81,31 @@ describe("memoryLedgerWriter.record", () => {
     expect(row).toMatchObject({ text: "Use pnpm", textHash: sha("use pnpm") });
   });
 
+  it("withholds the reason and every detail string but item ids and hashes when the secret set cannot be read", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: unreadable, log });
+
+    const outcome = await ledger.record([
+      {
+        ...base,
+        event: "rejected",
+        text: `key ${secret}`,
+        reason: `saw ${secret}`,
+        detail: { query: `q ${secret}`, count: 2, items: [{ entryId: "e1", layer: "core", text: `lost ${secret}` }] },
+      },
+    ]);
+
+    expect(outcome).toMatchObject({ ok: true, withheld: "unreadable" });
+    const [row] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(row).toMatchObject({ text: null, reason: null, textHash: sha(`key ${secret}`) });
+    expect(row!.detail).toEqual({
+      query: null,
+      count: 2,
+      textWithheld: "unreadable",
+      items: [{ entryId: "e1", layer: null, text: null, textHash: sha(`lost ${secret}`) }],
+    });
+    expect(JSON.stringify(row)).not.toContain(secret);
+  });
+
   it("records the event with its texts withheld when the secret set cannot be read, and says so", async () => {
     const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: unreadable, log });
 
@@ -112,7 +139,105 @@ describe("memoryLedgerWriter.record", () => {
 
     expect(outcome).toEqual({ ok: false });
     expect(lines).toHaveLength(1);
-    expect(lines[0]!.fields).toMatchObject({ runId: "run-1", events: ["added"], err: "connection reset" });
+    expect(lines[0]!.fields).toEqual({ runId: "run-1", events: ["added"], rows: 1, error: "Error" });
+  });
+
+  it("logs a failed write by the error's class, code and constraint, never by its message, which carries the texts", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+
+    // Names an event that does not exist: the database refuses the row.
+    const outcome = await ledger.record([
+      { ...base, event: "proposal_applied", refersTo: 424242, text: "The ACME contract ends in May", reason: "ACME renewal" },
+    ]);
+
+    expect(outcome).toEqual({ ok: false });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.fields).toMatchObject({
+      runId: "run-1",
+      events: ["proposal_applied"],
+      rows: 1,
+      code: "23503",
+      constraint: "memory_events_refers_to_memory_events_id_fk",
+    });
+    expect(JSON.stringify(lines)).not.toContain("ACME");
+  });
+
+  it("refuses a word outside the memory vocabulary with one log line, and writes nothing", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+
+    const outcome = await ledger.record([
+      { ...base, event: "added", text: "Use pnpm" },
+      { ...base, event: "remembered" as "added", source: "gossip" as "human", text: "Use npm" },
+    ]);
+
+    expect(outcome).toEqual({ ok: false });
+    expect(lines).toEqual([{ fields: expect.objectContaining({ runId: "run-1", unknown: ["event", "source"] }), message: expect.any(String) }]);
+    expect((await listRunMemoryEvents(db, "run-1")).events).toEqual([]);
+  });
+
+  it("takes a secret out even when a NUL splits it, and stores a lone surrogate as a replacement character", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(secret), log });
+    const split = `${secret.slice(0, 7)}\u0000${secret.slice(7)}`;
+
+    const outcome = await ledger.record([
+      { ...base, event: "added", text: `Deploy key ${split}` },
+      { ...base, event: "added", text: "emoji \ud83d cut", detail: { query: "ticket \udc00 cut" } },
+    ]);
+
+    expect(outcome).toMatchObject({ ok: true, duplicates: 0 });
+    const [redacted, surrogate] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(redacted).toMatchObject({ text: `Deploy key ${REDACTED}`, textHash: sha(`deploy key ${REDACTED}`.toLowerCase()) });
+    expect(surrogate).toMatchObject({ text: "emoji \ufffd cut", textHash: sha("emoji \ufffd cut"), detail: { query: "ticket \ufffd cut" } });
+  });
+
+  it("keeps a 300 KB text to 4 KiB on a character boundary, records its size, and hashes it whole", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+    const text = "\u20ac".repeat(100_000);
+
+    await ledger.record([{ ...base, event: "added", text, previousText: text, reason: text }]);
+
+    const [row] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(bytes(text)).toBe(300_000);
+    expect(row!.text).toBe("\u20ac".repeat(Math.floor(MAX_MEMORY_LEDGER_TEXT_BYTES / 3)));
+    expect(row!.previousText).toBe(row!.text);
+    expect(row!.reason).toBe(row!.text);
+    expect(row!.bytes).toBe(300_000);
+    expect(row!.textHash).toBe(sha(text));
+  });
+
+  it("cuts after taking secrets out, so no fragment of a secret survives at the cut", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(secret), log });
+    // The secret starts a few bytes before the cut and ends after it.
+    const text = `${"x".repeat(MAX_MEMORY_LEDGER_TEXT_BYTES - 6)}${secret} tail`;
+
+    await ledger.record([{ ...base, event: "added", text, detail: { items: [{ entryId: "e1", text }] } }]);
+
+    const [row] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(bytes(row!.text!)).toBeLessThanOrEqual(MAX_MEMORY_LEDGER_TEXT_BYTES);
+    expect(row!.text).toBe(`${"x".repeat(MAX_MEMORY_LEDGER_TEXT_BYTES - 6)}${REDACTED.slice(0, 6)}`);
+    expect(row!.textHash).toBe(sha(`${"x".repeat(MAX_MEMORY_LEDGER_TEXT_BYTES - 6)}${REDACTED} tail`.toLowerCase()));
+    expect(JSON.stringify(row)).not.toContain(secret.slice(0, 3));
+  });
+
+  it("keeps a 1 MB detail to 32 KiB: its first items in order, and a count of the rest", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+    const items = Array.from({ length: 5000 }, (_, index) => ({ entryId: `e${index}`, text: `fact number ${index} `.padEnd(180, "x") }));
+    expect(bytes(JSON.stringify({ items }))).toBeGreaterThan(1_000_000);
+
+    const outcome = await ledger.record([{ ...base, event: "recalled", detail: { ranked: true, items } }]);
+
+    expect(outcome).toMatchObject({ ok: true });
+    const [row] = (await listRunMemoryEvents(db, "run-1")).events;
+    const kept = row!.detail.items!;
+    // Measured by the database, as a reader of the column gets it.
+    const printed = await db.execute(sql`SELECT octet_length(detail::text) AS size FROM memory_events WHERE id = ${row!.id}`);
+    const size = Number((printed as unknown as { rows: Array<{ size: number }> }).rows[0]!.size);
+    expect(size).toBeLessThanOrEqual(MAX_MEMORY_LEDGER_DETAIL_BYTES);
+    expect(size).toBeGreaterThan(MAX_MEMORY_LEDGER_DETAIL_BYTES - 400);
+    expect(kept.length).toBeGreaterThan(50);
+    expect(kept.map((item) => item.entryId)).toEqual(items.slice(0, kept.length).map((item) => item.entryId));
+    expect(kept[0]).toEqual({ entryId: "e0", text: items[0]!.text, textHash: sha(items[0]!.text) });
+    expect(row!.detail).toMatchObject({ ranked: true, omittedItems: 5000 - kept.length });
   });
 
   it("never throws when no database can be reached at all", async () => {
@@ -221,6 +346,68 @@ describe("memoryLedgerWriter entry state", () => {
     expect(stored!.openDisputes[0]!.reason).toBe(`token ${REDACTED} fails`);
   });
 
+  it("cleans an added dispute's reason and appends it to the disputes as stored", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(secret), log });
+    const first = { runId: "run-0", ticketKey: null, outcome: "failed", evidence: "claimed", reason: "first" };
+    await ledger.recordEntryState({
+      subject,
+      kind: "facts",
+      text: "Use pnpm",
+      create: { openDisputes: [first] },
+      events: [{ ...base, event: "disputed" }],
+    });
+
+    await ledger.changeEntryState({
+      target: { subject, kind: "facts", text: "Use pnpm" },
+      change: {
+        addOpenDisputes: [{ runId: "run-2", ticketKey: null, outcome: "failed", evidence: "claimed", reason: `token ${secret}` }],
+      },
+      events: [{ ...base, runId: "run-2", event: "disputed" }],
+    });
+
+    const stored = await getMemoryEntryState(db, { alias: { subject, kind: "facts", textHash: sha("use pnpm") } });
+    expect(stored!.openDisputes.map((dispute) => dispute.reason)).toEqual(["first", `token ${REDACTED}`]);
+  });
+
+  it("logs a state write refused for a version it did not read or a text another entry answers to, one line each, without a text", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+    await ledger.recordEntryState({ subject, kind: "facts", text: "Use pnpm", events: [{ ...base, event: "added", text: "Use pnpm" }] });
+    await ledger.recordEntryState({ subject, kind: "facts", text: "Use npm", events: [{ ...base, event: "added", text: "Use npm" }] });
+
+    const stale = await ledger.changeEntryState({
+      target: { subject, kind: "facts", text: "Use pnpm" },
+      expectedVersion: 7,
+      change: { pinned: true },
+      events: [{ ...base, event: "pinned" }],
+    });
+    const taken = await ledger.changeEntryState({
+      target: { subject, kind: "facts", text: "Use pnpm" },
+      moveTo: { text: "Use npm" },
+      events: [{ ...base, event: "updated", text: "Use npm", previousText: "Use pnpm" }],
+    });
+
+    expect(stale).toMatchObject({ ok: true, applied: false, why: "version_mismatch" });
+    expect(taken).toMatchObject({ ok: true, applied: false, why: "alias_taken" });
+    expect(lines.map((line) => line.fields.why)).toEqual(["version_mismatch", "alias_taken"]);
+    expect(JSON.stringify(lines)).not.toContain("npm");
+  });
+
+  it("refuses a state write with a word outside the vocabulary", async () => {
+    const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
+
+    const outcome = await ledger.recordEntryState({
+      subject,
+      kind: "facts",
+      text: "Use pnpm",
+      create: { topic: "billing" as "other" },
+      events: [{ ...base, event: "classified" }],
+    });
+
+    expect(outcome).toEqual({ ok: false });
+    expect(lines[0]!.fields).toMatchObject({ unknown: ["topic"] });
+    expect(await getMemoryEntryState(db, { alias: { subject, kind: "facts", textHash: sha("use pnpm") } })).toBeNull();
+  });
+
   it("still writes a state change when the secret set cannot be read, with every text withheld", async () => {
     const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: unreadable, log });
 
@@ -279,7 +466,7 @@ describe("memoryLedgerWriter entry state", () => {
 });
 
 describe("memoryLedgerWriter.forget", () => {
-  it("forgets a text by its normalised hash, blanking every row that held it and deleting its state", async () => {
+  it("forgets a text by its normalised hash on its subject, blanking the rows that held it and deleting its state", async () => {
     const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
     await ledger.recordEntryState({
       subject,
@@ -288,6 +475,7 @@ describe("memoryLedgerWriter.forget", () => {
       create: {},
       events: [{ ...base, event: "added", text: "The staging password is hunter2" }],
     });
+    await ledger.record([{ ...base, runId: "run-org", subject: "org:acme", event: "added", text: "The staging password is hunter2" }]);
 
     const outcome = await ledger.forget({
       subject,
@@ -296,8 +484,14 @@ describe("memoryLedgerWriter.forget", () => {
       runId: null,
       store: "builtin",
     });
+    // A run that read the text before the forget records it late.
+    await ledger.record([{ ...base, event: "recalled", detail: { items: [{ entryId: "b-1", text: "The staging password is hunter2" }] } }]);
 
-    expect(outcome).toMatchObject({ ok: true, applied: true, blanked: 1 });
+    expect(outcome).toMatchObject({ ok: true, applied: true, blanked: 1, alsoHeldIn: ["org:acme"] });
+    const [, late] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(late!.detail.items).toEqual([{ entryId: "b-1", text: null, textHash: sha("the staging password is hunter2") }]);
+    const tombstone = (await listMemoryEventHistory(db, { subject })).events.find((row) => row.event === "removed");
+    expect(tombstone).toMatchObject({ event: "removed", reason: "forgotten", text: null, textHash: sha("the staging password is hunter2") });
     const [added] = (await listRunMemoryEvents(db, "run-1")).events;
     expect(added).toMatchObject({ text: null, textHash: sha("the staging password is hunter2") });
     expect(

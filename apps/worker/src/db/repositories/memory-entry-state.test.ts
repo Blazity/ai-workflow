@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../client.js";
 import { createTestDb } from "../test-db.js";
@@ -9,7 +10,7 @@ import {
   recordMemoryEntryState,
   type MemoryEntryStateValues,
 } from "./memory-entry-state.js";
-import { listRunMemoryEvents, type MemoryEventRecord } from "./memory-events.js";
+import { forgetMemoryText, listRunMemoryEvents, type MemoryEventRecord } from "./memory-events.js";
 
 let db: Db;
 
@@ -95,7 +96,8 @@ describe("recordMemoryEntryState", () => {
       recordMemoryEntryState(db, {
         alias,
         create: learned,
-        events: [event(), event({ event: "remembered" as MemoryEventRecord["event"] })],
+        // A negative size: the table refuses the row.
+        events: [event(), event({ event: "added", bytes: -1 })],
       }),
     ).rejects.toThrow();
 
@@ -146,6 +148,87 @@ describe("recordMemoryEntryState", () => {
     expect(again).toEqual({ applied: false, why: "duplicate", storedVersion: 1 });
     expect(await getMemoryEntryState(db, { alias })).toMatchObject({ topic: "commands", version: 1 });
     expect(await runEvents()).toHaveLength(1);
+  });
+});
+
+describe("store ids", () => {
+  it("keeps the stored id when a second id is offered for the same store, says so, and fills a store it lacks", async () => {
+    await recordMemoryEntryState(db, { alias, create: { ...learned, storeIds: { mem0: "m-a1" } }, events: [event()] });
+
+    // A second run learned the same entry in another spelling; Mem0 gave it another id.
+    const second = await recordMemoryEntryState(db, {
+      alias,
+      create: { ...learned, storeIds: { mem0: "m-b1", builtin: "b-1" } },
+      events: [event({ runId: "run-2", event: "added" })],
+    });
+
+    expect(second).toMatchObject({
+      applied: true,
+      storeIdConflicts: [{ store: "mem0", kept: "m-a1", offered: "m-b1" }],
+    });
+    expect((await getMemoryEntryState(db, { alias }))!.storeIds).toEqual({ mem0: "m-a1", builtin: "b-1" });
+  });
+});
+
+describe("a write that raced another to its dedupe key", () => {
+  /** The error Postgres answers when a concurrent write recorded the same
+   *  (run, dedupe key) between this statement's check and its insert: taken
+   *  from a real unique violation on the index, so its shape is the driver's. */
+  async function dedupeRaceError(): Promise<unknown> {
+    const other = await createTestDb();
+    try {
+      await other.execute(sql`INSERT INTO memory_events (event, run_id, actor, dedupe_key)
+        VALUES ('added', 'run-1', 'run', 'k'), ('added', 'run-1', 'run', 'k')`);
+    } catch (error) {
+      return error;
+    }
+    throw new Error("setup: no unique violation");
+  }
+
+  function failingWith(error: unknown): Db {
+    return new Proxy(db, {
+      get(object, property, receiver) {
+        if (property === "execute") return () => Promise.reject(error);
+        const value = Reflect.get(object, property, receiver) as unknown;
+        return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(object) : value;
+      },
+    });
+  }
+
+  it("is reported as a duplicate, not a failure, by every state write and a forget", async () => {
+    const raced = failingWith(await dedupeRaceError());
+
+    await expect(recordMemoryEntryState(raced, { alias, create: learned, events: [event({ dedupeKey: "k" })] })).resolves.toEqual({
+      applied: false,
+      why: "duplicate",
+      storedVersion: null,
+    });
+    await expect(
+      changeMemoryEntryState(raced, { target: { alias }, change: { pinned: true }, events: [event({ event: "pinned", dedupeKey: "k" })] }),
+    ).resolves.toEqual({ applied: false, why: "duplicate", storedVersion: null });
+    await expect(
+      forgetMemoryText(raced, {
+        textHash: alias.textHash,
+        subject,
+        events: [event({ event: "removed", reason: "forgotten", dedupeKey: "k" })],
+      }),
+    ).resolves.toEqual({ applied: false, why: "duplicate" });
+  });
+
+  it("still fails on any other refusal", async () => {
+    const refused = failingWith(Object.assign(new Error("check"), { cause: { code: "23514", constraint: "memory_events_text_hashed_check" } }));
+
+    await expect(recordMemoryEntryState(refused, { alias, create: learned, events: [event()] })).rejects.toThrow("check");
+  });
+
+  it("refuses a write whose own events share a dedupe key, which would otherwise read as a race", async () => {
+    await expect(
+      recordMemoryEntryState(db, {
+        alias,
+        create: learned,
+        events: [event({ dedupeKey: "k" }), event({ event: "added", dedupeKey: "k" })],
+      }),
+    ).rejects.toThrow("share a dedupe key");
   });
 });
 
@@ -263,6 +346,44 @@ describe("changeMemoryEntryState", () => {
 
     expect(missing).toEqual({ applied: false, why: "not_found", storedVersion: null });
     expect(await runEvents()).toEqual([]);
+  });
+
+  it("keeps both of two disputes written at once, with both events, and counts both relearnings", async () => {
+    const entryKey = await created();
+    const dispute = (runId: string) => ({ runId, ticketKey: null, outcome: "failed", evidence: "claimed", reason: "no" });
+
+    const written = await Promise.all(
+      ["run-a", "run-b"].map((runId) =>
+        changeMemoryEntryState(db, {
+          target: { entryKey },
+          change: { status: "disputed", addOpenDisputes: [dispute(runId)], addRelearnedUnseen: 1 },
+          events: [event({ event: "disputed", runId })],
+        }),
+      ),
+    );
+
+    expect(written.map((outcome) => outcome.applied)).toEqual([true, true]);
+    const stored = (await getMemoryEntryState(db, { entryKey }))!;
+    expect(stored.openDisputes.map((open) => open.runId).sort()).toEqual(["run-a", "run-b"]);
+    expect(stored.relearnedUnseen).toBe(2);
+    expect([...(await runEvents("run-a")), ...(await runEvents("run-b"))].map((row) => row.event)).toEqual([
+      "disputed",
+      "disputed",
+    ]);
+  });
+
+  it("adds no second dispute for a run that already has one open", async () => {
+    const entryKey = await created();
+    const dispute = { runId: "run-a", ticketKey: null, outcome: "failed", evidence: "claimed", reason: "first" };
+    await changeMemoryEntryState(db, { target: { entryKey }, change: { addOpenDisputes: [dispute] }, events: [event({ event: "disputed" })] });
+
+    await changeMemoryEntryState(db, {
+      target: { entryKey },
+      change: { addOpenDisputes: [{ ...dispute, reason: "again" }] },
+      events: [event({ event: "disputed", runId: "run-a2" })],
+    });
+
+    expect((await getMemoryEntryState(db, { entryKey }))!.openDisputes).toEqual([dispute]);
   });
 
   it("restamps status_since only when the status actually changes", async () => {

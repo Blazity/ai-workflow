@@ -1,8 +1,10 @@
+import { canonicalSubjectKey } from "@shared/contracts";
 import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, lt, notExists, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../client.js";
 import { memoryEntryState } from "../memory-entry-state-schema.js";
 import { memoryEvents } from "../memory-events-schema.js";
+import { storable } from "../memory-storable.js";
 import {
   MEMORY_PROPOSAL_RESOLUTIONS,
   type MemoryEventActor,
@@ -16,10 +18,12 @@ import {
 
 /**
  * The memory ledger's rows, written and read. Callers go through
- * `memory/ledger` (by `memoryLedgerRepository` in `./memory-entry-state.ts`), which cleans the texts of this deployment's secrets on the
- * way in and on the way out and computes the text hashes; this module stores
- * what it is given, minus NUL characters, which Postgres refuses in text and
- * in JSON alike.
+ * `memory/ledger` (by `memoryLedgerRepository` in `./memory-entry-state.ts`),
+ * which checks the words, cleans the texts of this deployment's secrets on the
+ * way in and on the way out, caps them and computes the text hashes; this
+ * module stores what it is given, made storable again as a backstop
+ * (`../memory-storable.ts`), with subjects and pull request keys in their one
+ * spelling (`canonicalSubjectKey`).
  *
  * Every write is ONE statement: production runs neon-http, which cannot open a
  * transaction (`db/client.ts`).
@@ -44,6 +48,7 @@ export interface MemoryEventRecord {
   readonly previousTextHash?: string | null;
   readonly reason?: string | null;
   readonly ticketKey?: string | null;
+  /** The pull request's subject key (`prSubjectKey`). */
   readonly prRef?: string | null;
   readonly invocationKey?: string | null;
   readonly dedupeKey?: string | null;
@@ -52,6 +57,10 @@ export interface MemoryEventRecord {
   readonly area?: string | null;
   readonly bytes?: number | null;
   readonly detail?: MemoryEventDetail;
+  /** When it happened (the store call, the recall); the time of the write
+   *  when omitted. A forget blanks the texts of a row that occurred before it,
+   *  however late that row is written. */
+  readonly occurredAt?: Date | null;
 }
 
 export type StoredMemoryEvent = typeof memoryEvents.$inferSelect;
@@ -72,17 +81,9 @@ export interface AppendMemoryEventsResult {
 const DEFAULT_MEMORY_EVENT_PAGE = 50;
 const MAX_MEMORY_EVENT_PAGE = 200;
 
-/** Postgres refuses NUL in a text value and in JSON, so memory rows drop it:
- *  from every string, and every key, of the value. */
-export function withoutNul<T>(value: T): T {
-  if (typeof value === "string") return value.replaceAll("\u0000", "") as T;
-  if (Array.isArray(value)) return value.map((item) => withoutNul(item)) as T;
-  if (value !== null && typeof value === "object" && !(value instanceof Date)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [withoutNul(key), withoutNul(item)]),
-    ) as T;
-  }
-  return value;
+/** A subject or pull request key in the spelling the ledger stores and matches. */
+export function canonicalMemorySubject<T extends string | null | undefined>(key: T): T {
+  return (typeof key === "string" ? canonicalSubjectKey(key) : key) as T;
 }
 
 /** The hash of every text the row holds: what a forget looks it up by. */
@@ -100,11 +101,23 @@ function heldTextHashes(record: MemoryEventRecord): string[] {
   return [...hashes];
 }
 
+/** Items may name their own subject (a recall across a repository and its
+ *  organisation); it is matched in the same spelling as the row's. */
+function withCanonicalItemSubjects(detail: MemoryEventDetail | undefined): MemoryEventDetail {
+  if (detail?.items === undefined) return detail ?? {};
+  return {
+    ...detail,
+    items: detail.items.map((item) =>
+      item && typeof item.subject === "string" ? { ...item, subject: canonicalSubjectKey(item.subject) } : item,
+    ),
+  };
+}
+
 /** The records as one JSON array in the column names the recordset reads. */
 function recordsetJson(records: readonly MemoryEventRecord[]): string {
   return JSON.stringify(
     records.map((input, position) => {
-      const record = withoutNul(input);
+      const record = storable(input);
       return {
         position,
         event: record.event,
@@ -112,7 +125,7 @@ function recordsetJson(records: readonly MemoryEventRecord[]): string {
         actor: record.actor,
         source: record.source ?? null,
         store: record.store ?? null,
-        subject: record.subject ?? null,
+        subject: canonicalMemorySubject(record.subject ?? null),
         kind: record.kind ?? null,
         entry_id: record.entryId ?? null,
         entry_key: record.entryKey ?? null,
@@ -123,14 +136,15 @@ function recordsetJson(records: readonly MemoryEventRecord[]): string {
         text_hashes: heldTextHashes(record),
         reason: record.reason ?? null,
         ticket_key: record.ticketKey ?? null,
-        pr_ref: record.prRef ?? null,
+        pr_ref: canonicalMemorySubject(record.prRef ?? null),
         invocation_key: record.invocationKey ?? null,
         dedupe_key: record.dedupeKey ?? null,
         refers_to: record.refersTo ?? null,
         topic: record.topic ?? null,
         area: record.area ?? null,
         bytes: record.bytes ?? null,
-        detail: record.detail ?? {},
+        detail: withCanonicalItemSubjects(record.detail),
+        occurred_at: input.occurredAt ? input.occurredAt.toISOString() : null,
       };
     }),
   );
@@ -149,53 +163,159 @@ export function incomingMemoryEvents(records: readonly MemoryEventRecord[]): SQL
       entry_id text, entry_key uuid, text text, text_hash text, previous_text text,
       previous_text_hash text, text_hashes text[], reason text, ticket_key text, pr_ref text,
       invocation_key text, dedupe_key text, refers_to bigint, topic text, area text,
-      bytes integer, detail jsonb
+      bytes integer, detail jsonb, occurred_at timestamptz
     )`;
 }
 
 /** Whether none of the incoming events is already recorded under its
- *  (run, dedupe key). `incoming` names a CTE built from
- *  `incomingMemoryEvents`. */
+ *  (run, dedupe key), or (actor, dedupe key) without a run. `incoming` names a
+ *  CTE built from `incomingMemoryEvents`. */
 export function noneAlreadyRecorded(incoming: SQL): SQL {
   return sql`NOT EXISTS (
     SELECT 1
     FROM ${memoryEvents} AS recorded
     JOIN ${incoming} AS incoming_event
-      ON coalesce(recorded.run_id, '') = coalesce(incoming_event.run_id, '')
+      ON coalesce(recorded.run_id, recorded.actor) = coalesce(incoming_event.run_id, incoming_event.actor)
      AND recorded.dedupe_key = incoming_event.dedupe_key
     WHERE recorded.dedupe_key IS NOT NULL
   )`;
 }
 
-/** The ledger columns an append writes, in the order the SELECTs below fill. */
-export const MEMORY_EVENT_INSERT_COLUMNS = sql.raw(`(
-  event, run_id, actor, source, store, subject, kind, entry_id, entry_key, text, text_hash,
-  previous_text, previous_text_hash, text_hashes, reason, ticket_key, pr_ref, invocation_key,
-  dedupe_key, refers_to, topic, area, bytes, detail
-)`);
+/** The earliest time any incoming event occurred: what a state write is
+ *  compared with a forget by. `incoming` names a CTE built from
+ *  `incomingMemoryEvents`. */
+export function earliestOccurrence(incoming: SQL): SQL {
+  return sql`(SELECT min(coalesce(occurred_at, now())) FROM ${incoming})`;
+}
+
+/**
+ * Whether a forget recorded after `occurredAt` covers the text with this hash
+ * on this subject and kind: its tombstone, the forget's own `removed` row with
+ * reason `forgotten`. A null subject or kind is covered by a forget on any, as
+ * the forget itself blanked such rows.
+ */
+export function forgottenAfter(subject: SQL, kind: SQL, textHash: SQL, occurredAt: SQL): SQL {
+  return sql`EXISTS (
+    SELECT 1
+    FROM ${memoryEvents} AS tombstone
+    WHERE tombstone.event = 'removed'
+      AND tombstone.reason = 'forgotten'
+      AND tombstone.subject = coalesce(${subject}, tombstone.subject)
+      AND tombstone.text_hash = ${textHash}
+      AND (tombstone.kind IS NULL OR coalesce(${kind}, tombstone.kind) = tombstone.kind)
+      AND tombstone.at > ${occurredAt}
+  )`;
+}
+
+/**
+ * The one INSERT every append goes through. `rows` is a SELECT with the
+ * columns of `incomingMemoryEvents`, resolved to what is stored. Every text,
+ * previous text and item text that a later forget covers (`forgottenAfter`) is
+ * stored blank, with `text_blanked_at` set: a run that read a text before an
+ * admin forgot it cannot write the words back by appending late.
+ */
+export function insertMemoryEvents(rows: SQL, onConflict: SQL = sql``): SQL {
+  const occurred = sql`coalesce(resolved.occurred_at, now())`;
+  return sql`
+    INSERT INTO ${memoryEvents} (
+      event, run_id, actor, source, store, subject, kind, entry_id, entry_key, text, text_hash,
+      previous_text, previous_text_hash, text_hashes, reason, ticket_key, pr_ref, invocation_key,
+      dedupe_key, refers_to, topic, area, bytes, detail, occurred_at, text_blanked_at
+    )
+    SELECT
+      resolved.event, resolved.run_id, resolved.actor, resolved.source, resolved.store,
+      resolved.subject, resolved.kind, resolved.entry_id, resolved.entry_key,
+      CASE WHEN screen.text_gone THEN NULL ELSE resolved.text END,
+      resolved.text_hash,
+      CASE WHEN screen.previous_text_gone THEN NULL ELSE resolved.previous_text END,
+      resolved.previous_text_hash, resolved.text_hashes, resolved.reason, resolved.ticket_key,
+      resolved.pr_ref, resolved.invocation_key, resolved.dedupe_key, resolved.refers_to,
+      resolved.topic, resolved.area, resolved.bytes,
+      CASE WHEN screen.items_gone THEN jsonb_set(resolved.detail, '{items}', screen.items)
+        ELSE resolved.detail END,
+      ${occurred},
+      CASE WHEN screen.text_gone OR screen.previous_text_gone OR screen.items_gone THEN now() END
+    FROM (${rows}) AS resolved
+    CROSS JOIN LATERAL (
+      SELECT
+        resolved.text IS NOT NULL
+          AND ${forgottenAfter(sql`resolved.subject`, sql`resolved.kind`, sql`resolved.text_hash`, occurred)}
+          AS text_gone,
+        resolved.previous_text IS NOT NULL
+          AND ${forgottenAfter(sql`resolved.subject`, sql`resolved.kind`, sql`resolved.previous_text_hash`, occurred)}
+          AS previous_text_gone,
+        coalesce(bool_or(listed.gone), false) AS items_gone,
+        coalesce(jsonb_agg(
+          CASE WHEN listed.gone THEN jsonb_set(listed.item, '{text}', 'null'::jsonb) ELSE listed.item END
+          ORDER BY listed.position
+        ), '[]'::jsonb) AS items
+      FROM (
+        SELECT
+          element.item,
+          element.position,
+          coalesce(jsonb_typeof(element.item -> 'text') = 'string', false)
+            AND ${forgottenAfter(
+              sql`coalesce(element.item ->> 'subject', resolved.subject)`,
+              sql`coalesce(element.item ->> 'kind', resolved.kind)`,
+              sql`element.item ->> 'textHash'`,
+              occurred,
+            )} AS gone
+        FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(resolved.detail -> 'items') = 'array'
+            THEN resolved.detail -> 'items' ELSE '[]'::jsonb END
+        ) WITH ORDINALITY AS element(item, position)
+      ) AS listed
+    ) AS screen
+    ORDER BY resolved.position
+    ${onConflict}
+    RETURNING id`;
+}
+
+/**
+ * Whether a write failed because another write recorded one of its events
+ * first: the race the up-front `noneAlreadyRecorded` cannot see, answered by
+ * the unique index. Read from the driver's error, which drizzle wraps in its
+ * own (`cause`).
+ */
+export function isDedupeRace(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== null && typeof current === "object"; depth += 1) {
+    const { code, constraint, cause } = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (code === "23505" && constraint === "memory_events_dedupe_unique") return true;
+    current = cause;
+  }
+  return false;
+}
+
+/** A write whose own events share a dedupe key would fail on the unique
+ *  index and read as a race it is not, so it is refused before it is sent. */
+export function requireDistinctDedupeKeys(records: readonly MemoryEventRecord[]): void {
+  const seen = new Set<string>();
+  for (const record of records) {
+    if (record.dedupeKey == null) continue;
+    const key = JSON.stringify([record.runId ?? record.actor, record.dedupeKey]);
+    if (seen.has(key)) throw new Error("two events of one memory write share a dedupe key");
+    seen.add(key);
+  }
+}
 
 /**
  * Append events, one statement for the whole call. An event whose
  * (run, dedupe key) is already recorded is skipped and counted, the rest are
- * written; a row the table refuses (an unknown event word, a text without a
- * hash) fails the whole call and writes none of it.
+ * written; a row the table refuses (a text without a hash, a detail that is
+ * not an object) fails the whole call and writes none of it.
  */
 export async function appendMemoryEvents(
   db: Db,
   records: readonly MemoryEventRecord[],
 ): Promise<AppendMemoryEventsResult> {
   if (records.length === 0) return { ids: [], duplicates: 0 };
-  const result = await db.execute(sql`
-    INSERT INTO ${memoryEvents} ${MEMORY_EVENT_INSERT_COLUMNS}
-    SELECT
-      event, run_id, actor, source, store, subject, kind, entry_id, entry_key, text, text_hash,
-      previous_text, previous_text_hash, text_hashes, reason, ticket_key, pr_ref, invocation_key,
-      dedupe_key, refers_to, topic, area, bytes, detail
-    FROM (${incomingMemoryEvents(records)}) AS incoming_event
-    ORDER BY position
-    ON CONFLICT ((coalesce(run_id, '')), dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-    RETURNING id
-  `);
+  const result = await db.execute(
+    insertMemoryEvents(
+      incomingMemoryEvents(records),
+      sql`ON CONFLICT ((coalesce(run_id, actor)), dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+    ),
+  );
   const ids = rawRows<{ id: number | string }>(result)
     .map((row) => Number(row.id))
     .sort((left, right) => left - right);
@@ -260,7 +380,9 @@ export async function listMemoryEventHistory(
     .from(memoryEvents)
     .where(
       and(
-        query.subject === undefined ? undefined : eq(memoryEvents.subject, query.subject),
+        query.subject === undefined
+          ? undefined
+          : eq(memoryEvents.subject, canonicalMemorySubject(query.subject)),
         query.entryKey === undefined ? undefined : eq(memoryEvents.entryKey, query.entryKey),
         query.textHash === undefined
           ? undefined
@@ -278,7 +400,7 @@ export async function listMemoryEventHistory(
 
 /** `%`, `_` and the escape itself, taken literally in an ILIKE pattern. */
 function containsPattern(fragment: string): string {
-  return `%${withoutNul(fragment).replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+  return `%${storable(fragment).replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
 /**
@@ -310,7 +432,9 @@ export async function searchMemoryEvents(
             WHERE item ->> 'text' ILIKE ${pattern}
           )`,
         ),
-        query.subject === undefined ? undefined : eq(memoryEvents.subject, query.subject),
+        query.subject === undefined
+          ? undefined
+          : eq(memoryEvents.subject, canonicalMemorySubject(query.subject)),
         query.before === undefined ? undefined : lt(memoryEvents.id, query.before),
       ),
     )
@@ -324,7 +448,9 @@ const resolution = alias(memoryEvents, "resolution");
 /**
  * The query behind `listPendingMemoryProposals`, exported so a test can ask
  * the planner how it runs: the proposals recorded for one pull request that no
- * resolution names yet.
+ * resolution names yet. The key is matched in `canonicalSubjectKey`'s
+ * spelling, so a webhook's `Blazity/Fixture` finds what a pasted URL's
+ * `blazity/fixture` recorded.
  */
 export function pendingMemoryProposalsQuery(db: Db, prRef: string) {
   return db
@@ -332,7 +458,7 @@ export function pendingMemoryProposalsQuery(db: Db, prRef: string) {
     .from(memoryEvents)
     .where(
       and(
-        eq(memoryEvents.prRef, prRef),
+        eq(memoryEvents.prRef, canonicalMemorySubject(prRef)),
         eq(memoryEvents.event, "proposed"),
         notExists(
           db
@@ -366,22 +492,27 @@ export async function listPendingMemoryProposals(
 export interface ForgetMemoryTextInput {
   /** The normalised text hash of what is forgotten. */
   readonly textHash: string;
-  /** The subject the entry is forgotten on: its state rows there are deleted. */
+  /** The subject the text is forgotten on: only its rows are blanked and only
+   *  its state rows are deleted. */
   readonly subject: string;
-  /** Only this kind's state row; both when omitted. */
+  /** Only this kind; every kind when omitted. */
   readonly kind?: MemoryStateKind;
-  /** The forget's own rows (`removed`, reason `forgotten`). They never hold a
-   *  text, whatever is passed: their texts are dropped before the write. */
+  /** The forget's own rows, each `removed` with reason `forgotten`: the
+   *  tombstones. Their subject, kind and hash are the forget's, and they never
+   *  hold a text, whatever is passed. */
   readonly events: readonly MemoryEventRecord[];
 }
 
 export type ForgetMemoryTextResult =
   | {
       readonly applied: true;
-      /** Rows whose text, previous text or a detail item was blanked. */
+      /** Rows whose text, previous text, reason or a detail item was blanked. */
       readonly blanked: number;
       readonly removedEntryKeys: string[];
       readonly eventIds: number[];
+      /** Other subjects whose entry state or ledger still holds the text, so
+       *  it can be forgotten there too. */
+      readonly alsoHeldIn: string[];
     }
   | { readonly applied: false; readonly why: "duplicate" };
 
@@ -406,34 +537,65 @@ function withoutTexts(record: MemoryEventRecord): MemoryEventRecord {
 }
 
 /**
- * Forget a text: in ONE statement, blank it in every ledger row that holds it
- * (as text, previous text or a detail item, on any subject, since the text is
- * what was forgotten), delete the entry's state rows on the subject, and
- * record the forget. The hashes stay, so the history still says what happened
- * and when, without the words. This blanking is the only change the ledger
- * ever makes to a row it holds.
+ * Forget a text on one subject, in ONE statement:
  *
- * A row appended after this statement is not touched: the same text learned
- * again later is a new event, recorded as such. When one of the forget's rows
- * is already recorded under its dedupe key, nothing happens at all.
+ * - blank it where that subject's ledger holds it (as text, previous text or a
+ *   detail item whose own subject, or else the row's, is this one; of this
+ *   kind when one is given). A row or item without a subject or kind is
+ *   blanked too: nothing shows it belongs elsewhere;
+ * - on every row about an entry whose state is deleted here (by its key),
+ *   blank every text, previous text, item text and the reason, whatever text
+ *   they hold: that entry's history keeps what happened, not its words;
+ * - delete the entry's state rows on the subject;
+ * - record the forget, whose row is the tombstone that blanks the same texts
+ *   in any row appended later about something that occurred before it.
+ *
+ * Other subjects keep their own history; `alsoHeldIn` names those that still
+ * hold the text. When one of the forget's rows is already recorded under its
+ * dedupe key, nothing happens at all.
  */
 export async function forgetMemoryText(
   db: Db,
   input: ForgetMemoryTextInput,
 ): Promise<ForgetMemoryTextResult> {
   if (input.events.length === 0) throw new Error("a forget needs at least one event");
+  if (input.events.some((record) => record.event !== "removed" || record.reason !== "forgotten")) {
+    throw new Error("a forget's rows are `removed` with reason `forgotten`");
+  }
+  requireDistinctDedupeKeys(input.events);
   const hash = sql`${input.textHash}::text`;
-  const result = await db.execute(sql`
+  const subject = sql`${canonicalMemorySubject(input.subject)}::text`;
+  const kind = sql`${input.kind ?? null}::text`;
+  const rowInScope = sql`coalesce(held.subject, ${subject}) = ${subject}
+    AND (${kind} IS NULL OR coalesce(held.kind, ${kind}) = ${kind})`;
+  const itemInScope = (item: SQL) => sql`coalesce(${item} ->> 'subject', held.subject, ${subject}) = ${subject}
+    AND (${kind} IS NULL OR coalesce(${item} ->> 'kind', held.kind, ${kind}) = ${kind})`;
+  const heldItems = sql`jsonb_array_elements(
+    CASE WHEN jsonb_typeof(held.detail -> 'items') = 'array' THEN held.detail -> 'items' ELSE '[]'::jsonb END)`;
+  const keyed = sql`coalesce(held.entry_key = ANY(forgotten_keys.keys), false)`;
+  const holdsWords = sql`(held.text IS NOT NULL OR held.previous_text IS NOT NULL OR held.reason IS NOT NULL
+    OR EXISTS (SELECT 1 FROM ${heldItems} AS listed(item) WHERE jsonb_typeof(listed.item -> 'text') = 'string'))`;
+  const run = async () =>
+    db.execute(sql`
     WITH incoming_event AS (${incomingMemoryEvents(input.events.map(withoutTexts))}),
     fresh AS (SELECT ${noneAlreadyRecorded(sql`incoming_event`)} AS ok),
+    forgotten AS (
+      SELECT entry_key FROM ${memoryEntryState}
+      WHERE text_hash = ${hash} AND subject = ${subject} AND (${kind} IS NULL OR kind = ${kind})
+    ),
+    forgotten_keys AS (SELECT array_agg(entry_key) AS keys FROM forgotten),
     blanked AS (
       UPDATE ${memoryEvents} AS held SET
-        text = CASE WHEN held.text_hash = ${hash} THEN NULL ELSE held.text END,
-        previous_text = CASE WHEN held.previous_text_hash = ${hash} THEN NULL ELSE held.previous_text END,
+        text = CASE WHEN ${keyed} OR (held.text_hash = ${hash} AND ${rowInScope})
+          THEN NULL ELSE held.text END,
+        previous_text = CASE WHEN ${keyed} OR (held.previous_text_hash = ${hash} AND ${rowInScope})
+          THEN NULL ELSE held.previous_text END,
+        reason = CASE WHEN ${keyed} THEN NULL ELSE held.reason END,
         detail = CASE WHEN jsonb_typeof(held.detail -> 'items') = 'array'
           THEN jsonb_set(held.detail, '{items}', (
             SELECT coalesce(jsonb_agg(
-              CASE WHEN listed.item ->> 'textHash' = ${hash}
+              CASE WHEN listed.item ? 'text'
+                  AND (${keyed} OR (listed.item ->> 'textHash' = ${hash} AND ${itemInScope(sql`listed.item`)}))
                 THEN jsonb_set(listed.item, '{text}', 'null'::jsonb) ELSE listed.item END
               ORDER BY listed.position
             ), '[]'::jsonb)
@@ -441,50 +603,79 @@ export async function forgetMemoryText(
           ))
           ELSE held.detail END,
         text_blanked_at = now()
-      FROM fresh
-      WHERE fresh.ok AND held.text_hashes @> ARRAY[${hash}]
+      FROM fresh, forgotten_keys
+      WHERE fresh.ok
+        AND (
+          (${keyed} AND ${holdsWords})
+          OR (held.text_hashes @> ARRAY[${hash}] AND (
+            ((held.text_hash = ${hash} OR held.previous_text_hash = ${hash}) AND ${rowInScope})
+            OR EXISTS (
+              SELECT 1 FROM ${heldItems} AS listed(item)
+              WHERE listed.item ->> 'textHash' = ${hash} AND ${itemInScope(sql`listed.item`)}
+            )
+          ))
+        )
       RETURNING held.id
     ),
     removed AS (
       DELETE FROM ${memoryEntryState} AS gone
       USING fresh
-      WHERE fresh.ok
-        AND gone.text_hash = ${hash}
-        AND gone.subject = ${input.subject}::text
-        AND (${input.kind ?? null}::text IS NULL OR gone.kind = ${input.kind ?? null}::text)
-      RETURNING gone.entry_key, gone.kind
+      WHERE fresh.ok AND gone.entry_key IN (SELECT entry_key FROM forgotten)
+      RETURNING gone.entry_key
     ),
     only_removed AS (
-      SELECT entry_key, kind FROM removed WHERE (SELECT count(*) FROM removed) = 1
+      SELECT entry_key FROM forgotten WHERE (SELECT count(*) FROM forgotten) = 1
     ),
-    appended AS (
-      INSERT INTO ${memoryEvents} ${MEMORY_EVENT_INSERT_COLUMNS}
+    also_held AS (
+      SELECT state.subject FROM ${memoryEntryState} AS state
+      WHERE state.text_hash = ${hash} AND state.subject <> ${subject}
+      UNION
+      SELECT held.subject FROM ${memoryEvents} AS held
+      WHERE held.text_hashes @> ARRAY[${hash}]
+        AND held.subject <> ${subject}
+        AND ((held.text_hash = ${hash} AND held.text IS NOT NULL)
+          OR (held.previous_text_hash = ${hash} AND held.previous_text IS NOT NULL))
+      UNION
+      SELECT coalesce(listed.item ->> 'subject', held.subject) FROM ${memoryEvents} AS held
+      CROSS JOIN LATERAL ${heldItems} AS listed(item)
+      WHERE held.text_hashes @> ARRAY[${hash}]
+        AND listed.item ->> 'textHash' = ${hash}
+        AND jsonb_typeof(listed.item -> 'text') = 'string'
+        AND coalesce(listed.item ->> 'subject', held.subject) <> ${subject}
+    ),
+    appended AS (${insertMemoryEvents(sql`
       SELECT
-        incoming_event.event, incoming_event.run_id, incoming_event.actor, incoming_event.source,
-        incoming_event.store, coalesce(incoming_event.subject, ${input.subject}::text),
-        coalesce(incoming_event.kind, (SELECT kind FROM only_removed)), incoming_event.entry_id,
-        coalesce(incoming_event.entry_key, (SELECT entry_key FROM only_removed)), NULL,
-        coalesce(incoming_event.text_hash, ${hash}), NULL, incoming_event.previous_text_hash,
-        incoming_event.text_hashes, incoming_event.reason, incoming_event.ticket_key,
-        incoming_event.pr_ref, incoming_event.invocation_key, incoming_event.dedupe_key,
-        incoming_event.refers_to, incoming_event.topic, incoming_event.area, incoming_event.bytes,
-        incoming_event.detail
+        incoming_event.position, incoming_event.event, incoming_event.run_id, incoming_event.actor,
+        incoming_event.source, incoming_event.store, ${subject} AS subject, ${kind} AS kind,
+        incoming_event.entry_id,
+        coalesce(incoming_event.entry_key, (SELECT entry_key FROM only_removed)) AS entry_key,
+        NULL::text AS text, ${hash} AS text_hash, NULL::text AS previous_text,
+        incoming_event.previous_text_hash, incoming_event.text_hashes, incoming_event.reason,
+        incoming_event.ticket_key, incoming_event.pr_ref, incoming_event.invocation_key,
+        incoming_event.dedupe_key, incoming_event.refers_to, incoming_event.topic, incoming_event.area,
+        incoming_event.bytes, incoming_event.detail, incoming_event.occurred_at
       FROM incoming_event, fresh
-      WHERE fresh.ok
-      ORDER BY incoming_event.position
-      RETURNING id
-    )
+      WHERE fresh.ok`)})
     SELECT
       (SELECT ok FROM fresh) AS fresh,
       (SELECT count(*)::int FROM blanked) AS blanked,
       (SELECT json_agg(entry_key::text) FROM removed) AS removed_entry_keys,
-      (SELECT json_agg(id ORDER BY id) FROM appended) AS event_ids
+      (SELECT json_agg(id ORDER BY id) FROM appended) AS event_ids,
+      (SELECT json_agg(subject ORDER BY subject) FROM also_held WHERE subject IS NOT NULL) AS also_held_in
   `);
+  let result: Awaited<ReturnType<typeof run>>;
+  try {
+    result = await run();
+  } catch (error) {
+    if (isDedupeRace(error)) return { applied: false, why: "duplicate" };
+    throw error;
+  }
   const row = rawRows<{
     fresh: boolean;
     blanked: number;
     removed_entry_keys: string[] | null;
     event_ids: Array<number | string> | null;
+    also_held_in: string[] | null;
   }>(result)[0];
   if (!row) throw new Error("memory forget returned no row");
   if (!row.fresh) return { applied: false, why: "duplicate" };
@@ -493,6 +684,7 @@ export async function forgetMemoryText(
     blanked: Number(row.blanked),
     removedEntryKeys: row.removed_entry_keys ?? [],
     eventIds: (row.event_ids ?? []).map(Number),
+    alsoHeldIn: row.also_held_in ?? [],
   };
 }
 

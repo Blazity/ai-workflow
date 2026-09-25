@@ -11,15 +11,9 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { checkLiterals } from "./check-literals.js";
 import {
   MAX_MEMORY_ANCHORS,
   MAX_MEMORY_AREA_CANDIDATES,
-  MEMORY_AREA_STATUSES,
-  MEMORY_ENTRY_STATUSES,
-  MEMORY_STATE_KINDS,
-  MEMORY_TOPICS,
-  MEMORY_TRUSTS,
   type MemoryAreaStatus,
   type MemoryEntryStatus,
   type MemoryOpenDispute,
@@ -45,6 +39,10 @@ import {
  * `version` moves by one on every applied write, so a writer that read the
  * row can refuse to overwrite a change it did not see. Every write is ONE
  * statement, together with its ledger rows (neon-http has no transactions).
+ *
+ * The words (`kind`, `topic`, `area_status`, `trust`, `status`) are plain
+ * text, checked in code against `memory-vocabulary.ts`, so a later stage adds
+ * a word without a migration.
  */
 export const memoryEntryState = pgTable(
   "memory_entry_state",
@@ -83,14 +81,8 @@ export const memoryEntryState = pgTable(
     uniqueIndex("memory_entry_state_alias_unique").on(t.subject, t.kind, t.textHash),
     // Forget by text hash, whatever the subject.
     index("memory_entry_state_text_hash_idx").on(t.textHash),
-    check("memory_entry_state_kind_check", sql`${t.kind} in (${checkLiterals(MEMORY_STATE_KINDS)})`),
     check("memory_entry_state_text_hash_check", sql`${t.textHash} ~ '^[0-9a-f]{64}$'`),
     check("memory_entry_state_store_ids_check", sql`jsonb_typeof(${t.storeIds}) = 'object'`),
-    check("memory_entry_state_topic_check", sql`${t.topic} in (${checkLiterals(MEMORY_TOPICS)})`),
-    check(
-      "memory_entry_state_area_status_check",
-      sql`${t.areaStatus} in (${checkLiterals(MEMORY_AREA_STATUSES)})`,
-    ),
     check(
       "memory_entry_state_area_candidates_check",
       sql`cardinality(${t.areaCandidates}) <= ${sql.raw(String(MAX_MEMORY_AREA_CANDIDATES))}`,
@@ -99,8 +91,6 @@ export const memoryEntryState = pgTable(
       "memory_entry_state_anchors_check",
       sql`cardinality(${t.anchors}) <= ${sql.raw(String(MAX_MEMORY_ANCHORS))}`,
     ),
-    check("memory_entry_state_trust_check", sql`${t.trust} in (${checkLiterals(MEMORY_TRUSTS)})`),
-    check("memory_entry_state_status_check", sql`${t.status} in (${checkLiterals(MEMORY_ENTRY_STATUSES)})`),
     check("memory_entry_state_open_disputes_check", sql`jsonb_typeof(${t.openDisputes}) = 'array'`),
     check("memory_entry_state_relearned_unseen_check", sql`${t.relearnedUnseen} >= 0`),
     check("memory_entry_state_version_check", sql`${t.version} >= 1`),

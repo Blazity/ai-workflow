@@ -23,7 +23,7 @@ const knowing =
 const quiet = () => undefined;
 
 const subject = "repo:github:acme/api";
-const base = { runId: "run-1", actor: "run" as const, subject, kind: "facts" as const, store: "builtin" };
+const base = { runId: "run-1", actor: "run" as const, subject, kind: "facts" as const, store: "builtin", occurredAt: new Date() };
 
 /** Written while the value was not yet a known secret. */
 async function writtenBeforeItWasASecret() {

@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../client.js";
 import { createTestDb } from "../test-db.js";
-import { getMemoryEntryState, recordMemoryEntryState } from "./memory-entry-state.js";
+import { changeMemoryEntryState, getMemoryEntryState, recordMemoryEntryState } from "./memory-entry-state.js";
 import {
   appendMemoryEvents,
   forgetMemoryText,
@@ -23,6 +23,30 @@ beforeEach(async () => {
 
 /** An independent sha256, so no test trusts the code's own hashing. */
 const sha = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+
+/** The database with every `execute` counted: a write is one statement. */
+function counting(target: Db): { db: Db; statements: () => number } {
+  let statements = 0;
+  const db = new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver) as unknown;
+      if (property === "execute") {
+        return (...args: unknown[]) => {
+          statements += 1;
+          return (value as (...a: unknown[]) => unknown).apply(object, args);
+        };
+      }
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(object) : value;
+    },
+  });
+  return { db, statements: () => statements };
+}
+
+/** A moment clearly after whatever the database stamped so far. */
+async function later(): Promise<Date> {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  return new Date();
+}
 
 function event(overrides: Partial<MemoryEventRecord> = {}): MemoryEventRecord {
   return {
@@ -68,20 +92,22 @@ describe("appendMemoryEvents", () => {
     expect(page.events[0]!.detail).toEqual({ ranked: true, items: [{ entryId: "e1", layer: "core" }] });
   });
 
-  it("strips NUL characters from every text and every detail string, so the row is written", async () => {
+  it("strips NUL characters and lone surrogates from every text, detail string and key, so the row is written", async () => {
     await appendMemoryEvents(db, [
       event({
-        text: "Run\u0000 tests",
-        textHash: sha("run tests"),
+        text: "Run\u0000 tests \ud83d",
+        textHash: sha("run tests \ufffd"),
         reason: "ok\u0000",
-        detail: { items: [{ text: "a\u0000b", textHash: sha("ab") }], note: "x\u0000y" },
+        detail: { items: [{ text: "a\u0000b", textHash: sha("ab") }], note: "x\u0000y", ["k\udc00"]: "v" },
       }),
+      event({ text: "second row", textHash: sha("second row") }),
     ]);
 
-    const [row] = (await listRunMemoryEvents(db, "run-1")).events;
-    expect(row!.text).toBe("Run tests");
+    const [row, second] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(row!.text).toBe("Run tests \ufffd");
     expect(row!.reason).toBe("ok");
-    expect(row!.detail).toEqual({ items: [{ text: "ab", textHash: sha("ab") }], note: "xy" });
+    expect(row!.detail).toEqual({ items: [{ text: "ab", textHash: sha("ab") }], note: "xy", ["k\ufffd"]: "v" });
+    expect(second!.text).toBe("second row");
   });
 
   it("inserts nothing for a second append with the same (run id, dedupe key), and still appends the rest", async () => {
@@ -110,19 +136,39 @@ describe("appendMemoryEvents", () => {
     expect(second.duplicates).toBe(1);
   });
 
+  it("keeps the dedupe keys of events without a run apart per actor, so two admins or two clients never collide", async () => {
+    const appended = await appendMemoryEvents(db, [
+      event({ runId: null, actor: "admin:user-7", dedupeKey: "req-1" }),
+      event({ runId: null, actor: "admin:user-8", dedupeKey: "req-1" }),
+      event({ runId: null, actor: "mcp:client-1", dedupeKey: "req-1" }),
+      event({ runId: null, actor: "mcp:client-2", dedupeKey: "req-1" }),
+    ]);
+    const retried = await appendMemoryEvents(db, [event({ runId: null, actor: "admin:user-8", dedupeKey: "req-1" })]);
+
+    expect(appended).toMatchObject({ duplicates: 0 });
+    expect(appended.ids).toHaveLength(4);
+    expect(retried).toEqual({ ids: [], duplicates: 1 });
+  });
+
   it("refuses a row whose text carries no hash, because a forget could never find it", async () => {
     await expect(appendMemoryEvents(db, [event({ text: "unhashed" })])).rejects.toThrow();
     expect((await listRunMemoryEvents(db, "run-1")).events).toEqual([]);
   });
 
-  it("refuses an event word outside the list, and writes none of the call's rows", async () => {
-    await expect(
-      appendMemoryEvents(db, [
-        event(),
-        event({ event: "remembered" as MemoryEventRecord["event"] }),
-      ]),
-    ).rejects.toThrow();
-    expect((await listRunMemoryEvents(db, "run-1")).events).toEqual([]);
+  it("stores a word outside today's vocabulary: the words are checked in code, so a later stage adds one without a migration", async () => {
+    await appendMemoryEvents(db, [event({ event: "proposal_expired" as MemoryEventRecord["event"], topic: "billing" as MemoryEventRecord["topic"] })]);
+
+    expect((await listRunMemoryEvents(db, "run-1")).events.map((row) => [row.event, row.topic])).toEqual([
+      ["proposal_expired", "billing"],
+    ]);
+  });
+
+  it("appends a whole call in one statement", async () => {
+    const { db: counted, statements } = counting(db);
+
+    await appendMemoryEvents(counted, [event({ text: "a", textHash: sha("a") }), event({ text: "b", textHash: sha("b") })]);
+
+    expect(statements()).toBe(1);
   });
 });
 
@@ -141,6 +187,13 @@ describe("reading the ledger back", () => {
     const third = await listRunMemoryEvents(db, "run-1", { limit: 2, after: second.next! });
     expect(third.events.map((row) => row.text)).toEqual(["e"]);
     expect(third.next).toBeNull();
+  });
+
+  it("stores and matches a subject in its one spelling, however it was written", async () => {
+    await appendMemoryEvents(db, [event({ subject: "ticket:Jira:awp-12", text: "t", textHash: sha("t") })]);
+
+    const [row] = (await listMemoryEventHistory(db, { subject: "ticket:jira:AWP-12" })).events;
+    expect(row).toMatchObject({ subject: "ticket:jira:AWP-12", text: "t" });
   });
 
   it("reads a subject's history newest first, with a cursor backwards", async () => {
@@ -225,6 +278,19 @@ describe("listPendingMemoryProposals", () => {
     expect(pending.map((row) => row.text)).toEqual(["two"]);
   });
 
+  it("finds a pull request's proposals whichever way its path is cased, and never another PR's", async () => {
+    await appendMemoryEvents(db, [
+      event({ event: "proposed", prRef: "pr:github:Blazity/Fixture#12", text: "twelve", textHash: sha("twelve") }),
+      event({ event: "proposed", prRef: "pr:github:Blazity/Fixture#120", text: "one twenty", textHash: sha("one twenty") }),
+      event({ event: "proposed", prRef: "pr:github:Blazity/Other#12", text: "other", textHash: sha("other") }),
+    ]);
+
+    // A webhook spells the path as the provider does, a pasted URL as the person did.
+    const pending = await listPendingMemoryProposals(db, "pr:github:blazity/fixture#12");
+
+    expect(pending.map((row) => [row.text, row.prRef])).toEqual([["twelve", "pr:github:blazity/fixture#12"]]);
+  });
+
   it("answers from the pull request index, in one query", async () => {
     const pr = "github:acme/api#42";
     await appendMemoryEvents(db, [event({ event: "proposed", prRef: pr, text: "one", textHash: sha("one") })]);
@@ -247,34 +313,36 @@ describe("forgetMemoryText", () => {
   const leaked = sha("the staging password is hunter2");
   const alias = { subject: "repo:github:acme/api", kind: "facts" as const, textHash: leaked };
 
+  const stateValues = {
+    storeIds: { builtin: "b-1" },
+    topic: "setup",
+    area: "*",
+    areaStatus: "resolved",
+    areaCandidates: [],
+    module: null,
+    anchors: [],
+    trust: "human",
+    pinned: true,
+    status: "active",
+    statusReason: null,
+    openDisputes: [],
+    relearnedUnseen: 0,
+    originRunId: "run-1",
+    originTicket: null,
+    lastAdmittedAt: null,
+  } as const;
+
   async function stateFor(target = alias) {
     const written = await recordMemoryEntryState(db, {
       alias: target,
-      create: {
-        storeIds: { builtin: "b-1" },
-        topic: "setup",
-        area: "*",
-        areaStatus: "resolved",
-        areaCandidates: [],
-        module: null,
-        anchors: [],
-        trust: "human",
-        pinned: true,
-        status: "active",
-        statusReason: null,
-        openDisputes: [],
-        relearnedUnseen: 0,
-        originRunId: "run-1",
-        originTicket: null,
-        lastAdmittedAt: null,
-      },
-      events: [event({ event: "classified" })],
+      create: stateValues,
+      events: [event({ event: "classified", textHash: target.textHash })],
     });
     if (!written.applied) throw new Error("setup: state not written");
     return written.entryKey;
   }
 
-  it("blanks the text in text, previous text and detail items, keeps the hashes, and deletes the state row", async () => {
+  it("blanks the text in text, previous text and detail items on its subject, keeps the hashes, and deletes the state row", async () => {
     const entryKey = await stateFor();
     const kept = sha("use pnpm");
     await appendMemoryEvents(db, [
@@ -293,12 +361,15 @@ describe("forgetMemoryText", () => {
           items: [
             { entryId: "b-1", text: "The staging password is hunter2", textHash: leaked, layer: "core" },
             { entryId: "b-2", text: "Use pnpm", textHash: kept, layer: "core" },
+            // An item of the organisation, recalled alongside: not this subject's.
+            { entryId: "o-1", subject: "org:acme", text: "The staging password is hunter2", textHash: leaked },
           ],
         },
       }),
-      // Another subject's row holding the same text is blanked too: the text is
-      // what was forgotten.
+      // Another subject's row holding the same text keeps it: the forget was
+      // made on this repository, and that one is named so it can be forgotten there too.
       event({ subject: "org:acme", text: "the staging password is hunter2", textHash: leaked }),
+      event({ subject: "repo:github:acme/web", previousText: "The staging password is hunter2", previousTextHash: leaked }),
       event({ text: "Use pnpm", textHash: kept }),
     ]);
 
@@ -308,11 +379,17 @@ describe("forgetMemoryText", () => {
       events: [event({ event: "removed", runId: null, actor: "admin:user-7", source: "human", reason: "forgotten" })],
     });
 
-    expect(forgotten).toMatchObject({ applied: true, blanked: 4, removedEntryKeys: [entryKey] });
+    expect(forgotten).toMatchObject({
+      applied: true,
+      blanked: 3,
+      removedEntryKeys: [entryKey],
+      alsoHeldIn: ["org:acme", "repo:github:acme/web"],
+    });
     expect(await getMemoryEntryState(db, { entryKey })).toBeNull();
 
     const rows = (await listRunMemoryEvents(db, "run-1")).events;
-    const [classified, added, updated, recalled, elsewhere, untouched] = rows;
+    const [classified, added, updated, recalled, elsewhere, otherRepo, untouched] = rows;
+    // The entry's own row with no words in it is left as it was.
     expect(classified!.textBlankedAt).toBeNull();
     expect(added).toMatchObject({ text: null, textHash: leaked });
     expect(added!.textBlankedAt).toBeInstanceOf(Date);
@@ -322,9 +399,11 @@ describe("forgetMemoryText", () => {
       items: [
         { entryId: "b-1", text: null, textHash: leaked, layer: "core" },
         { entryId: "b-2", text: "Use pnpm", textHash: kept, layer: "core" },
+        { entryId: "o-1", subject: "org:acme", text: "The staging password is hunter2", textHash: leaked },
       ],
     });
-    expect(elsewhere).toMatchObject({ text: null, textHash: leaked });
+    expect(elsewhere).toMatchObject({ text: "the staging password is hunter2", textBlankedAt: null });
+    expect(otherRepo).toMatchObject({ previousText: "The staging password is hunter2", textBlankedAt: null });
     expect(untouched).toMatchObject({ text: "Use pnpm", textBlankedAt: null });
 
     // The forget itself is recorded, with the hash and the key, never the text.
@@ -337,6 +416,145 @@ describe("forgetMemoryText", () => {
       textHash: leaked,
       entryKey,
     });
+  });
+
+  it("blanks every text and the reason of the forgotten entry's own rows, whatever text they hold", async () => {
+    const entryKey = await stateFor();
+    await appendMemoryEvents(db, [
+      // The entry before an update: another text, the same entry.
+      event({ event: "updated", entryKey, text: "The staging password is hunter2", textHash: leaked, previousText: "Staging password: hunter", previousTextHash: sha("staging password: hunter") }),
+      event({ event: "disputed", entryKey, reason: "run-9 says hunter2 is wrong", detail: { items: [{ entryId: "b-1", text: "hunter2 rotated", textHash: sha("hunter2 rotated") }] } }),
+    ]);
+
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+
+    const [, updated, disputed] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(updated).toMatchObject({ text: null, previousText: null, previousTextHash: sha("staging password: hunter") });
+    expect(disputed).toMatchObject({ reason: null, detail: { items: [{ entryId: "b-1", text: null, textHash: sha("hunter2 rotated") }] } });
+    expect(JSON.stringify([updated, disputed])).not.toContain("hunter");
+  });
+
+  it("forgets one kind when one is given, leaving the same text as another kind", async () => {
+    await appendMemoryEvents(db, [
+      event({ kind: "facts", text: "The staging password is hunter2", textHash: leaked }),
+      event({ kind: "lessons", text: "The staging password is hunter2", textHash: leaked }),
+    ]);
+
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      kind: "facts",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+
+    const [fact, lesson] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(fact).toMatchObject({ kind: "facts", text: null });
+    expect(lesson).toMatchObject({ kind: "lessons", text: "The staging password is hunter2" });
+  });
+
+  it("stores blank a text appended after the forget about something that occurred before it, on its subject only", async () => {
+    const readBeforeTheForget = new Date(Date.now() - 60_000);
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+
+    // A run that read the text before the forget writes its rows late.
+    const { db: counted, statements } = counting(db);
+    await appendMemoryEvents(counted, [
+      event({ text: "The staging password is hunter2", textHash: leaked, occurredAt: readBeforeTheForget }),
+      event({
+        event: "updated",
+        text: "Use vault",
+        textHash: sha("use vault"),
+        previousText: "The staging password is hunter2",
+        previousTextHash: leaked,
+        occurredAt: readBeforeTheForget,
+      }),
+      event({
+        event: "recalled",
+        occurredAt: readBeforeTheForget,
+        detail: { items: [{ entryId: "b-1", text: "The staging password is hunter2", textHash: leaked }] },
+      }),
+      event({ subject: "org:acme", text: "The staging password is hunter2", textHash: leaked, occurredAt: readBeforeTheForget }),
+    ]);
+
+    expect(statements()).toBe(1);
+    const [added, updated, recalled, elsewhere] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(added).toMatchObject({ text: null, textHash: leaked });
+    expect(added!.textBlankedAt).toBeInstanceOf(Date);
+    expect(added!.occurredAt).toEqual(readBeforeTheForget);
+    expect(updated).toMatchObject({ text: "Use vault", previousText: null });
+    expect(recalled!.detail).toEqual({ items: [{ entryId: "b-1", text: null, textHash: leaked }] });
+    expect(elsewhere).toMatchObject({ subject: "org:acme", text: "The staging password is hunter2", textBlankedAt: null });
+  });
+
+  it("keeps a text learned again after the forget visible", async () => {
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+
+    await appendMemoryEvents(db, [event({ text: "The staging password is hunter2", textHash: leaked, occurredAt: await later() })]);
+
+    const [relearned] = (await listRunMemoryEvents(db, "run-1")).events;
+    expect(relearned).toMatchObject({ text: "The staging password is hunter2", textBlankedAt: null });
+  });
+
+  it("refuses a state write about a text forgotten after its events occurred, and keeps a genuine re-add as a new entry", async () => {
+    const firstKey = await stateFor();
+    const readBeforeTheForget = new Date(Date.now() - 60_000);
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+    const create = (await getMemoryEntryState(db, { alias })) ?? undefined;
+    expect(create).toBeUndefined();
+
+    const late = await recordMemoryEntryState(db, {
+      alias,
+      create: stateValues,
+      events: [event({ event: "added", runId: "run-late", text: "The staging password is hunter2", textHash: leaked, occurredAt: readBeforeTheForget })],
+    });
+    expect(late).toEqual({ applied: false, why: "forgotten", storedVersion: null });
+    expect(await getMemoryEntryState(db, { alias })).toBeNull();
+    expect((await listRunMemoryEvents(db, "run-late")).events).toEqual([]);
+
+    const readded = await recordMemoryEntryState(db, {
+      alias,
+      create: stateValues,
+      events: [event({ event: "added", runId: "run-new", text: "The staging password is hunter2", textHash: leaked, occurredAt: await later() })],
+    });
+    expect(readded).toMatchObject({ applied: true, version: 1 });
+    if (!readded.applied) return;
+    expect(readded.entryKey).not.toBe(firstKey);
+    expect((await listRunMemoryEvents(db, "run-new")).events[0]).toMatchObject({ text: "The staging password is hunter2", textBlankedAt: null });
+  });
+
+  it("refuses to move an entry onto a text forgotten after the move occurred", async () => {
+    await forgetMemoryText(db, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+    const other = { ...alias, textHash: sha("use pnpm") };
+    const otherKey = await stateFor(other);
+
+    const moved = await changeMemoryEntryState(db, {
+      target: { entryKey: otherKey },
+      moveTo: leaked,
+      events: [event({ event: "updated", runId: "run-late", text: "The staging password is hunter2", textHash: leaked, occurredAt: new Date(Date.now() - 60_000) })],
+    });
+
+    expect(moved).toEqual({ applied: false, why: "forgotten", storedVersion: 1 });
+    expect(await getMemoryEntryState(db, { entryKey: otherKey })).toMatchObject({ textHash: other.textHash });
   });
 
   it("leaves another subject's state row alone", async () => {
@@ -375,6 +593,19 @@ describe("forgetMemoryText", () => {
     expect(removed).toMatchObject({ text: null, textHash: leaked, detail: { items: [{ text: null, textHash: leaked }] } });
   });
 
+  it("forgets in one statement", async () => {
+    await stateFor();
+    const { db: counted, statements } = counting(db);
+
+    await forgetMemoryText(counted, {
+      textHash: leaked,
+      subject: "repo:github:acme/api",
+      events: [event({ event: "removed", runId: null, actor: "admin:user-7", reason: "forgotten" })],
+    });
+
+    expect(statements()).toBe(1);
+  });
+
   it("does nothing at all for a forget already recorded under its dedupe key", async () => {
     await stateFor();
     const forget = {
@@ -385,7 +616,7 @@ describe("forgetMemoryText", () => {
     await forgetMemoryText(db, forget);
     // Learned again after the forget: a new row, which a retry of the old
     // forget must not blank.
-    await appendMemoryEvents(db, [event({ text: "The staging password is hunter2", textHash: leaked })]);
+    await appendMemoryEvents(db, [event({ text: "The staging password is hunter2", textHash: leaked, occurredAt: await later() })]);
 
     const retried = await forgetMemoryText(db, forget);
 

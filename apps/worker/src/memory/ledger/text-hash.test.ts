@@ -17,4 +17,16 @@ describe("memoryTextHash", () => {
   it("ignores NUL characters, so a text hashes the same before and after the ledger strips them", async () => {
     expect(await memoryTextHash("Use\u0000 pnpm")).toBe(sha("use pnpm"));
   });
+
+  it("hashes an accent typed as a combining mark as the precomposed one, as the stores forget by", async () => {
+    const composed = "Caf\u00e9 opens at 8";
+    const decomposed = "Cafe\u0301 opens at 8";
+
+    expect(await memoryTextHash(decomposed)).toBe(await memoryTextHash(composed));
+    expect(await memoryTextHash(decomposed)).toBe(sha("caf\u00e9 opens at 8"));
+  });
+
+  it("strips every leading list marker, as the store port's normalisation does", async () => {
+    expect(await memoryTextHash("- * - Use pnpm.")).toBe(sha("use pnpm"));
+  });
 });

@@ -13,18 +13,13 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { checkLiterals } from "./check-literals.js";
-import {
-  MEMORY_EVENT_ENTRY_KINDS,
-  MEMORY_EVENT_KINDS,
-  MEMORY_EVENT_SOURCES,
-  MEMORY_TOPICS,
-  type MemoryEventActor,
-  type MemoryEventDetail,
-  type MemoryEventEntryKind,
-  type MemoryEventKind,
-  type MemoryEventSource,
-  type MemoryTopic,
+import type {
+  MemoryEventActor,
+  MemoryEventDetail,
+  MemoryEventEntryKind,
+  MemoryEventKind,
+  MemoryEventSource,
+  MemoryTopic,
 } from "./memory-vocabulary.js";
 
 /**
@@ -33,10 +28,17 @@ import {
  *
  * Texts are stored redacted and without NUL characters, and are redacted again
  * on every read (`memory/ledger`). The only change ever made to a stored row is
- * blanking its texts when someone forgets that text: `text`, `previous_text`
- * and every `detail.items[].text` whose hash matches go to null, the hashes
- * stay, and `text_blanked_at` records when. `text_hashes` lists the hash of
- * every text the row held, so that forget is one indexed statement.
+ * blanking its texts when someone forgets that text on a subject: `text`,
+ * `previous_text` and every `detail.items[].text` whose hash matches go to
+ * null, the hashes stay, and `text_blanked_at` records when. `text_hashes`
+ * lists the hash of every text the row held, so that forget is one indexed
+ * statement. The forget's own row (`removed`, reason `forgotten`) is the
+ * tombstone: a row appended later about something that occurred before it is
+ * stored with those texts already blank.
+ *
+ * The words (`event`, `actor`, `source`, `kind`, `topic`) are plain text,
+ * checked in code against `memory-vocabulary.ts`, so a later stage adds a word
+ * without a migration.
  *
  * Every write is ONE statement: production runs neon-http, which cannot open
  * a transaction (`db/client.ts`).
@@ -45,7 +47,11 @@ export const memoryEvents = pgTable(
   "memory_events",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** When the row was written. */
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** When what it records happened: the store call, the recall. A row can be
+     *  written late; a forget compares against this, not against `at`. */
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
     event: text("event").$type<MemoryEventKind>().notNull(),
     /** Null for an event no run caused: a person, an MCP client, a sweep. */
     runId: text("run_id"),
@@ -54,7 +60,8 @@ export const memoryEvents = pgTable(
     /** The store the event happened in (`builtin`, `mem0`, ...), when one did. */
     store: text("store"),
     /** The subject key the entry belongs to (`repo:<provider>:<path>`,
-     *  `org:<owner>`, or the ticket subject of a notebook). */
+     *  `org:<owner>`, or the ticket subject of a notebook), stored and
+     *  compared in `canonicalSubjectKey`'s spelling. */
     subject: text("subject"),
     kind: text("kind").$type<MemoryEventEntryKind>(),
     /** The store's own id of the entry. */
@@ -68,11 +75,13 @@ export const memoryEvents = pgTable(
     textHashes: text("text_hashes").array().notNull().default(sql`'{}'::text[]`),
     reason: text("reason"),
     ticketKey: text("ticket_key"),
-    /** The pull request a proposal waits for, per repository subject. */
+    /** The pull request a proposal waits for, as its subject key
+     *  (`prSubjectKey`), stored and compared in `canonicalSubjectKey`'s spelling. */
     prRef: text("pr_ref"),
     invocationKey: text("invocation_key"),
-    /** Makes an append idempotent: one row per (run, key). Keys of events
-     *  without a run share one namespace. */
+    /** Makes an append idempotent: one row per (run, key), or per (actor, key)
+     *  for an event without a run, so two admins or two MCP clients never
+     *  share a key. */
     dedupeKey: text("dedupe_key"),
     /** The event this one answers: a proposal's resolution names the proposal. */
     refersTo: bigint("refers_to", { mode: "number" }).references(
@@ -92,25 +101,20 @@ export const memoryEvents = pgTable(
     // Forget asks which rows hold a text anywhere; without this it would read
     // every row's texts and detail.
     index("memory_events_text_hashes_idx").using("gin", t.textHashes),
+    // Every append asks whether a forget newer than what it records covers
+    // its texts.
+    index("memory_events_forgotten_idx")
+      .on(t.subject, t.textHash, t.at)
+      .where(sql`${t.event} = 'removed' and ${t.reason} = 'forgotten'`),
     // Pending proposals of one pull request, and whatever else names it.
     index("memory_events_pr_ref_idx").on(t.prRef, t.event, t.id).where(sql`${t.prRef} is not null`),
     index("memory_events_refers_to_idx").on(t.refersTo, t.event).where(sql`${t.refersTo} is not null`),
     // The expression is what lets an event without a run be idempotent too:
-    // two NULL run ids are never equal in a plain unique index.
+    // two NULL run ids are never equal in a plain unique index. The actor
+    // scopes those keys to whoever sent them.
     uniqueIndex("memory_events_dedupe_unique")
-      .on(sql`(coalesce(${t.runId}, ''))`, t.dedupeKey)
+      .on(sql`(coalesce(${t.runId}, ${t.actor}))`, t.dedupeKey)
       .where(sql`${t.dedupeKey} is not null`),
-    check("memory_events_event_check", sql`${t.event} in (${checkLiterals(MEMORY_EVENT_KINDS)})`),
-    check(
-      "memory_events_actor_check",
-      sql`${t.actor} in ('run', 'system') or ${t.actor} ~ '^(admin|mcp):.+$'`,
-    ),
-    check(
-      "memory_events_source_check",
-      sql`${t.source} in (${checkLiterals(MEMORY_EVENT_SOURCES)})`,
-    ),
-    check("memory_events_topic_check", sql`${t.topic} in (${checkLiterals(MEMORY_TOPICS)})`),
-    check("memory_events_kind_check", sql`${t.kind} in (${checkLiterals(MEMORY_EVENT_ENTRY_KINDS)})`),
     check("memory_events_text_hash_check", sql`${t.textHash} ~ '^[0-9a-f]{64}$'`),
     check("memory_events_previous_text_hash_check", sql`${t.previousTextHash} ~ '^[0-9a-f]{64}$'`),
     // A text nobody can find by its hash is a text a forget cannot blank.

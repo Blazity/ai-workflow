@@ -1,8 +1,9 @@
 /**
  * The words memory records are written in: events, sources, topics, trust,
- * status. One list each, read by the code that writes them and by the check
- * constraints of `memory_events` and `memory_entry_state`, so a word missing
- * here is refused by the database as well as by the compiler.
+ * status. One closed list each, checked by the code that writes them (the
+ * ledger writer in `memory/ledger/writer.ts` refuses a word missing here) and
+ * by the compiler. The tables store them as plain text with no check
+ * constraint, so a later stage adds a word here without a migration.
  *
  * Kept apart from the table schemas so the memory module can name them
  * without reaching a table: nothing here imports drizzle.
@@ -57,10 +58,8 @@ export interface MemoryOpenDispute {
 }
 
 /**
- * Every memory event, one closed list. The table's check constraint is written
- * from this list, so a word missing here is refused by the database as well as
- * by the compiler; adding one is a generated migration that drops and re-adds
- * `memory_events_event_check`.
+ * Every memory event, one closed list. The writer refuses a word missing here;
+ * the table does not, so adding one is a change to this list and nothing else.
  *
  * Where each word comes from: the memory rebuild plan (D3 and D10) and the
  * quality design's ledger additions. A forget is `removed` with reason
@@ -145,6 +144,9 @@ export type MemoryEventEntryKind = (typeof MEMORY_EVENT_ENTRY_KINDS)[number];
  *  person on the dashboard, or an MCP client. */
 export type MemoryEventActor = "run" | "system" | `admin:${string}` | `mcp:${string}`;
 
+/** The spelling every actor has, as the writer checks it. */
+export const MEMORY_EVENT_ACTOR_PATTERN = /^(?:run|system|(?:admin|mcp):.+)$/s;
+
 /**
  * The resolutions that end a proposal's wait for its pull request. A held
  * proposal waits for a human instead, so for the PR it is resolved too.
@@ -172,10 +174,15 @@ export interface MemoryEventDetailItem {
  * The small structured part of an event: codes, ids, counts and the items
  * above. Free text belongs in `items[].text` and nowhere else in it.
  * `textWithheld` says the texts of this row were not stored because they
- * could not be cleaned of this deployment's secrets.
+ * could not be cleaned of this deployment's secrets; `omittedItems` counts the
+ * items left out, from the end, to keep the detail within its size, and
+ * `omittedDetail` is the size in bytes of a detail too large to keep even
+ * without its items, of which nothing else is stored.
  */
 export interface MemoryEventDetail {
   readonly items?: readonly MemoryEventDetailItem[];
   readonly textWithheld?: "unreadable" | "unscrubbable";
+  readonly omittedItems?: number;
+  readonly omittedDetail?: number;
   readonly [field: string]: unknown;
 }
