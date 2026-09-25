@@ -86,6 +86,21 @@ test("a rule left out on purpose says so, in the worker's own words", () => {
   assert.match(fate!.sentence, /the already-resolved exit is not offered/);
 });
 
+test("a ticket description the plan stands in for reads as left out on purpose", () => {
+  const description: AgentBriefingPart = {
+    ...part("brf_plan_2", 4, "resolution-check"),
+    id: "description",
+    title: "Ticket description",
+    withheld: {
+      reason: "represented_by_plan",
+      text: "The implementation agent works from the plan, which was written from the ticket's description, so the description is not sent a second time.",
+    },
+  };
+  const [fate] = partFates(description);
+  assert.equal(fate!.tone, "deliberate");
+  assert.match(fate!.sentence, /^Not sent, deliberately \(the plan stands in for it\)\. The implementation agent works from the plan/);
+});
+
 test("a cut cause this build has no words for is shown as itself", () => {
   const invented: AgentBriefingPart = {
     ...part("brf_plan_4", 4, "ci-checks"),

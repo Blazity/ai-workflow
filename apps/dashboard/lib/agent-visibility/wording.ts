@@ -346,6 +346,7 @@ export function partFates(part: AgentBriefingPart): PartFate[] {
   if (part.withheld) {
     const reasons: Record<string, string> = {
       pr_feedback_present: "the pull request carries review feedback",
+      represented_by_plan: "the plan stands in for it",
     };
     fates.push({
       label: "Withheld on purpose",

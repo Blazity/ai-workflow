@@ -3,6 +3,7 @@
 // exported from here, with the same kind, so no caller changed.
 export {
   IssueTrackerNotFoundError,
+  RELATED_TICKET_CHILD,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type RelatedTicket,

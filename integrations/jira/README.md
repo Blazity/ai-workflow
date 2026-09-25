@@ -5,7 +5,9 @@ column, reads and comments on them, moves them between statuses, and receives
 Jira's webhook when one changes.
 
 - `manifest.ts` is what core may know without running any of this code.
-- `issue-tracker.ts` implements the `issue_tracker` capability.
+- `issue-tracker.ts` implements the `issue_tracker` capability. `adf-text.ts`
+  is how a description or a comment in Jira's rich text becomes the plain text
+  every agent and every answer reader gets.
 - `webhook.ts` verifies a delivery and says what happened to a ticket. It
   decides nothing about runs: dispatch, cancellation, clarification and plan
   approval are core's, and they are the same for the next tracker.

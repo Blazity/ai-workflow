@@ -16,6 +16,7 @@ import {
   type SelectedRepository,
   type WorkflowOwnedBranch,
 } from "../../../adapters/vcs/repository-directory.js";
+import { RELATED_TICKET_CHILD, type RelatedTicket } from "../../../adapters/issue-tracker/types.js";
 import type {
   PreSandboxConfigStep,
   PreSandboxPromptAddition,
@@ -2420,9 +2421,9 @@ function editDistance(a: string, b: string): number {
 /** The ticket as the path matcher reads it, in the three parts the reading of a
  *  comment splits it into. */
 interface TicketTextScan {
-  /** The ticket's OWN words: its key, title, description, acceptance criteria
-   *  and labels. A repository named here is named by the ticket, and no comment
-   *  takes that back. */
+  /** The ticket's OWN words: its key, title, description, acceptance criteria,
+   *  labels, and the titles of the tickets under it. A repository named here is
+   *  named by the ticket, and no comment takes that back. */
   own: string;
   /** The comments this run read, joined. A repository named only here can be
    *  taken back by a later comment that says no about it. */
@@ -2458,6 +2459,15 @@ interface TicketTextScan {
  * already holds stays (`stillNamedKeys`). The description is many thoughts, so
  * it is read phrase by phrase instead (`ticketTextSegments`).
  *
+ * THE TICKETS UNDER THIS ONE ARE PART OF ITS OWN WORDS, AND ONLY THOSE. A
+ * parent split into subtasks (an epic into its stories) often says which
+ * repository each part changes in the subtask's title and nowhere else, and
+ * planning the parent is planning those parts. Its own parent is wider than it
+ * (an epic can span repositories) and a linked ticket is other work, so a path
+ * one of those names is not taken here: discovery reads them all, beside the
+ * catalog, and can weigh them, where this scan takes a repository without
+ * asking anybody.
+ *
  * WHAT KEEPS US OUT is a phrasing about repositories sharing a phrase with the
  * path (`ticketTextExcludesARepository`), never a negation word anywhere in the
  * text. Read the other way, "Don't forget to update github:acme/docs" was a
@@ -2472,6 +2482,7 @@ function ticketTextScan(
     acceptanceCriteria?: string;
     comments?: Array<{ author: string; accountId?: string; body: string; createdAt?: string }>;
     labels?: string[];
+    relatedTickets?: RelatedTicket[];
   },
   botAccountId?: string,
 ): TicketTextScan {
@@ -2482,6 +2493,11 @@ function ticketTextScan(
   return {
     own: [ticket.identifier, ticket.title, ticket.description, ticket.acceptanceCriteria]
       .concat(ticket.labels ?? [])
+      .concat(
+        (ticket.relatedTickets ?? [])
+          .filter((related) => related.relation === RELATED_TICKET_CHILD)
+          .map((related) => related.title),
+      )
       .filter(Boolean)
       .join("\n"),
     comments: comments

@@ -1764,6 +1764,97 @@ describe("repoSelectionStep with a provider that never answered", () => {
   });
 });
 
+// A parent split into subtasks often says which repository each part changes
+// only in the subtask titles ("Refuse expired codes in acme/api"), and the
+// path scan read the ticket's own words without them, so the run planning the
+// parent opened none of those repositories.
+describe("repoSelectionStep and the tickets under this one", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
+    // Once, not for good: an implementation set here would outlive this block.
+    mocks.listVcsRepositories.mockResolvedValueOnce({ repositories: repos, failures: [] });
+  });
+
+  const parentTicket = {
+    identifier: "AIW-50",
+    title: "Discount codes can expire",
+    description: "The work is split into the subtasks of this ticket. Plan all of them.",
+  };
+
+  it("takes a repository a subtask's title names", async () => {
+    const result = await repoSelectionStep({
+      context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+        settings: testSettingsSnapshot(),
+        ticket: {
+          ...parentTicket,
+          relatedTickets: [
+            { key: "AIW-51", title: "Refuse expired codes in acme/api", status: "To Do", relation: "is the parent of" },
+          ],
+        },
+        run: { branchName: "blazebot/aiw-50" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/api",
+        selectedRationale: "ticket mentions repository path",
+      }),
+    ]);
+  });
+
+  // The children are this work; a parent is wider than it (an epic spanning
+  // repositories) and a linked ticket is other work. Discovery reads both and
+  // can weigh them; the scan takes a repository without asking anybody.
+  it("does not take a repository only the parent or a linked ticket names", async () => {
+    const result = await repoSelectionStep({
+      context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+        settings: testSettingsSnapshot(),
+        ticket: {
+          ...parentTicket,
+          relatedTickets: [
+            { key: "AIW-40", title: "Storefront revamp in acme/web", status: "In Progress", relation: "is a child of" },
+            { key: "AIW-51", title: "Refuse expired codes in acme/api", status: "To Do", relation: "is the parent of" },
+            { key: "AIW-60", title: "Launch banner in acme/web", status: "To Do", relation: "blocks" },
+          ],
+        },
+        run: { branchName: "blazebot/aiw-50" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.selectedRepositories?.map((repo) => repo.repoPath)).toEqual(["acme/api"]);
+  });
+
+  it("reaches the scan through the pre-sandbox phase, which picks the ticket's fields", async () => {
+    const result = await executePreSandboxPhase(
+      {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+        settings: testSettingsSnapshot(),
+        ticket: {
+          ...parentTicket,
+          relatedTickets: [
+            { key: "AIW-51", title: "Refuse expired codes in acme/api", status: "To Do", relation: "is the parent of" },
+          ],
+        },
+        run: { branchName: "blazebot/aiw-50" },
+      },
+      { preSandbox: { steps: [{ uses: "repo-selection", onFailure: "fail" }] } },
+      { "repo-selection": repoSelectionStep },
+    );
+
+    expect(result.selectedRepositories?.map((repo) => repo.repoPath)).toEqual(["acme/api"]);
+  });
+});
+
 /**
  * Remembered routing: the org-scoped label answer that stands in for the
  * "which repository?" question a non-technical ticket author would otherwise be

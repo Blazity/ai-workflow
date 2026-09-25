@@ -783,6 +783,26 @@ describe("prepare_workspace execute", () => {
     expect(JSON.stringify(input.ticket.comments)).not.toContain("Use github:acme/api");
   });
 
+  // The subtask titles are often the one place a parent names the repository
+  // each part changes, and the path scan reads only what this step hands it.
+  it("hands the selection the tickets the run read around this one", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const relatedTickets = [
+      { key: "AWT-2", title: "Refuse expired codes in acme/api", status: "To Do", relation: "is the parent of" },
+    ];
+    const ctx = makeCtx({ sandboxId: null });
+    ctx.ticket = { ...ctx.ticket, relatedTickets };
+
+    await (execute as any)(makeNode("prepare_workspace"), {}, ctx, {});
+
+    expect(mocks.runPreSandboxPhase.mock.calls[0]![0].ticket.relatedTickets).toEqual(relatedTickets);
+  });
+
   it("keeps an answer the record declined to attribute out of the selection scan and the routing memory", async () => {
     // Two executions of the one block, which is what really happens: the first
     // raises a question the record is told about, the second comes back with

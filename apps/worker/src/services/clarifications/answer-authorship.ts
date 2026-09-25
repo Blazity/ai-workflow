@@ -71,7 +71,7 @@ export function qualifyingComments(
     if (createdAtMs <= window.afterMs) return false;
     if (window.throughMs !== undefined && createdAtMs > window.throughMs) return false;
     // An empty/whitespace body (e.g. an image-only comment flattened by
-    // extractAdfText) is not an answer; treat it like no comment so the nudge
+    // the Jira adapter's `adfToText`) is not an answer; treat it like no comment so the nudge
     // rules apply instead of resuming with a junk answer.
     return c.body.trim().length > 0;
   });
