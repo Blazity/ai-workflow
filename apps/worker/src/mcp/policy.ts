@@ -522,6 +522,10 @@ const TOOL_POLICY = {
   "memory.list": READ_POLICY,
   "memory.get": READ_POLICY,
   "memory.forget": MEMORY_FORGET_POLICY,
+  // What an agent block can pin, read the way the dashboard's profile list is:
+  // any member of the organization may see which profiles exist and which model
+  // each runs. Nothing here authors or publishes a profile.
+  "harness_profiles.list": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

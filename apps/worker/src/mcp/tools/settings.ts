@@ -22,7 +22,10 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+import { settingDefinition } from "@integrations/registry";
 import {
+  type SettingType,
+  type SettingValidationIssue,
   type SettingsEntryView,
   type SettingsInFlightRule,
   type SettingsVersionView,
@@ -66,13 +69,57 @@ function throwPublicSettingsError(error: unknown): never {
   if (error instanceof SettingsValidationError) {
     throw new McpPublicError(
       "VALIDATION_FAILED",
-      error.message,
+      withNextSteps(error.message, error.issues),
       false,
       undefined,
       true,
     );
   }
   throw error;
+}
+
+const TYPE_WORDS: Record<SettingType, string> = {
+  boolean: "true or false",
+  integer: "an integer",
+  string: "a string",
+  "string-list": "a list of strings",
+};
+
+/**
+ * What would have been accepted, for the refusals whose code alone does not
+ * say: the registry's own type, allowed values and minimum, and the key a
+ * wrongly cased spelling meant. The store's sentence is kept as it is, because
+ * the dashboard shows the same one; this only adds the next step.
+ */
+function nextStep(issue: SettingValidationIssue): string | null {
+  const definition = settingDefinition(issue.key);
+  switch (issue.reason) {
+    case "unknown_key": {
+      const meant = settingDefinition(issue.key.trim().toUpperCase());
+      return meant
+        ? `Setting keys are upper case: ${issue.key} is ${meant.key}.`
+        : "settings.list names every key this deployment has.";
+    }
+    case "wrong_type":
+      return definition ? `${issue.key} takes ${TYPE_WORDS[definition.type]}.` : null;
+    case "not_allowed_value":
+      return definition?.enumValues
+        ? `${issue.key} takes one of: ${definition.enumValues.join(", ")}.`
+        : null;
+    case "below_minimum":
+      return definition?.minimum === undefined
+        ? null
+        : `${issue.key} takes at least ${definition.minimum}.`;
+    case "null_not_allowed":
+      return `${issue.key} cannot be set to null; settings.reset hands it back to its environment variable or default.`;
+    default:
+      return null;
+  }
+}
+
+function withNextSteps(message: string, issues: readonly SettingValidationIssue[]): string {
+  const steps = issues.map(nextStep).filter((step): step is string => step !== null);
+  return steps.length === 0 ? message : `${message}. ${steps.join(" ")}`;
 }
 
 /** What a stale write is told: per key, what is stored now and who stored it. */
@@ -139,7 +186,7 @@ async function settingOrRefuse(key: string): Promise<SettingsEntryView> {
   if (!entry) {
     throw new McpPublicError(
       "VALIDATION_FAILED",
-      `Invalid settings: ${key} (unknown_key)`,
+      withNextSteps(`Invalid settings: ${key} (unknown_key)`, [{ key, reason: "unknown_key" }]),
       false,
       undefined,
       true,

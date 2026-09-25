@@ -23,6 +23,7 @@ import {
   REPOSITORY_RELATIONSHIPS_MAX,
   REPOSITORY_VERSION_PAGE_DEFAULT,
   REPOSITORY_VERSION_PAGE_MAX,
+  WORKFLOW_BLOCK_GROUPS,
 } from "@shared/contracts";
 import { z } from "zod/v3";
 
@@ -212,6 +213,18 @@ const REPOSITORY_MARKDOWN_MAX_LENGTH = REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH;
 const REPOSITORY_LABEL_MAX_LENGTH = REPOSITORY_CATALOG_LABEL_MAX_LENGTH;
 // One import selection, matching repositoryCatalogImportRequestSchema's own cap.
 const REPOSITORY_IMPORT_KEYS_MAX = 500;
+/**
+ * One page of the import preview. The default is a page a client shows inline
+ * (a row is about 220 bytes and the envelope goes out twice, see
+ * `mcp/tools/page-budget.ts`); the ceiling is twice that, for a caller that
+ * would rather have fewer calls than an inline answer.
+ */
+export const IMPORT_PREVIEW_PAGE_DEFAULT = 50;
+const IMPORT_PREVIEW_PAGE_MAX = 100;
+// Said by the gate when a provider does not match, since "invalid_string" alone
+// sends the caller guessing at the spelling (`GitHub`, `git-hub`).
+const INTEGRATION_ID_RULE =
+  "an integration id: 3 to 32 lowercase letters and digits starting with a letter, such as github";
 // A `provider:owner/name` key. Bounded so a pathological one is refused before it is
 // hashed into targetRefs and an audit row kept for a year.
 const REPOSITORY_KEY_MAX_LENGTH = 300;
@@ -344,7 +357,8 @@ export const MCP_TOOL_CATALOG = {
     annotations: policyFor("system.capabilities").annotations,
   },
   "tickets.get": {
-    description: "Fetch a ticket's fields, status, labels and (optionally) its comments.",
+    description:
+      "Fetch a ticket's fields, status, labels and (optionally) its comments. With `includeComments`, `commentsLimit` (default 20) keeps the NEWEST comments, listed in the order they were written, and `commentsTruncated` says older ones were left out; `commentCount` is the total. Every `createdAt` is ISO 8601 in UTC.",
     inputSchema: z
       .object({
         ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),
@@ -393,13 +407,13 @@ export const MCP_TOOL_CATALOG = {
   },
   "workflows.dispatch_preflight": {
     description:
-      "Resolve what a manual dispatch would run, whether it is runnable, and the digest to dispatch with.",
+      "Resolve what a manual dispatch of one trigger of a deployed workflow would run, without starting anything: no run, no ticket move, no claim on the subject, and no cost beyond reading the ticket or pull request it names. `definitionId` and `triggerNodeId` come from workflows.list. The reply names the deployed version, the subject as the tracker or VCS reports it, the steps the run would take, and `runnable` with the `blocker` that stops it when it is false (a run that already owns the subject, a full run pool, an integration that is not working). `preflightDigest`, with `deployedVersion` as `expectedDeployedVersion`, is what workflows.dispatch takes to start exactly this. An unknown definition is NOT_FOUND. A trigger id the deployed graph does not have is VALIDATION_FAILED naming the triggers a manual dispatch can start, and a trigger that only fires from its own source (an approval, a signed delivery, a clock) is CONFLICT.",
     inputSchema: preflightInputSchema,
     annotations: policyFor("workflows.dispatch_preflight").annotations,
   },
   "workflows.dispatch": {
     description:
-      "Start a manual workflow run for exactly what workflows.dispatch_preflight resolved.",
+      "Start a real workflow run for exactly what workflows.dispatch_preflight resolved. This spends money (model and sandbox time) and acts on real systems: the run can push a branch, open a pull request and comment on the ticket. For a ticket subject the ticket is first moved into the configured AI column, the same move a person makes to start a run, and if the tracker refuses that move nothing starts. Send the preflight's own arguments unchanged, its `preflightDigest`, and its `deployedVersion` as `expectedDeployedVersion`: different arguments are refused with VALIDATION_FAILED, and a workflow redeployed since the preflight with CONFLICT, both before anything starts, so run the preflight again. One run owns a subject at a time, so a subject another run owns is CONFLICT naming that run, and a full run pool is CONFLICT with `retryAfterMs`. The reply's `runId` is what runs.get follows. Idempotent per idempotencyKey: a lost reply retried under the same key cannot start a second run.",
     inputSchema: preflightInputSchema
       .extend({
         expectedDeployedVersion: z.number().int().positive(),
@@ -465,7 +479,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "workflows.save_draft": {
     description:
-      "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion` 2, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. A graph declaring any other schema version is refused the same way: schema v1 is retired, so a v1 graph cannot be saved and has to be recreated as schema v2. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. `pinnedRepositoriesNotEnabled` lists the repositories this graph pins that the repository catalog does not enable. A pin is a selection inside the catalog and extends nothing, so events from a repository listed here are refused until an operator enables it on the Repositories page, and a run that starts some other way cannot reach it either. Saving such a graph is allowed and is reported rather than refused. The reply never echoes the graph; `graphHash` is sha256 over the canonical JSON of the version that was STORED, which the store canonicalizes on the way in, so it may differ from a digest of the request and is directly comparable with the `graphHash` workflows.publish reports for the same version. `deployable` and `deploymentIssues` report what the dashboard editor reports about the SAME graph: a draft that uses a block whose integration is not connected is stored anyway and named here, so it can be built up before a person connects anything. They are not a promise about workflows.publish, which additionally resolves each pinned Harness Profile version against this deployment and can refuse a graph this call called deployable. `deploymentIssueCount` is the total; `deploymentIssues` lists at most the first 50.",
+      "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion` 2, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. A graph declaring any other schema version is refused the same way: schema v1 is retired, so a v1 graph cannot be saved and has to be recreated as schema v2. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. `pinnedRepositoriesNotEnabled` lists the repositories this graph pins that the repository catalog does not enable. A pin is a selection inside the catalog and extends nothing, so events from a repository listed here are refused until an operator enables it on the Repositories page, and a run that starts some other way cannot reach it either. Saving such a graph is allowed and is reported rather than refused. The reply never echoes the graph; `graphHash` is sha256 over the canonical JSON of the version that was STORED, which the store canonicalizes on the way in, so it may differ from a digest of the request and is directly comparable with the `graphHash` workflows.publish reports for the same version. `deployable` and `deploymentIssues` report what the dashboard editor reports about the SAME graph: a draft that uses a block whose integration is not connected is stored anyway and named here, so it can be built up before a person connects anything. They are not a promise about workflows.publish, which additionally resolves each pinned Harness Profile version against this deployment and can refuse a graph this call called deployable. `deploymentIssueCount` is the total; `deploymentIssues` lists at most the first 50. Each node's `x` and `y` are kept as the editor's layout, outside the version and its hash: `positions` is `saved` when the ones sent were stored, `unchanged` when the layout already had them, `not_sent` when every node sits on one point, which leaves the stored layout as it was (a graph with no layout at all is laid out by the editor when it opens), and `not_saved` when the graph was saved but storing its positions failed.",
     inputSchema: z
       .object({
         definitionId: z.number().int().positive().max(DEFINITION_ID_MAX),
@@ -570,7 +584,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "tickets.create": {
     description:
-      "Create a ticket in the tracker's configured project. It is created wherever the project's workflow puts a new issue and deliberately NOT moved into the AI column, so creating a ticket and asking the platform to work on it stay two separate decisions: move it with tickets.transition when you want a run to start. Idempotent by a label this tool attaches and searches for first, so a lost reply cannot leave a duplicate ticket that then starts a run of its own. Refused with VALIDATION_FAILED when the configured tracker cannot create issues.",
+      "Create a ticket in the tracker's configured project. It is created wherever the project's workflow puts a new issue and deliberately NOT moved into the AI column, so creating a ticket and asking the platform to work on it stay two separate decisions: move it with tickets.transition when you want a run to start. Idempotent by a label this tool attaches and searches for first, so a lost reply cannot leave a duplicate ticket that then starts a run of its own. Refused with VALIDATION_FAILED when the configured tracker cannot create issues, and when the tracker refuses a field (an issue type the project does not have, a label with a space in it): the refusal carries the tracker's own words, names the issue types the project accepts when the type was the problem, and nothing is created.",
     inputSchema: z
       .object({
         summary: z.string().trim().min(1).max(TICKET_SUMMARY_MAX_LENGTH),
@@ -587,13 +601,19 @@ export const MCP_TOOL_CATALOG = {
   },
   "blocks.list": {
     description:
-      "List every block type this deployment's workflow editor offers, with its presentation (label, group, description), its input contract, its output contract and the status variants it can report. `availability.available` is false for a block this deployment cannot run today (no provider configured), naming why in `unavailableReason`; the block still lists, because a graph authored now may become runnable once the provider is.",
-    inputSchema: z.object({}).strict().default({}),
+      "List the block types this deployment's workflow editor offers, one line each: `type`, `label`, `group` (the palette section), `integration` (the integration that contributes the block, or null for one of core's own), `purpose` (the first sentence of its description) and whether it can run here (`available`, with `unavailableReason` when it cannot: no provider configured). A block that cannot run still lists, because a graph authored now may become runnable once the provider is. The contracts are not in this list: read one block's inputs, outputs, ports, status variants and configuration schema with blocks.get. Narrow the list with `group` or with `integration` (an integration id, or \"core\" for core's own blocks).",
+    inputSchema: z
+      .object({
+        group: z.enum(WORKFLOW_BLOCK_GROUPS).optional(),
+        integration: z.string().trim().min(1).max(BLOCK_TYPE_MAX_LENGTH).optional(),
+      })
+      .strict()
+      .default({}),
     annotations: policyFor("blocks.list").annotations,
   },
   "blocks.get": {
     description:
-      "Read one block type's contract by name: the same object blocks.list returns for it. An unrecognized `type` is refused with NOT_FOUND rather than VALIDATION_FAILED, since block types are versioned by the deployment, not by this catalog.",
+      "Read one block type's whole contract by name: its presentation, `defaults`, ports, input and output contracts, status variants, availability, and `configurationSchema`, the JSON Schema of what a node of this type takes as `configuration` in a graph for workflows.save_draft. The schema describes shape; the save still applies the rules a schema cannot state and names what it refuses. On an agent block, `defaults.provider` and `defaults.model` are the built-in default Harness Profile's, and choosing a model for real is pinning a profile: `configuration.harnessProfile` takes the `pin` harness_profiles.list returns, and a pinned block may not also set `provider` or `model`. An unrecognized `type` is refused with NOT_FOUND rather than VALIDATION_FAILED, since block types are versioned by the deployment, not by this catalog.",
     inputSchema: z
       .object({ type: z.string().trim().min(1).max(BLOCK_TYPE_MAX_LENGTH) })
       .strict(),
@@ -612,7 +632,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "workflows.get_graph": {
     description:
-      "Read a definition's workflow graph, in the exact `{schemaVersion, nodes, edges}` shape workflows.save_draft accepts, for BOTH the current draft and the deployed version. Every node carries its full `configuration`, `inputs` and `additionalInputs`, and the pinned `repositoryScope` rides along too, so a graph fetched here can be edited and sent straight back to workflows.save_draft without losing anything: saving the unmodified draft yields the same `graphHash` this tool reports for it in `draftGraphHash`. `draftRevision` is the token workflows.save_draft takes as `expectedDraftRevision` (0 for a definition that has never been saved, where `draft` is null), and `deployedVersion` is the token workflows.publish takes as `expectedDeployedVersion` (null when nothing is deployed yet, where `deployed` is null). A deployed schema v1 version is returned as a legacy arm with no graph hash, so callers can distinguish retirement from no deployment. `draftGraphHash` and `deployedGraphHash` are sha256 over the canonical JSON of each stored version, directly comparable with the `graphHash` workflows.save_draft and workflows.publish report for the same version. Any secret configured for this deployment is redacted from the reply exactly as everywhere else on this surface; a stored graph does not carry one, so that redaction leaves the round trip lossless. An unknown or archived definition is NOT_FOUND.",
+      "Read a definition's workflow graph, in the exact `{schemaVersion, nodes, edges}` shape workflows.save_draft accepts, for BOTH the current draft and the deployed version. Every node carries its full `configuration`, `inputs` and `additionalInputs`, and the pinned `repositoryScope` rides along too, so a graph fetched here can be edited and sent straight back to workflows.save_draft without losing anything: saving the unmodified draft yields the same `graphHash` this tool reports for it in `draftGraphHash`. Each node's `x` and `y` come from the editor's stored layout, which is kept per definition rather than per version, so both graphs carry the positions the canvas shows today; positions never enter a graph hash. `draftRevision` is the token workflows.save_draft takes as `expectedDraftRevision` (0 for a definition that has never been saved, where `draft` is null), and `deployedVersion` is the token workflows.publish takes as `expectedDeployedVersion` (null when nothing is deployed yet, where `deployed` is null). A deployed schema v1 version is returned as a legacy arm with no graph hash, so callers can distinguish retirement from no deployment. `draftGraphHash` and `deployedGraphHash` are sha256 over the canonical JSON of each stored version, directly comparable with the `graphHash` workflows.save_draft and workflows.publish report for the same version. Any secret configured for this deployment is redacted from the reply exactly as everywhere else on this surface; a stored graph does not carry one, so that redaction leaves the round trip lossless. An unknown or archived definition is NOT_FOUND.",
     inputSchema: z
       .object({
         definitionId: z.number().int().positive().max(DEFINITION_ID_MAX),
@@ -622,7 +642,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "workflows.set_enabled": {
     description:
-      "Turn a definition's `enabled` switch on or off, independent of publishing: this is the one field workflows.publish inherits rather than sets. Runs through exactly the dashboard's own guardrails. Enabling a definition with no deployable version is refused with CONFLICT, and enabling one whose deployed graph no longer passes the deployment gate with VALIDATION_FAILED. Enabling a definition whose trigger another enabled definition already owns is refused with CONFLICT naming that definition (for example, a second `trigger_ticket_ai` while one is already enabled), so two definitions cannot silently answer the same event. Enabling arms the deployed head's real-event triggers, minting webhook endpoints and syncing schedule rows, so from then on real ticket and pull request events execute this graph; disabling releases those bindings, so they stop. `enabled` in the reply is the resulting state and `triggerTypes` the triggers now (or no longer) live. Idempotent per idempotencyKey. A concurrent change to the definition is refused with CONFLICT: reload before retrying.",
+      "Turn a definition's `enabled` switch on or off, independent of publishing: this is the one field workflows.publish inherits rather than sets. Runs through exactly the dashboard's own guardrails. Enabling a definition with no deployable version is refused with CONFLICT, and enabling one whose deployed graph no longer passes the deployment gate with VALIDATION_FAILED. Enabling a definition whose trigger another enabled definition already owns is refused with CONFLICT naming that definition, its id and the trigger (for example, a second `trigger_ticket_ai` while one is already enabled), so two definitions cannot silently answer the same event. Enabling arms the deployed head's real-event triggers, minting webhook endpoints and syncing schedule rows, so from then on real ticket and pull request events execute this graph; disabling releases those bindings, so they stop. `enabled` in the reply is the resulting state and `triggerTypes` the triggers now (or no longer) live. Idempotent per idempotencyKey. A concurrent change to the definition is refused with CONFLICT: reload before retrying.",
     inputSchema: z
       .object({
         definitionId: z.number().int().positive().max(DEFINITION_ID_MAX),
@@ -683,7 +703,7 @@ export const MCP_TOOL_CATALOG = {
         repositoryId: z.number().int().min(0).max(REPOSITORY_ID_MAX),
         // The contract's id rule, rebuilt in this file's Zod 3 dialect rather
         // than embedding `repositoryCatalogProviderSchema` (see the import note).
-        provider: z.string().trim().regex(INTEGRATION_ID),
+        provider: z.string().trim().regex(INTEGRATION_ID, INTEGRATION_ID_RULE),
         path: z.string().trim().min(1).max(REPOSITORY_LABEL_MAX_LENGTH),
         displayName: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),
         defaultBranch: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),
@@ -750,8 +770,17 @@ export const MCP_TOOL_CATALOG = {
   },
   "repositories.import_preview": {
     description:
-      "List what the connected providers expose, each row marked with whether the catalog already holds it (`inCatalog`), plus one status per supported provider. Feeds repositories.import, which takes the `key` values from here. The Import from provider dialog on the Repositories page. A provider nobody connected and a provider whose listing failed are different answers and neither empties the list, so read `providers` before concluding a repository is gone. The listing is served from the repository picker's own short-lived cache, so previewing and importing within a minute is one listing rather than two.",
-    inputSchema: z.object({}).strict().default({}),
+      "List what the connected providers expose, each row marked with whether the catalog already holds it (`inCatalog`), plus one status per supported provider. Feeds repositories.import, which takes the `key` values from here. The Import from provider dialog on the Repositories page. A provider nobody connected and a provider whose listing failed are different answers and neither empties the list, so read `providers` (on every page) before concluding a repository is gone. One page at a time, ordered by `key`: `limit` defaults to 50 (a page a client shows inline) and caps at 100, `total` counts every row the filters match, and `nextOffset` is the `offset` of the next page, null on the last. Narrow with `provider` (an integration id), `query` (a piece of the path, any case) and `inCatalog`. The listing is served from the repository picker's own short-lived cache, so paging, previewing and importing within a minute is one listing rather than several.",
+    inputSchema: z
+      .object({
+        provider: z.string().trim().regex(INTEGRATION_ID, INTEGRATION_ID_RULE).optional(),
+        query: z.string().trim().min(1).max(REPOSITORY_LABEL_MAX_LENGTH).optional(),
+        inCatalog: z.boolean().optional(),
+        offset: z.number().int().min(0).max(REPOSITORY_ID_MAX).optional(),
+        limit: z.number().int().min(1).max(IMPORT_PREVIEW_PAGE_MAX).optional(),
+      })
+      .strict()
+      .default({}),
     annotations: policyFor("repositories.import_preview").annotations,
   },
   "repositories.import": {
@@ -782,7 +811,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "settings.list": {
     description:
-      "Every setting this deployment has, resolved: the value in force, where it came from (`stored` row, `environment` variable, or registry `default`), the group the Settings page files it under, the description an operator reads, and `appliesToRunsInFlight`, which is \"immediate\" for a key only a request, a cron tick or this transport reads and \"next run\" for every key a workflow body reads, because a run carries its settings from its start so a replay sees what the first execution saw. `editable` says whether settings.set may write the key at all and `role` who may. The `mcp` group is refused on this surface because those keys configure this transport itself and an agent must not be able to raise its own limits or switch its own access off mid-session; they are changed on the dashboard Settings page. `requiresRedeploy` marks one of the three keys the running code still reads from the environment rather than from the store, so a leftover stored row loses to the environment and the value changes only after redeployment. `lastVersion` is the newest recorded change (its `actorLabel` names the person, `actor` keeps their id) and its `id` is the `expectedVersion` a write of the key sends. `fallback` is what would answer if the stored row were removed, which is what settings.reset hands the key back to. No credential is in this list by construction: keys, tokens, database and auth URLs stay in the environment and are deliberately absent from the registry, and any secret this deployment does hold is redacted from every reply on this surface anyway.",
+      "Every setting this deployment has, resolved: the value in force, where it came from (`stored` row, `environment` variable, or registry `default`), the group the Settings page files it under, the description an operator reads, and `appliesToRunsInFlight`, which is \"immediate\" for a key only a request, a cron tick or this transport reads, \"next run\" for every key a workflow body reads, because a run carries its settings from its start so a replay sees what the first execution saw, and \"after redeploy\" for a key marked `requiresRedeploy`. `editable` says whether settings.set may write the key at all and `role` who may. The `mcp` group is refused on this surface because those keys configure this transport itself and an agent must not be able to raise its own limits or switch its own access off mid-session; they are changed on the dashboard Settings page. `requiresRedeploy` marks one of the three keys the running code still reads from the environment rather than from the store, so a leftover stored row loses to the environment and the value changes only after redeployment. `lastVersion` is the newest recorded change (its `actorLabel` names the person, `actor` keeps their id) and its `id` is the `expectedVersion` a write of the key sends. `fallback` is what would answer if the stored row were removed, which is what settings.reset hands the key back to. No credential is in this list by construction: keys, tokens, database and auth URLs stay in the environment and are deliberately absent from the registry, and any secret this deployment does hold is redacted from every reply on this surface anyway.",
     inputSchema: z.object({}).strict().default({}),
     annotations: policyFor("settings.list").annotations,
   },
@@ -873,7 +902,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.briefing": {
     description:
-      "What a run's agents were really sent, and why anything expected is missing. One tool, seven views, all of them paged: `attempts` (the default) lists every Block Attempt that sent a prompt or could have, each with its briefings' overviews in send order, its `startedAt`, its loop `iteration` where it ran inside one, `sendsPrompts` (false for a script, a transition or a comment block, which have no prompt to be missing), and `missing`, a reason and never a generic message, computed even beside existing briefings so a planning attempt that captured discovery and whose pass never went out says which. Its `state` is about the whole RUN and answers what no attempt can: `available`, `expired` (briefings were captured and retention removed them), `replay_gone` (the attempt rows went with the replay, so attempts that never sent cannot be listed), or `predates_capture` (nothing capture-capable recorded anything for this run, which is also what a run looks like whose every record write was lost). The other six take a `briefingId` from that list: `sections` (every section but its text), `section` (one page of one section's stored text by `sectionIndex` and byte `offset`; continue from the previous page's `nextOffset`, never from a hand-made number), `parts` and `spans` of one section, `repository_context` (the repositories that send described, as it described them), and `unresolved_sources` (what the compiler referenced and could not find, which is why an expected AGENTS.md may be absent). NOTHING IS RE-READ AT READ TIME: the catalog, the prompt library and the profiles are as the send saw them, not as they are now. `limit` is a byte cap, not a count. It is at least 1024, and at most a ceiling this deployment derives from `MCP_MAX_RESULT_BYTES` so a page is neither replaced by a digest nor written to a file by your client; that ceiling is lower than the 524288 this schema states, because a schema cannot carry a number that moves with a setting. A limit outside the range is refused by name, never quietly clamped, and the default sits below what a client shows inline; a list page carries `total`, `nextCursor`, `shortened` (entries whose long texts were cut to fit, with their full size) and `unreadable` (entries that could not be read at all, named rather than silently dropped).",
+      "What a run's agents were really sent, and why anything expected is missing. One tool, seven views, all of them paged: `attempts` (the default) lists every Block Attempt that sent a prompt or could have, each with its briefings' overviews in send order, its `startedAt`, its loop `iteration` where it ran inside one, `sendsPrompts` (false for a script, a transition or a comment block, which have no prompt to be missing), and `missing`, a reason and never a generic message, computed even beside existing briefings so a planning attempt that captured discovery and whose pass never went out says which. Its `state` is about the whole RUN and answers what no attempt can: `available`, `expired` (briefings were captured and retention removed them), `replay_gone` (the attempt rows went with the replay, so attempts that never sent cannot be listed), or `predates_capture` (nothing capture-capable recorded anything for this run, which is also what a run looks like whose every record write was lost). The other six take a `briefingId` from that list: `sections` (every section but its text), `section` (one page of one section's stored text by `sectionIndex` and byte `offset`; continue from the previous page's `nextOffset`, never from a hand-made number), `parts` and `spans` of one section, `repository_context` (the repositories that send described, as it described them), and `unresolved_sources` (what the compiler referenced and could not find, which is why an expected AGENTS.md may be absent). NOTHING IS RE-READ AT READ TIME: the catalog, the prompt library and the profiles are as the send saw them, not as they are now. `limit` is a byte cap, not a count. It is at least 1024, and at most a ceiling this deployment derives from `MCP_MAX_RESULT_BYTES` so a page is never replaced by a digest, though a page that large may be written to a file by your client rather than shown inline; that ceiling is lower than the 524288 this schema states, because a schema cannot carry a number that moves with a setting. A limit outside the range is refused by name, never quietly clamped, and the default sits below what a client shows inline; a list page carries `total`, `nextCursor`, `shortened` (entries whose long texts were cut to fit, with their full size) and `unreadable` (entries that could not be read at all, named rather than silently dropped).",
     inputSchema: z
       .object({
         runId: z.string().trim().min(1).max(RUN_ID_MAX_LENGTH),
@@ -918,7 +947,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "memory.list": {
     description:
-      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or `ai-workflow/memory/<task>.md` for the working notebook of one piece of work). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
+      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or the working notebook of one piece of work, which the built-in store files as `ai-workflow/memory/<task>.md` and Mem0 as `notebook/<task>`: take it from this list rather than composing it). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
     inputSchema: z
       .object({
         ticketKey: z.string().trim().min(1).max(MEMORY_KEY_MAX_LENGTH).optional(),
@@ -950,6 +979,12 @@ export const MCP_TOOL_CATALOG = {
       .strict(),
     annotations: policyFor("memory.forget").annotations,
   },
+  "harness_profiles.list": {
+    description:
+      "List the Harness Profiles an agent block can pin, which is how a graph chooses the model an agent runs on: `profileId`, `slug`, `name`, `system` (shipped with the deployment rather than authored here), and the `provider` and `model` of the version a pin would run. `pin` is exactly what a node's `configuration.harnessProfile` takes in workflows.save_draft; it is null for a profile nobody has published yet, whose `provider` and `model` are then read off its unpublished draft and run nothing until it is published. An agent block with no pin runs the built-in default profile, which is what `defaults` on blocks.get shows. Archived profiles are left out. Profiles are authored and published on the dashboard's Harness page, not here.",
+    inputSchema: z.object({}).strict().default({}),
+    annotations: policyFor("harness_profiles.list").annotations,
+  },
 } satisfies Record<McpToolName, McpToolDefinition>;
 
 export const MCP_ENABLED_DOMAINS = [
@@ -963,6 +998,7 @@ export const MCP_ENABLED_DOMAINS = [
   "settings",
   "work_scope",
   "memory",
+  "harness_profiles",
 ] as const;
 
 const CATALOG: Record<McpToolName, McpToolDefinition> = MCP_TOOL_CATALOG;

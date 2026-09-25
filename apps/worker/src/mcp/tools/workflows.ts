@@ -91,6 +91,18 @@ const BLOCKER_ERRORS: Record<ManualDispatchBlockerCode, PublicBlockerError> = {
  * is not a dispatch blocker is rethrown untouched, so the execute wrapper turns
  * it into INTERNAL_ERROR instead of leaking its text. */
 function throwPublicDispatchError(error: unknown): never {
+  // A definition id that names nothing. Its own code rather than the
+  // blocker's, because "fix your input" and "that does not exist" are two
+  // different next moves, and the second one is workflows.list.
+  if (error instanceof ManualDispatchError && error.statusCode === 404) {
+    throw new McpPublicError(
+      "NOT_FOUND",
+      `${redactIntegrationVariableNames(error.message)} workflows.list names every definition and the triggers it can dispatch.`,
+      false,
+      undefined,
+      true,
+    );
+  }
   if (error instanceof ManualDispatchError) {
     const mapped = BLOCKER_ERRORS[error.code];
     throw new McpPublicError(

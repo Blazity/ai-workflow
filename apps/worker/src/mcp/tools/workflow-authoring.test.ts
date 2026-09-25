@@ -483,6 +483,9 @@ describe("workflows.create", () => {
 
     expect(result.isError).toBe(true);
     expect(errorPayload(result).code).toBe("CONFLICT");
+    // Retrying the same name meets the same row: the way forward is another name.
+    expect(errorPayload(result).retryable).toBe(false);
+    expect(errorPayload(result).message).toContain("workflows.list");
     expect(await definitionRows()).toHaveLength(1);
     expect(await auditedErrorCodes()).toEqual(["CONFLICT"]);
   });
@@ -511,6 +514,8 @@ describe("workflows.save_draft", () => {
       // Always present, so an agent that fixed a capped list of issues can tell
       // "there were more" from "these are all of them".
       deploymentIssueCount: 0,
+      // The node sits at 10,20, which is now where the editor draws it.
+      positions: "saved",
     });
     // A draft is inert, so nobody is told about one: the channel hears about the
     // publish that makes a graph the platform's instruction, not about the writing.
@@ -601,6 +606,11 @@ describe("workflows.save_draft", () => {
     // The store's own compare-and-set, which is a predicate inside the insert
     // rather than a read before it: the other writer's graph is not replaced.
     expect(errorPayload(stale).message).toContain("reload before saving");
+    // Sent again as it is, the save meets the same newer draft, so it is not a
+    // retry; the refusal names the revision now in force and where to read it.
+    expect(errorPayload(stale).retryable).toBe(false);
+    expect(errorPayload(stale).message).toContain("draftRevision 1");
+    expect(errorPayload(stale).message).toContain("workflows.get_graph");
     expect(await versionsOf(definitionId)).toHaveLength(1);
 
     // Refused before anything was inserted, so the key is provably unspent and
@@ -1358,6 +1368,55 @@ describe("workflows.get_graph", () => {
     expect(resaved.graphHash).toBe(fetched.draftGraphHash);
   });
 
+  it("keeps the positions a save sent, so the editor opens the graph where the caller placed it", async () => {
+    const client = await connectedClient();
+    const saved = dataOf(await saveDraft(client));
+
+    const fetched = dataOf(await getGraph(client));
+    const [node] = (fetched.draft as { nodes: Array<{ x: number; y: number }> }).nodes;
+
+    expect(saved.positions).toBe("saved");
+    expect(node).toMatchObject({ x: 10, y: 20 });
+    // Positions are layout, never part of the graph's identity: the hash is the
+    // one the save reported, whatever the nodes' coordinates are.
+    expect(fetched.draftGraphHash).toBe(saved.graphHash);
+    const [row] = await db
+      .select({ layout: workflowDefinitions.layout })
+      .from(workflowDefinitions)
+      .where(eq(workflowDefinitions.id, definitionId));
+    expect(row!.layout).toMatchObject({ nodes: { [TRIGGER_NODE_ID]: { x: 10, y: 20 } } });
+  });
+
+  it("leaves the stored positions alone when every node of a save sits on one point", async () => {
+    const client = await connectedClient();
+    await saveDraft(client);
+    const unplacedNode = (id: string) => ({
+      id,
+      type: "trigger_ticket_ai",
+      x: 0,
+      y: 0,
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const second = dataOf(
+      await saveDraft(client, {
+        definition: graph({ nodes: [unplacedNode(TRIGGER_NODE_ID), unplacedNode("later")] }),
+        expectedDraftRevision: 1,
+        idempotencyKey: KEY_TWO,
+      }),
+    );
+    const fetched = dataOf(await getGraph(client));
+
+    // A pile says nothing about where anything goes, so it does not overwrite
+    // what was placed before: the editor lays out what has no place of its own.
+    expect(second.positions).toBe("not_sent");
+    expect((fetched.draft as { nodes: Array<{ id: string; x: number; y: number }> }).nodes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: TRIGGER_NODE_ID, x: 10, y: 20 })]),
+    );
+  });
+
   it("returns the deployed graph and the version a publish would replace once one is live", async () => {
     await seedDraft(definitionId, 1, graph());
     const client = await connectedClient();
@@ -1463,6 +1522,12 @@ describe("workflows.set_enabled", () => {
     // The named conflict is the whole point: the seeded, enabled "Ticket workflow"
     // already owns trigger_ticket_ai, so the refusal says which definition it is.
     expect(error.message).toContain(PLATFORM_DEFINITION_NAME);
+    // A name is not an address: the id and the trigger say which row to turn off
+    // and for what, and a retry of the same call would meet the same owner.
+    expect(error.message).toContain(`trigger_ticket_ai`);
+    expect(error.message).toContain(`(definition ${(await platformDefinition()).id})`);
+    expect(error.message).toContain("workflows.set_enabled");
+    expect(error.retryable).toBe(false);
     // Refused before any write, so the definition stays disabled.
     expect((await definitionRows()).find((row) => row.id === definitionId)).toMatchObject({
       enabled: false,

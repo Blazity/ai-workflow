@@ -188,6 +188,7 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "harness_profiles.list",
 ];
 
 const READ_ANNOTATIONS = {
@@ -362,6 +363,8 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     idempotentHint: true,
     openWorldHint: true,
   },
+  // Which profiles an agent block can pin, read the way the dashboard lists them.
+  "harness_profiles.list": READ_ANNOTATIONS,
 };
 
 const DOMAINS = [
@@ -375,6 +378,7 @@ const DOMAINS = [
   "settings",
   "work_scope",
   "memory",
+  "harness_profiles",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the

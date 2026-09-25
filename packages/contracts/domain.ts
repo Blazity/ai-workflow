@@ -9,6 +9,7 @@ import type {
 import type { RunRepositoryAccess } from "./repository-catalog";
 
 export type { WorkflowBlockType } from "./block-catalog.generated";
+export { WORKFLOW_BLOCK_GROUPS } from "./block-catalog-types";
 export type {
   WorkflowBlockAdditionalInputContract,
   WorkflowBlockGroup,
@@ -990,5 +991,9 @@ export const FIRST_SLICE_TOOLS = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  // Appended for the same reason again. An agent block chooses its model by
+  // pinning a Harness Profile, and nothing on this surface named one, so a graph
+  // authored here could only take the built-in default.
+  "harness_profiles.list",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

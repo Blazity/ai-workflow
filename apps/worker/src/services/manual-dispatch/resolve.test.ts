@@ -696,6 +696,54 @@ describe("manual dispatch against a definition repository pin", () => {
     ).rejects.toThrow(REPOSITORY_NOT_IN_CATALOG_REASON);
   });
 
+  it("answers a definition that does not exist as not found, before asking what it deployed", async () => {
+    // What an unknown id looks like to the stores: no row, and so no deployed
+    // version either. The answer used to be "no deployed version", which sent
+    // the caller looking for a publish instead of for the right id.
+    const noDefinitionDb = {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [] }) }),
+      }),
+    } as unknown as Parameters<typeof resolveManualDispatch>[0]["db"];
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(null);
+
+    const refusal = await resolveManualDispatch({
+      db: noDefinitionDb,
+      issueTrackerResolution,
+      definitionId: 999_999,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request", url: pr.prUrl },
+      repositoryCatalog,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      statusCode: 404,
+      message: "Workflow definition 999999 not found.",
+    });
+  });
+
+  it("names the triggers a manual dispatch can start when the one asked for is not there", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", {}, [{ id: "nightly", type: "trigger_schedule" }]),
+    );
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTrackerResolution,
+        definitionId: 5,
+        triggerNodeId: "Trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      // The schedule is left out: it only ever fires from its own clock.
+      message:
+        'That trigger id is not in the deployed version of this workflow. Triggers a manual dispatch can start: trigger (trigger_pr_created).',
+    });
+  });
+
   it("rejects a trigger type manual dispatch cannot start", async () => {
     const webhook = deployed("any", {});
     webhook.definition.nodes[0]!.type = "trigger_webhook";
@@ -710,7 +758,11 @@ describe("manual dispatch against a definition repository pin", () => {
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
         repositoryCatalog,
       }),
-    ).rejects.toThrow("not present in the deployed workflow");
+    ).rejects.toMatchObject({
+      code: "not_eligible",
+      message:
+        'Trigger "trigger" (trigger_webhook) only fires from its own source and cannot be started by a manual dispatch. No trigger in it can be started by a manual dispatch.',
+    });
   });
 
   it("rejects a retired deployed definition with the retirement reason", async () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { autoLayoutPositions, positionsCarryNoLayout } from "./auto-layout";
+import { autoLayoutPositions, positionsCarryNoLayout } from "./workflow-auto-layout";
 
 const STEP = { x: 240, y: 120 };
 

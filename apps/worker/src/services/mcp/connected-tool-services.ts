@@ -28,6 +28,7 @@ import {
   createConnectedWorkflowDefinition,
   deployConnectedWorkflowDefinition,
   saveConnectedWorkflowDefinitionDraft,
+  saveConnectedWorkflowDefinitionLayout,
   updateConnectedWorkflowDefinition,
 } from "../workflow-definitions/index.js";
 import {
@@ -36,6 +37,7 @@ import {
 } from "../manual-dispatch/index.js";
 import { requirePromptLibraryEditRole, saveConnectedPromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
+import { listHarnessProfilePinOptions } from "../harness/index.js";
 import { createConnectedMcpGateServices } from "./gate-services.js";
 import type { McpToolServices } from "./tool-services.js";
 import { mapMcpTicketRunRows } from "./tool-queries.js";
@@ -105,12 +107,14 @@ export function createConnectedMcpToolServices(
     getWebhookEndpointForNode: getConnectedWebhookEndpointForNode,
     createWorkflowDefinition: createConnectedWorkflowDefinition,
     saveWorkflowDefinitionDraft: saveConnectedWorkflowDefinitionDraft,
+    saveWorkflowDefinitionLayout: saveConnectedWorkflowDefinitionLayout,
     deployWorkflowDefinition: deployConnectedWorkflowDefinition,
     updateWorkflowDefinition: updateConnectedWorkflowDefinition,
     getWorkflowDefinition: getConnectedWorkflowDefinition,
     getWorkflowDefinitionVersion: readConnectedWorkflowDefinitionVersion,
     getCurrentWorkflowDefinitionVersion: readConnectedCurrentWorkflowDefinitionVersion,
     getDeployedWorkflowDefinitionVersion: readConnectedDeployedWorkflowDefinitionVersion,
+    listHarnessProfilePins: listHarnessProfilePinOptions,
     preflightManualDispatch: (input) =>
       preflightConnectedManualDispatch({
         ...input,

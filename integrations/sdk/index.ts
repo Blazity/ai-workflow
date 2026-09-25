@@ -193,6 +193,7 @@ export {
 
 export {
   ISSUE_TRACKER_BOARD_FIELDS,
+  IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
   RELATED_TICKET_CHILD,
   RELATED_TICKET_PARENT,

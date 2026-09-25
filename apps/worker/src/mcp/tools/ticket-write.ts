@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
+  IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
@@ -132,6 +133,41 @@ async function explainMoveFailure(
   throw refused(
     "VALIDATION_FAILED",
     `No transition to "${named}" is available for ${ticketKey} from where it currently sits, so nothing was moved.${suffix}`,
+  );
+}
+
+const TRACKER_REFUSAL_MAX_LENGTH = 600;
+
+/**
+ * Turn a create the tracker refused into something an agent can fix. The
+ * tracker said which field it would not take and why, in its own words; a
+ * refused issue type also comes back with the types the project does accept,
+ * because issue type names are per project (and often localized) and not
+ * guessable. Nothing was created, so the idempotency key goes back into
+ * circulation with the refusal. Anything else is rethrown untouched and stays
+ * INTERNAL_ERROR, because a create that failed some other way may have landed.
+ */
+async function explainCreateRefusal(
+  issueTracker: IssueTrackerAdapter,
+  error: unknown,
+): Promise<never> {
+  if (!(error instanceof IssueTrackerInputRejectedError)) throw error;
+  const accepted = error.issueTypeRejected
+    ? await issueTracker
+        .listIssueTypes?.()
+        .then((types) => types.map((type) => type.name))
+        .catch(() => null)
+    : null;
+  const suffix =
+    accepted && accepted.length > 0
+      ? ` Issue types this project accepts: ${accepted.join(", ")}.`
+      : "";
+  // The tracker's sentence is the one provider text that crosses this boundary,
+  // so it takes the publication scrub and a bound like anything else we pass on.
+  const said = scrubForPublication(error.message).slice(0, TRACKER_REFUSAL_MAX_LENGTH);
+  throw refused(
+    "VALIDATION_FAILED",
+    `The tracker refused the ticket, so nothing was created: ${said.replace(/\.+$/u, "")}.${suffix}`,
   );
 }
 
@@ -328,14 +364,19 @@ export function registerTicketWriteTools(
             };
           }
 
-          const created = await issueTracker.createTicket({
-            summary: scrubForPublication(input.summary),
-            description: input.description
-              ? scrubForPublication(input.description)
-              : undefined,
-            issueType: input.issueType,
-            labels: [...(input.labels ?? []), marker],
-          });
+          let created: { identifier: string; url: string | null };
+          try {
+            created = await issueTracker.createTicket({
+              summary: scrubForPublication(input.summary),
+              description: input.description
+                ? scrubForPublication(input.description)
+                : undefined,
+              issueType: input.issueType,
+              labels: [...(input.labels ?? []), marker],
+            });
+          } catch (error) {
+            throw await explainCreateRefusal(issueTracker, error);
+          }
 
           return {
             ticketKey: created.identifier,

@@ -12,8 +12,8 @@ import {
   LIVE_POLL_MS,
   useLivePoll,
 } from "@/lib/use-live-poll";
-import { autoLayoutPositions, positionsCarryNoLayout } from "@/lib/workflow-editor/auto-layout";
 import { edgeBezierPath } from "@/lib/workflow-editor/layout-geometry";
+import { autoLayoutPositions, positionsCarryNoLayout } from "@shared/contracts";
 import type {
   JsonValue,
   ReplayAttemptState,

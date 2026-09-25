@@ -165,6 +165,7 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "harness_profiles.list",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {
@@ -722,6 +723,30 @@ describe("gate before the tool handler", () => {
     expect(text).toContain("ticketKey");
     expect(text).toContain("max 64");
     expect(text).not.toContain(tooLong);
+  });
+
+  // Red when: "provider (invalid_string)" and "group (invalid_enum_value)" are the
+  // whole answer, and the caller guesses at spellings one charged call at a time.
+  it("says what a closed or patterned argument takes, from the schema and not the value", async () => {
+    // Authorization comes before the schema, so the preview needs a caller it admits.
+    state.requireMcpActor.mockResolvedValue({
+      ...ACTOR,
+      role: "admin",
+      scopes: new Set(["mcp:read", "repositories:write"]),
+    });
+    const pattern = await toolErrorText(
+      await postToolCall(toolCall(38, "repositories.import_preview", { provider: "GitHub" })),
+    );
+    const closed = await toolErrorText(
+      await postToolCall(toolCall(39, "blocks.list", { group: "Agents" })),
+    );
+
+    expect(pattern).toContain("provider");
+    expect(pattern).toContain("lowercase letters and digits");
+    expect(pattern).not.toContain("GitHub");
+    expect(closed).toContain("group");
+    expect(closed).toContain("one of trigger, agents, workspace");
+    expect(closed).not.toContain("Agents");
   });
 
   // A notification is never executed by the SDK, so both shapes below would

@@ -11,8 +11,10 @@ import React, {
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import { useRouter } from "next/navigation";
 import {
+  autoLayoutPositions,
   isManuallyDispatchableTrigger,
   isTriggerBlockType,
+  positionsCarryNoLayout,
   pinnedRepositoriesNotEnabledSentence,
   RETIRED_SCHEMA_MESSAGE,
   type RunBlockStatusesResponse,
@@ -39,6 +41,7 @@ import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-l
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { DeployPinWarning } from "@/components/cockpit/flow-editor/deploy-pin-warning";
+import { NODE_H, NODE_W } from "@/components/cockpit/flow-editor/ports";
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
 import { Button, Input, Select } from "@/components/ui";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
@@ -109,6 +112,33 @@ interface WorkflowEditorDocument {
   budgets: WorkflowExecutionBudgets;
   repositoryScope: WorkflowRepositoryScope;
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
+}
+
+/** One column and one row apart, with room for the arrow between two blocks,
+ *  on the editor's own card size (the replay's cards are smaller). */
+const AUTO_LAYOUT_STEP = { x: NODE_W + 96, y: NODE_H + 48 };
+
+/**
+ * The flow the canvas draws for a definition. A graph whose every node sits on
+ * one point was never placed (it was saved through MCP or the API without
+ * positions), so it is laid out the way the replay lays it out rather than
+ * drawn as one pile where only the top block can be clicked. A definition
+ * somebody placed keeps exactly what they placed.
+ */
+function canvasFlowOf(definition: WorkflowDefinition): ReturnType<typeof toFlowDefinition> {
+  const flow = toFlowDefinition(definition);
+  if (!positionsCarryNoLayout(flow.nodes)) return flow;
+  // toFlowDefinition builds these nodes afresh on every call, so placing them
+  // in place touches nothing anybody else holds.
+  const placed = autoLayoutPositions(flow.nodes, flow.edges, AUTO_LAYOUT_STEP);
+  for (const node of flow.nodes) {
+    const point = placed.get(node.id);
+    if (point) {
+      node.x = point.x;
+      node.y = point.y;
+    }
+  }
+  return flow;
 }
 
 function semanticKeyForDefinition(definition: WorkflowDefinition): string {
@@ -268,7 +298,7 @@ export function WorkflowEditorScreen({
     initialDetail.draft ??
     runnableVersionDefinition(initialDetail.deployed) ??
     defaultDefinition;
-  const seedFlow = toFlowDefinition(seed);
+  const seedFlow = canvasFlowOf(seed);
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
@@ -964,7 +994,7 @@ export function WorkflowEditorScreen({
   // draft correctly shows as unsaved rather than being silently treated as
   // the new baseline.
   function loadDefinitionIntoCanvas(definition: WorkflowDefinition) {
-    const flow = toFlowDefinition(definition);
+    const flow = canvasFlowOf(definition);
     const nextDocument: WorkflowEditorDocument = {
       nodes: flow.nodes,
       edges: flow.edges,
@@ -1029,7 +1059,7 @@ export function WorkflowEditorScreen({
       detail.draft ??
       runnableVersionDefinition(detail.deployed) ??
       defaultDefinition;
-    const flow = toFlowDefinition(definition);
+    const flow = canvasFlowOf(definition);
     const nextDocument: WorkflowEditorDocument = {
       nodes: flow.nodes,
       edges: flow.edges,

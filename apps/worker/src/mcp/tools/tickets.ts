@@ -70,14 +70,18 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
 
           // fetchTicket always returns every comment (no includeComments
           // param, no pagination on the adapter side); this tool decides how
-          // much of that to hand back.
+          // much of that to hand back: the newest, since the reply somebody
+          // just wrote is what a caller reads a ticket for, kept in the order
+          // they were written so the thread still reads top to bottom.
           const commentsLimit = input.commentsLimit ?? DEFAULT_COMMENTS_LIMIT;
           const comments = input.includeComments
-            ? ticket.comments.slice(0, commentsLimit).map((c) => ({
-                author: c.author,
-                body: c.body,
-                createdAt: c.createdAt,
-              }))
+            ? inWrittenOrder(ticket.comments)
+                .slice(-commentsLimit)
+                .map((c) => ({
+                  author: c.author,
+                  body: c.body,
+                  createdAt: utcInstant(c.createdAt),
+                }))
             : null;
 
           return {
@@ -161,4 +165,21 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
       };
     },
   );
+}
+
+/** Oldest first by the instant each was written. When any instant does not
+ * parse there is no order to trust but the tracker's, so that one is kept. */
+function inWrittenOrder<T extends { createdAt: string }>(comments: readonly T[]): T[] {
+  const at = comments.map((comment) => Date.parse(comment.createdAt));
+  if (at.some(Number.isNaN)) return [...comments];
+  return comments
+    .map((comment, index) => ({ comment, index }))
+    .sort((a, b) => at[a.index]! - at[b.index]! || a.index - b.index)
+    .map(({ comment }) => comment);
+}
+
+/** Jira writes `+0200` offsets; every other time on this surface is ISO in Z. */
+function utcInstant(value: string): string {
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? value : new Date(at).toISOString();
 }

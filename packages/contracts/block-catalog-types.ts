@@ -32,15 +32,21 @@ export type WorkflowValueSchema =
       additionalProperties: boolean;
     } & WorkflowValueSchemaMetadata);
 
-export type WorkflowBlockGroup =
-  | "trigger"
-  | "agents"
-  | "workspace"
-  | "control"
-  | "ticket"
-  | "vcs"
-  | "human"
-  | "utility";
+/** Every group the editor's palette files a block under, in palette order. A
+ *  runtime list so a filter can refuse a group by name; the type is read off it,
+ *  so the two cannot disagree. */
+export const WORKFLOW_BLOCK_GROUPS = [
+  "trigger",
+  "agents",
+  "workspace",
+  "control",
+  "ticket",
+  "vcs",
+  "human",
+  "utility",
+] as const;
+
+export type WorkflowBlockGroup = (typeof WORKFLOW_BLOCK_GROUPS)[number];
 
 export interface WorkflowBlockInputContract {
   required: boolean;

@@ -27,7 +27,10 @@ import type {
   IssueTrackerAdapter,
   TicketContent,
 } from "../../adapters/issue-tracker/types.js";
-import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
+import {
+  IssueTrackerInputRejectedError,
+  IssueTrackerNotFoundError,
+} from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -573,6 +576,53 @@ describe("tickets.create", () => {
       retryable: true,
     });
     expect(createTicket).not.toHaveBeenCalled();
+  });
+
+  it("answers a field the tracker refused with the tracker's own words and the issue types it accepts", async () => {
+    const issueTracker = fakeIssueTracker({
+      createTicket: vi
+        .fn()
+        .mockRejectedValue(
+          new IssueTrackerInputRejectedError("issuetype: Specify a valid issue type", {
+            issueTypeRejected: true,
+          }),
+        ),
+      listIssueTypes: vi.fn().mockResolvedValue([
+        { id: "10001", name: "Zadanie" },
+        { id: "10002", name: "Epik" },
+      ]),
+    });
+    const client = await connectedClient(issueTracker);
+
+    const result = await create(client, { issueType: "Bug" });
+
+    // Not INTERNAL_ERROR: nothing was created and the caller can fix its input,
+    // so it has to read what to fix.
+    expect(errorPayload(result)).toMatchObject({ code: "VALIDATION_FAILED", retryable: false });
+    expect(errorPayload(result).message).toContain("issuetype: Specify a valid issue type");
+    expect(errorPayload(result).message).toContain("Zadanie, Epik");
+  });
+
+  it("does not list issue types when the refused field was not the issue type", async () => {
+    const listIssueTypes = vi.fn().mockResolvedValue([{ id: "1", name: "Task" }]);
+    const issueTracker = fakeIssueTracker({
+      createTicket: vi
+        .fn()
+        .mockRejectedValue(
+          new IssueTrackerInputRejectedError(
+            "labels: The label 'has space' contains spaces which is invalid.",
+            { issueTypeRejected: false },
+          ),
+        ),
+      listIssueTypes,
+    });
+    const client = await connectedClient(issueTracker);
+
+    const result = await create(client, { labels: ["has space"] });
+
+    expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
+    expect(errorPayload(result).message).toContain("contains spaces");
+    expect(listIssueTypes).not.toHaveBeenCalled();
   });
 
   it("says so plainly when the configured tracker cannot create tickets", async () => {

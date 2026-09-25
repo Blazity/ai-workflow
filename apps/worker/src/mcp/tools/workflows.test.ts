@@ -253,6 +253,21 @@ describe("workflows.dispatch_preflight", () => {
     expect(await auditedOutcomes()).toEqual(["attempted", "rejected"]);
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);
   });
+
+  it("answers a definition that does not exist as NOT_FOUND", async () => {
+    service.preflightManualDispatch.mockRejectedValue(
+      new ManualDispatchError(404, "invalid_input", "Workflow definition 999999 not found."),
+    );
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "workflows.dispatch_preflight",
+      arguments: { ...PREFLIGHT_ARGS, definitionId: 999_999 },
+    });
+
+    expect(errorPayload(result)).toMatchObject({ code: "NOT_FOUND", retryable: false });
+    expect(errorText(result)).toContain("workflows.list");
+  });
 });
 
 describe("workflows.dispatch", () => {

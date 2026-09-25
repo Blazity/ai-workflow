@@ -20,6 +20,7 @@ import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
 import { registerSettingsTools } from "./tools/settings.js";
 import { registerMemoryTools } from "./tools/memory.js";
+import { registerHarnessProfileTools } from "./tools/harness-profiles.js";
 import { registerWorkScopeTools } from "./tools/work-scope.js";
 import { registerBriefingTools } from "./tools/briefings.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
@@ -110,6 +111,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerWorkScopeTools(server, deps);
   registerBriefingTools(server, deps);
   registerMemoryTools(server, deps);
+  registerHarnessProfileTools(server, deps);
 
   return server;
 }
