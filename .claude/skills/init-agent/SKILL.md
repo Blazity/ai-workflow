@@ -13,7 +13,7 @@ Harness Profiles own the provider and model. This skill asks which providers the
 
 ## Precondition
 
-`.vercel/project.json` must exist. If missing:
+`apps/worker/.vercel/project.json` must exist: the worker is linked from `apps/worker` (SETUP.md section 3), and this skill's commands run there. If missing:
 
 ```
 ERROR: no Vercel project linked. Run `vercel link` first, or invoke `init-env`
