@@ -14,9 +14,9 @@ paths:
 - Preserve each handler's refusal sentence in its schema. `parseRequestBody`
   returns a discriminated result instead of throwing and uses the first schema
   issue as the client-facing message.
-- Wrap a schema with `objectOrEmpty` only when its handler previously treated a
-  scalar, array or null body like an empty object. Handlers that explicitly
-  rejected non-objects keep an object-level message instead.
+- Wrap a schema with `objectOrEmpty` only to preserve a handler that answers a
+  scalar, array or null body as it answers `{}`. A handler that refuses
+  non-objects keeps an object-level `message` instead.
 - Keep schema tests beside the schemas as `*.test.ts` files run by `node:test`;
   worker route tests own transport behavior. Guard:
   `apps/worker/src/routes/request-body-schema-coverage.test.ts`.

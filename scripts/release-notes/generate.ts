@@ -16,6 +16,31 @@ const modelDraftSchema = z.object({
 
 export type ModelClient = (prompt: string) => Promise<string>;
 
+const ITEM_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    text: { type: "string" },
+    sources: { type: "array", items: { type: "integer" } },
+  },
+  required: ["text", "sources"],
+  additionalProperties: false,
+} as const;
+
+/** The shape the API constrains the answer to. Lengths and positivity stay in
+ *  modelDraftSchema, which still validates every answer. */
+const MODEL_DRAFT_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    highlights: { type: "string" },
+    features: { type: "array", items: ITEM_JSON_SCHEMA },
+    improvementsAndFixes: { type: "array", items: ITEM_JSON_SCHEMA },
+    requiredAction: { type: "string" },
+    knownLimitations: { type: "string" },
+  },
+  required: ["highlights", "features", "improvementsAndFixes", "requiredAction", "knownLimitations"],
+  additionalProperties: false,
+} as const;
+
 function buildPrompt(collection: ReleaseCollection): string {
   const facts = collection.included.map((pr) => ({
     number: pr.number,
@@ -30,7 +55,6 @@ function buildPrompt(collection: ReleaseCollection): string {
   return `Write concise, non-technical English release notes for Artur.
 Use only the supplied pull request facts. Every bullet must cite one or more supplied PR numbers.
 Do not mention internal ticket keys or implementation details.
-Return JSON with: highlights, features[{text,sources}], improvementsAndFixes[{text,sources}], requiredAction, knownLimitations.
 
 PULL REQUEST FACTS:
 ${JSON.stringify(facts, null, 2)}`;
@@ -49,8 +73,8 @@ async function anthropicClient(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: process.env.RELEASE_NOTES_MODEL || "claude-sonnet-4-6",
       max_tokens: 2_000,
-      temperature: 0,
       messages: [{ role: "user", content: prompt }],
+      output_config: { format: { type: "json_schema", schema: MODEL_DRAFT_JSON_SCHEMA } },
     }),
     signal: AbortSignal.timeout(30_000),
   });
@@ -97,10 +121,6 @@ function fallbackDraft(collection: ReleaseCollection): ReleaseDraft {
   };
 }
 
-function extractJson(text: string): unknown {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  return JSON.parse((fenced?.[1] ?? text).trim());
-}
 
 export async function generateReleaseDraft(
   collection: ReleaseCollection,
@@ -115,7 +135,7 @@ export async function generateReleaseDraft(
 
   let parsed: z.infer<typeof modelDraftSchema>;
   try {
-    parsed = modelDraftSchema.parse(extractJson(text));
+    parsed = modelDraftSchema.parse(JSON.parse(text));
     const known = new Set(collection.included.map((pr) => pr.number));
     for (const item of [...parsed.features, ...parsed.improvementsAndFixes]) {
       for (const source of item.sources) {

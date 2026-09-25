@@ -8,6 +8,6 @@
   repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
 
 [block: Block role and task]
-  authored:1                     6973  block_prompt  "Block prompt text"
+  authored:1                     7099  block_prompt  "Block prompt text"
 
 [profile left out: includeWorkflowData]

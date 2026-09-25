@@ -188,6 +188,10 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
   "workflows.archive",
   "workflows.unarchive",
   "approvals.list",
@@ -368,6 +372,26 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     idempotentHint: true,
     openWorldHint: true,
   },
+  // Reading which skills a profile pins, and which workflows pin it, changes
+  // nothing.
+  "profiles.list": READ_ANNOTATIONS,
+  "profiles.get": READ_ANNOTATIONS,
+  // Only the draft moves, and no run reads a draft; a skill sourced from a
+  // repository is read back from that provider, so the world is open.
+  "profiles.refresh_skill": {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  // Adds a version; every workflow node keeps the exact version it pins, so
+  // nothing a run resolves is replaced.
+  "profiles.publish": {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   // Archiving takes a definition out of every list and out of service: destructive,
   // though workflows.unarchive gives it back, and closed world. Taking it back
   // returns it disabled and arms nothing, so it keeps the authoring annotations.
@@ -393,6 +417,7 @@ const DOMAINS = [
   "settings",
   "work_scope",
   "memory",
+  "profiles",
   "approvals",
 ];
 

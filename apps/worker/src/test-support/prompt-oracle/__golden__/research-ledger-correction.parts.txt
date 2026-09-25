@@ -8,7 +8,7 @@
   repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
 
 [block: Block role and task]
-  authored:1                     6973  block_prompt  "Block prompt text"
+  authored:1                     7099  block_prompt  "Block prompt text"
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"
@@ -47,5 +47,5 @@
   ci-checks:1                     111  pull_request ref=github:acme/api  "CI/CD check results on github:acme/api"
   pre-sandbox:1                   180  pre_sandbox  "Pre-sandbox: Repositories left out"
   ledger-correction               250  research_note  "Fix the rejected review thread dispositions"
-  repository-access-protocol     1645  platform  "Repository Access Protocol"
+  repository-access-protocol     1682  platform  "Repository Access Protocol"
   resolution-check                  0  platform  "Resolution Check" WITHHELD (pr_feedback_present)

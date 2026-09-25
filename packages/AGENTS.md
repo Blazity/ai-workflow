@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-23
+Last-verified: 2026-09-25
 
 # packages/AGENTS.md
 
@@ -28,7 +28,7 @@ and never application infrastructure. ADR-001 owns the tiers.
 - **Inlining relies on pnpm's symlinked node-linker.** The Vercel tracer
   bundles a workspace `.ts` entry because its realpath resolves inside the
   workspace. A hoisted or isolated node-linker would send it looking for a
-  `dist` entry that no longer exists.
+  `dist` entry, and there is none.
 - **Each package typechecks itself.** A package with no scripts drops silently
   out of `pnpm -r typecheck`, so each keeps a `typecheck` script and a strict
   `tsconfig.json`.
@@ -42,9 +42,8 @@ and never application infrastructure. ADR-001 owns the tiers.
   has to run under the zod production loads. The `--filter` lists in the root
   `package.json` are the one list; that sweep also covers the fixtures under
   `integrations/_fixtures/`, which have no suite of their own. Both scripts name packages with
-  `--filter` rather than selecting `./packages/*` with `--if-present`, which
-  reported a package that owns no such script as a package that passed, so a
-  run over seven packages proved two. `conditions` has no `test` script at all
+  `--filter`, because `--if-present` over `./packages/*` reports a package
+  that owns no such script as passed. `conditions` has no `test` script at all
   and no suite in either run; that is a gap, not a decision recorded here. The
   test in
   `scripts/ci/verify-changed.test.ts` holds each named list equal to the

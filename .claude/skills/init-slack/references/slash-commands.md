@@ -1,25 +1,26 @@
 # Slack slash commands setup
 
-The `/ai-workflow` slash command lets operators inspect and control workflow runs from inside Slack. Three subcommands today:
+The `/ai-workflow` slash command lets operators inspect and control workflow runs from inside Slack:
 
-- `/ai-workflow list` — show every tracked workflow run
-- `/ai-workflow status <KEY>` — show the run + sandbox tied to a Jira ticket (e.g. `AWT-42`)
-- `/ai-workflow cancel <KEY>` — cancel the workflow run for a ticket
+- `/ai-workflow list`: show every tracked workflow run
+- `/ai-workflow status <KEY>`: show the run and sandbox tied to a Jira ticket (e.g. `AWT-42`)
+- `/ai-workflow cancel <KEY>`: cancel the workflow run for a ticket
+- `/ai-workflow redis summary`, `redis inspect <KEY>`, `redis reset <KEY>`: read or clear the run registry; reset does not cancel a run
 
 The command is gated by Slack's request signature (HMAC over the raw body) and an optional user allowlist.
 
 ## Prereqs
 
 - The AI Workflow Slack app already exists and has a bot token configured (see `bot-app-setup.md`).
-- The repo is deployed at least once to Vercel — the slash command needs a public Request URL.
+- The repo is deployed at least once to Vercel: the slash command needs a public Request URL.
 
-## Step 1 — Get the Signing Secret
+## Step 1: Get the Signing Secret
 
 In api.slack.com → your AI Workflow app → **Basic Information** → **App Credentials** → **Signing Secret** → **Show** → copy.
 
 This is `SLACK_SIGNING_SECRET`. Store it in Vercel for **all three environments** (Production, Preview, Development). Without it the route refuses every request with 503, naming the missing signing secret, so slash commands won't work.
 
-## Step 2 — (Optional) Restrict who can run /ai-workflow
+## Step 2: (Optional) Restrict who can run /ai-workflow
 
 If you don't want any random workspace member to be able to cancel runs, set `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs.
 
@@ -31,7 +32,7 @@ SLACK_ALLOWED_USER_IDS=U0123ABCD,U4567WXYZ
 
 Leave unset for "anyone in the workspace".
 
-## Step 3 — Register the slash command in Slack
+## Step 3: Register the slash command in Slack
 
 App settings → **Slash Commands** → **Create New Command**:
 
@@ -44,7 +45,7 @@ App settings → **Slash Commands** → **Create New Command**:
 
 Save. If the app is already installed, Slack will prompt you to **Reinstall** so the new command is registered with the workspace.
 
-## Step 4 — Smoke test
+## Step 4: Smoke test
 
 In any channel the bot can see:
 
@@ -57,12 +58,12 @@ Expect:
 1. An ephemeral "Working on `/ai-workflow list`…" message (within ~1s).
 2. A second message visible in the channel with either the list of active runs or "No active workflows."
 
-If you instead see Slack's "operation_timeout" error, the function probably can't reach the Postgres run registry — check Vercel runtime logs for the `slack_command_dispatching` log line.
+If you instead see Slack's "operation_timeout" error, the function probably can't reach the Postgres run registry: check Vercel runtime logs for the `slack_command_dispatching` log line.
 
 ## Troubleshooting
 
 - **`/ai-workflow` returns "command failed with the error 'dispatch_failed'"**: Slack thinks the URL didn't 200. Check Vercel logs; usually a missing `SLACK_SIGNING_SECRET` (route answers 503) or a wrong one (401) or a 5xx from Nitro startup.
-- **`Not authorized.`** — your user ID isn't in `SLACK_ALLOWED_USER_IDS`. Add it or unset the variable.
+- **`Not authorized.`**: your user ID isn't in `SLACK_ALLOWED_USER_IDS`. Add it or unset the variable.
 - **Cancel says "was mid-dispatch"**: a workflow was just claimed but not yet started. Wait a moment, then re-run the cancel.
 
 ## Rotation

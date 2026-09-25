@@ -1,13 +1,13 @@
 ---
 name: init-neon
-description: Configure the Neon Postgres database for AI Workflow (run registry, dispatch state, workflow definitions) via the Vercel Marketplace. Verifies DATABASE_URL is injected per environment, that environments do NOT share a branch, and that migrations apply. Use for "set up neon", "set up postgres", "configure database", "fix run registry", "env_marker error".
+description: Configure the Neon Postgres database for AI Workflow (run registry, dispatch state, workflow definitions) via the Vercel Marketplace. Verifies DATABASE_URL is injected per environment, that environments do not share a branch (the engine canary excepted), and that migrations apply. Use for "set up neon", "set up postgres", "configure database", "fix run registry", "env_marker error".
 ---
 
 # Initialize Neon Postgres
 
 Walks the user through installing **Neon Postgres** from the Vercel Marketplace with branch-per-environment enabled so Vercel auto-injects a separate `DATABASE_URL` per environment, which `apps/worker/src/infra/runtime-env.ts` requires at boot.
 
-AI Workflow uses Postgres as its run registry and its store for workflow definitions, approvals and telemetry: tracking active workflow runs per ticket, deduplicating dispatch, and locking concurrent cron cycles. The legacy post-PR gate that also used it was neutralized in AIW-220 (`apps/worker/post-pr-gate.yaml`), and PR and MR triggers inside workflow definitions replace it. Tables are created automatically; migrations run during every deploy's build step (`apps/worker/scripts/db-migrate.ts`).
+AI Workflow uses Postgres as its run registry and its store for workflow definitions, approvals and telemetry: tracking active workflow runs per ticket, deduplicating dispatch, and locking concurrent cron cycles. Tables are created automatically; migrations run during every deploy's build step (`apps/worker/scripts/db-migrate.ts`).
 
 > **Canonical reference:** [SETUP.md section 4](../../../SETUP.md#4-install-the-neon-postgres-marketplace-integration) holds the facts and constraints for the database. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
 >
@@ -15,7 +15,7 @@ AI Workflow uses Postgres as its run registry and its store for workflow definit
 
 ## Precondition
 
-`.vercel/project.json` must exist. If missing:
+`apps/worker/.vercel/project.json` must exist: the worker is linked from `apps/worker` (SETUP.md section 3), and this skill's commands run there. If missing:
 
 ```
 ERROR: no Vercel project linked. Run `vercel link` first, or invoke `init-env`
@@ -26,21 +26,21 @@ Halt.
 
 ## State detection
 
-1. `vercel env ls | grep DATABASE_URL` — if present for all three environments, skip install and go to verification.
+1. `vercel env ls | grep DATABASE_URL`: if present for all three environments, skip install and go to verification.
 2. If missing: walk the user through the Marketplace install below.
 
-## Step 1 — Marketplace install
+## Step 1: Marketplace install
 
 Walk the user through these steps (Vercel dashboard install is faster than CLI):
 
 1. Open https://vercel.com/marketplace/neon and click **Install**.
 2. Select the team and connect it to the ai-workflow Vercel project.
-3. **Critical:** enable **branch per environment** (development / preview / production) when configuring the integration. Each environment's `DATABASE_URL` must point at its own Neon branch. The build fails with an `env_marker` error if two environments share one branch — that guard protects the production run registry from preview deployments.
+3. **Critical:** enable **branch per environment** (development / preview / production) when configuring the integration. Each environment's `DATABASE_URL` must point at its own Neon branch. The build fails with an `env_marker` error if two environments share one branch: that guard protects the production run registry from preview deployments. The one exception is an engine canary that declares its owner with `DATABASE_SHARED_WITH=production` ([SETUP.md section 4](../../../SETUP.md#4-install-the-neon-postgres-marketplace-integration)); a new deployment has none.
 4. Confirm the install. Vercel auto-injects `DATABASE_URL` for all three environments.
 
 CLI alternative: `vercel integration add neon`
 
-## Step 2 — Confirm the key landed
+## Step 2: Confirm the key landed
 
 Tell the user to confirm in Vercel → Project Settings → Environment Variables that they see `DATABASE_URL` scoped to all three environments (Production, Preview, Development).
 
@@ -50,7 +50,7 @@ CLI alternative (faster from a terminal):
 vercel env ls | grep DATABASE_URL
 ```
 
-Success: `DATABASE_URL` appears for each of the three environments, with different values (distinct `ep-…` endpoint hosts confirm branch isolation; ignore any `-pooler` suffix when comparing hosts — pooled vs direct URLs of the same branch differ textually).
+Success: `DATABASE_URL` appears for each of the three environments, with different values (distinct `ep-…` endpoint hosts confirm branch isolation; ignore any `-pooler` suffix when comparing hosts, because pooled and direct URLs of the same branch differ textually).
 
 If `DATABASE_URL` is missing or the same value appears across environments, the branch-per-environment option wasn't enabled during install. Recovery paths:
 
@@ -60,10 +60,10 @@ If `DATABASE_URL` is missing or the same value appears across environments, the 
 ## Verification (all must pass)
 
 1. `vercel env ls` shows `DATABASE_URL` for development, preview, and production.
-2. Branch isolation: pull each environment's value and confirm the hosts differ (`vercel env pull --environment=production .env.prod` etc., compare the `ep-…` endpoint hosts; ignore any `-pooler` suffix when comparing hosts — pooled vs direct URLs of the same branch differ textually). Identical hosts across environments = the build's `env_marker` guard will fail — fix the integration's branch settings.
-3. Migrations: `cd apps/worker && vercel env pull .env.local && pnpm db:migrate` against the development branch — expect "[db-migrate] OK — branch claimed by 'development'." (The script loads `.env.local` then `.env` via dotenv; vars already set in the shell env are never overridden.)
+2. Branch isolation: pull each environment's value and confirm the hosts differ (`vercel env pull --environment=production .env.prod` etc., compare the `ep-…` endpoint hosts; ignore any `-pooler` suffix when comparing hosts, because pooled and direct URLs of the same branch differ textually). Identical hosts across environments mean the build's `env_marker` guard will fail: fix the integration's branch settings.
+3. Migrations: `cd apps/worker && vercel env pull .env.local && pnpm db:migrate` against the development branch: expect "[db-migrate] OK: branch claimed by 'development'." (The script loads `.env.local` then `.env` via dotenv; vars already set in the shell env are never overridden.)
 
-## Step 3 — Done
+## Step 3: Done
 
 No paste-template needed: `DATABASE_URL` is auto-injected by Vercel. The `init-env` Step 8 validator (`apps/worker/src/infra/runtime-env.ts`) confirms it made it.
 
@@ -73,10 +73,10 @@ If invoked from `init-env`, return control. If standalone, end.
 
 - Build fails with `[db-migrate] FATAL: this Neon branch is already claimed by VERCEL_ENV='production', but this build is VERCEL_ENV='…'`: two environments share one Neon branch (the `env_marker` guard). Reconfigure the integration for branch-per-environment, redeploy.
 - `DATABASE_URL undefined` at build: integration not connected to this project, or env var scoped to the wrong environments.
-- Stale run registry for one ticket (e.g. after a bad deploy or smoke test): run `/ai-workflow redis inspect <KEY>` in Slack to see its entries, then `/ai-workflow redis reset <KEY>` to clear them (`integrations/slack/commands.ts`). Reset does not cancel a live run; cancel it first with `/ai-workflow cancel <KEY>` or MCP `runs.cancel`. The old `scripts/clear-run-registry.ts` no longer exists.
+- Stale run registry for one ticket (e.g. after a bad deploy or smoke test): run `/ai-workflow redis inspect <KEY>` in Slack to see its entries, then `/ai-workflow redis reset <KEY>` to clear them (`integrations/slack/commands.ts`). Reset does not cancel a live run; cancel it first with `/ai-workflow cancel <KEY>` or MCP `runs.cancel`.
 
 ## Don'ts
 
 - **Don't manually create a Neon database outside the Marketplace.** You'd lose the auto-injection benefit and have to manage `DATABASE_URL` by hand. The Marketplace integration is the preferred path.
-- **Don't share one Neon branch across environments.** The `env_marker` build guard will fail — it's there to protect the production run registry from preview deployments polluting it.
+- **Don't share one Neon branch across environments** unless the sharing environment declares `DATABASE_SHARED_WITH` (only the engine canary does). The `env_marker` build guard will fail: it protects the production run registry from preview deployments polluting it.
 - **Don't skip branch isolation.** A preview deploy writing to the production Neon branch corrupts the run registry and can orphan live sandboxes.

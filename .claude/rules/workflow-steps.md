@@ -18,13 +18,11 @@ paths:
   literally, can drop the import chain from the builder graph, and can make
   `(cd apps/worker && pnpm run test:workflow-sdk)` time out with
   `Cannot find module .../packages/<name>/<file>`.
-- `apps/worker/src/engine/agent-workflow.ts` is a Workflow DevKit `"use workflow"`
-  module with NO top-level adapter or logger imports. Every use of `logger` or
-  an adapter inside a `"use step"` is a deferred
-  `await import("../infra/logger.js")` in the step body. Do not add a top-level
-  import there, and do not assume a warm module is already imported at the top:
-  the module is cache-warm only because an earlier step in the same run
-  imported it.
+- `apps/worker/src/engine/agent-workflow.ts` is the `"use workflow"` module and
+  imports no adapter or logger at the top (adapter types only). It loads step
+  modules with a deferred `await import(...)`, and a step body loads the logger
+  inside the body, as `engine/steps/phase.ts` does. Keep both deferred: a module
+  is warm only because an earlier step in the same run imported it.
 - A step that "never throws" is only safe together with `maxRetries = 0` and a
   failure mode that does not affect the run outcome, because the deferred
   import inside its `catch` can itself fail cold.

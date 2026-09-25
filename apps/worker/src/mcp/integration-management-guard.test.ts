@@ -103,6 +103,15 @@ const REVIEWED_TOOLS: readonly string[] = [
   // briefing names an integration only where the prompt it recorded did.
   "runs.briefing",
   "workflows.node_briefing",
+  // Harness profiles: which skills a profile pins and which workflows pin it,
+  // pointing a pinned skill at the bytes its source holds now, and publishing
+  // the draft. A skill is
+  // content the deployment carries, not a connection, and none of the three
+  // names a provider or touches a credential.
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
   // Archiving a workflow and taking the archive back, and deciding the plans runs
   // filed. None touches a connection: they move a definition row and a plan row.
   "workflows.archive",

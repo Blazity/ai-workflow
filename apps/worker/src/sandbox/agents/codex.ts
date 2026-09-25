@@ -539,7 +539,7 @@ touch ${paths.sentinel}
           ignoredDirs: [".codex"],
         }),
         `if [ -n "$changes" ]; then`,
-        `  printf '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}\\n'`,
+        `  printf '{"decision":"block","reason":"You have uncommitted changes. Commit them with a descriptive message, or revert them, before stopping: the pull request is built from your commits only."}\\n'`,
         "  exit 0",
         "fi",
         "exit 0",
