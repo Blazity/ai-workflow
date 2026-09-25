@@ -1459,13 +1459,19 @@ function AttemptInspector({
         ) : (
           <ReplayEnvelope
             envelope={envelope}
-            emptyLabel={`No sanitized ${tab} was captured for this attempt.`}
+            emptyLabel={emptyReplayTabLabel(tab)}
             render={envelopeRender}
           />
         )}
       </div>
     </CkCard>
   );
+}
+
+/** What an attempt's empty tab says, in a sentence that agrees with the tab's
+ *  name: "logs" is plural, the others are not. */
+export function emptyReplayTabLabel(tab: "input" | "output" | "logs" | "metadata"): string {
+  return `No sanitized ${tab} ${tab === "logs" ? "were" : "was"} captured for this attempt.`;
 }
 
 export function WorkflowReplay({

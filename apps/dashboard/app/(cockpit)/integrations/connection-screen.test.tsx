@@ -1350,6 +1350,77 @@ test("a change in another tab while the admin is typing keeps what was typed", a
   assert.match(text(root), /Somebody else changed this integration while you were typing/);
 });
 
+/** A browser tab the screen can be brought back to. Installed before the
+ *  screen mounts, because the listener is added on mount, and taken down after
+ *  it unmounts (`restore`, registered by the caller after `render`), because
+ *  the listener is removed on unmount. */
+function browserTab(): { comeBack: () => void; restore: () => void } {
+  const saved = ["window", "document"].map(
+    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+  );
+  const tab = new EventTarget();
+  const page = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: tab });
+  Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: page });
+  return {
+    comeBack: () => tab.dispatchEvent(new Event("focus")),
+    restore: () => {
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else Reflect.deleteProperty(globalThis, name);
+      }
+    },
+  };
+}
+
+/** Types a value, then brings the tab back while the worker reports `now`. */
+async function typeThenComeBack(t: TestContext, now: IntegrationDto[]): Promise<{
+  root: ReactTestInstance;
+  asked: Sent[];
+}> {
+  const asked = stubFetch(t, (call) =>
+    call.url === "/api/integrations" ? { integrations: now, writes: { allowed: true } } : {},
+  );
+  const { comeBack, restore } = browserTab();
+  const root = render(t);
+  t.after(restore);
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://mine.example");
+  await act(async () => {
+    comeBack();
+    await new Promise((settle) => setTimeout(settle, 20));
+  });
+  return { root, asked };
+}
+
+// Red when: coming back to the tab is itself read as a change. Production said
+// somebody else had changed the integration on every return to the window.
+test("coming back while typing says nothing when nobody changed this integration", async (t) => {
+  const { root, asked } = await typeThenComeBack(t, [
+    integration(),
+    // Another integration changing is not this screen's news.
+    integration({ id: "other", state: state({ integrationId: "other", enabled: false }) }),
+  ]);
+  assert.doesNotMatch(text(root), /Somebody else changed this integration/);
+  assert.ok(
+    asked.some((call) => call.url === "/api/integrations"),
+    "the screen asked the server, so the silence is an answer",
+  );
+});
+
+test("coming back while typing says so when this integration was saved elsewhere", async (t) => {
+  const { root } = await typeThenComeBack(t, [
+    integration({ state: state({ stored: { ...state().stored, latestVersion: 4, activeVersion: 4 } }) }),
+  ]);
+  assert.match(text(root), /Somebody else changed this integration while you were typing/);
+  assert.equal(
+    inputs(root).find((node) => node.props.type === "url")?.props.value,
+    "https://mine.example",
+    "what was typed stays",
+  );
+});
+
 // Red when: an integration whose values come from the environment shows its
 // fields as empty inputs again (Filip on production: a Connected Jira above a
 // blank form reads as broken, and the reason was further down the page).
@@ -1392,6 +1463,37 @@ test("values read from the environment are shown as set and hidden, not as empty
   await press(button(root, "Store values here instead"));
   assert.equal(inputs(root).length, 2, "the form is one deliberate click away");
   button(root, "Save and test");
+});
+
+// Red when: a non-secret value read from the environment is drawn as dots.
+// Production: Jira's Site URL and Project key were hidden like the token, so no
+// screen said which site and project this deployment watches.
+test("a non-secret value read from the environment is shown, a secret stays hidden", (t) => {
+  stubFetch(t, () => ({}));
+  const root = render(t, {
+    integration: integration({
+      fields: [
+        { ...URL_FIELD, envSet: true, storedValue: undefined, envValue: "https://acme.atlassian.net" },
+        { ...TOKEN_FIELD, envSet: true, storedSecretSet: false },
+      ],
+      state: state({
+        source: "environment",
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+      }),
+    }),
+  });
+  const shown = (key: string) =>
+    text(root.find((node) => node.props["data-environment-value"] === key));
+  assert.match(shown("baseUrl"), /https:\/\/acme\.atlassian\.net/);
+  assert.match(shown("baseUrl"), /set in\s+DEMO_BASE_URL/);
+  assert.doesNotMatch(shown("baseUrl"), /Value hidden/);
+  assert.match(shown("apiToken"), /Value hidden/);
+  assert.match(shown("apiToken"), /set in\s+DEMO_API_TOKEN/);
 });
 
 test("values stored beside an environment in use are shown from the start", (t) => {

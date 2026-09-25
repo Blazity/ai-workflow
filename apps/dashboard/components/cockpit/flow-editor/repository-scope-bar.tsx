@@ -101,7 +101,7 @@ export function RepositoryScopeBar({
 
   return (
     <>
-      <div className="flex min-h-[52px] items-center gap-3 border-b border-neutral-200 bg-app-bg px-6 py-2">
+      <div className="flex min-h-[52px] items-center gap-3 border-b border-neutral-200 bg-app-bg px-4 py-2 lg:px-6">
         <div className="min-w-[110px] shrink-0">
           <div className="font-mono text-[9px] font-semibold uppercase tracking-[0.06em] text-neutral-700">
             Source scope
@@ -112,8 +112,10 @@ export function RepositoryScopeBar({
         </div>
 
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-          <div className="flex min-w-0 items-center gap-2 truncate font-body text-[11px] text-neutral-700">
-            <span className="shrink-0">
+          {/* On a phone the two facts stack and wrap rather than truncate:
+              one line cut "GitHub + GitLab" to "GitHub + GitL". */}
+          <div className="flex min-w-0 flex-col items-start gap-0.5 font-body text-[11px] text-neutral-700 sm:flex-row sm:items-center sm:gap-2 sm:truncate">
+            <span className="min-w-0 break-words sm:shrink-0">
               <span className="text-neutral-500">Providers:</span>{" "}
               {displayedProviders.length > 0
                 ? displayedProviders.map(providerLabel).join(" + ")
@@ -125,10 +127,10 @@ export function RepositoryScopeBar({
                       "Unknown"
                     : "No provider connected"}
             </span>
-            <span aria-hidden="true" className="text-neutral-300">
+            <span aria-hidden="true" className="hidden text-neutral-300 sm:inline">
               ·
             </span>
-            <span className="min-w-0 truncate tabular-nums">
+            <span className="min-w-0 break-words tabular-nums sm:truncate">
               <span className="text-neutral-500">Repositories:</span>{" "}
               {pinned.length === 0
                 ? "Automatic per ticket"

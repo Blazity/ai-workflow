@@ -123,24 +123,32 @@ function fieldDtos(
   // this deployment's environment is read in exactly one place and the settings
   // consumer guard keeps its list of computed reads short.
   const environment = environmentReaderFrom();
-  return manifest.connection.fields.map((field) => ({
-    key: field.key,
-    label: field.label,
-    ...(field.description === undefined ? {} : { description: field.description }),
-    env: field.env,
-    secret: field.secret,
-    // The form is where values are stored, so it asks for what stored values
-    // need, a field only stored values require included.
-    optional: !connectionFieldRequired(field, "stored"),
-    format: field.format ?? "text",
-    envSet: (environment.value(field.env) ?? "").trim().length > 0,
-    // A secret's value is never here, under any source. The screen needs to know
-    // one exists so it can say "leave blank to keep", and that is all it needs.
-    ...(field.secret || active?.config[field.key] === undefined
-      ? {}
-      : { storedValue: active.config[field.key] }),
-    storedSecretSet: field.secret && (active?.secrets[field.key] ?? "").length > 0,
-  }));
+  return manifest.connection.fields.map((field) => {
+    const envValue = (environment.value(field.env) ?? "").trim();
+    return {
+      key: field.key,
+      label: field.label,
+      ...(field.description === undefined ? {} : { description: field.description }),
+      env: field.env,
+      secret: field.secret,
+      // The form is where values are stored, so it asks for what stored values
+      // need, a field only stored values require included.
+      optional: !connectionFieldRequired(field, "stored"),
+      format: field.format ?? "text",
+      envSet: envValue.length > 0,
+      // A non-secret value is what tells an admin which site or project this
+      // deployment is connected to, the same reason its stored twin is sent
+      // below. A secret's value is never read into this shape.
+      ...(field.secret || envValue.length === 0 ? {} : { envValue }),
+      // A secret's value is never here, under any source. The screen needs to
+      // know one exists so it can say "leave blank to keep", and that is all
+      // it needs.
+      ...(field.secret || active?.config[field.key] === undefined
+        ? {}
+        : { storedValue: active.config[field.key] }),
+      storedSecretSet: field.secret && (active?.secrets[field.key] ?? "").length > 0,
+    };
+  });
 }
 
 /**

@@ -1,6 +1,7 @@
 // apps/dashboard/app/(cockpit)/layout.tsx
 import { requireSession } from "@/lib/auth/session";
 import type { CockpitIntegration } from "@/lib/cockpit/navigation";
+import { integrationsFingerprint } from "@/lib/integrations/fingerprint";
 import { readIntegrationsList } from "@/lib/integrations/list";
 
 import { CockpitShell } from "./cockpit-shell";
@@ -15,9 +16,12 @@ import { CockpitShell } from "./cockpit-shell";
  * would go to find out why; a cockpit that refused to render because a list of
  * plugins could not be read would be the worse failure by a distance.
  */
-async function cockpitIntegrations(): Promise<readonly CockpitIntegration[]> {
+async function cockpitIntegrations(): Promise<{
+  integrations: readonly CockpitIntegration[];
+  version: string | null;
+}> {
   const list = await readIntegrationsList();
-  return (list?.integrations ?? []).map((integration) => ({
+  const integrations = (list?.integrations ?? []).map((integration) => ({
     id: integration.id,
     name: integration.name,
     pages: integration.pages,
@@ -27,6 +31,9 @@ async function cockpitIntegrations(): Promise<readonly CockpitIntegration[]> {
     status: integration.state.status,
     connection: integration.state.connection,
   }));
+  // What the shell compares against when a tab with unsaved work comes back
+  // into focus; none when the list could not be read.
+  return { integrations, version: list ? integrationsFingerprint(list.integrations) : null };
 }
 
 export default async function CockpitLayout({
@@ -35,9 +42,9 @@ export default async function CockpitLayout({
   children: React.ReactNode;
 }) {
   const session = await requireSession();
-  const integrations = await cockpitIntegrations();
+  const { integrations, version } = await cockpitIntegrations();
   return (
-    <CockpitShell session={session} integrations={integrations}>
+    <CockpitShell session={session} integrations={integrations} integrationsVersion={version}>
       {children}
     </CockpitShell>
   );

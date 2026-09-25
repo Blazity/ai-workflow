@@ -3,7 +3,7 @@ import { connectedDashboardRunQueries } from "../db/repositories/runs/dashboard-
 
 const DAY = 86_400_000;
 const WINDOWS = ["24h", "7d", "30d", "all"] as const;
-type TimeWindow = (typeof WINDOWS)[number];
+export type TimeWindow = (typeof WINDOWS)[number];
 const WINDOW_MS: Record<Exclude<TimeWindow, "all">, number> = {
   "24h": DAY,
   "7d": 7 * DAY,
@@ -69,13 +69,36 @@ function p95Buckets(items: Array<{ time: number; duration: number }>, spec: Spar
   return buckets.map((values) => percentile(values, 95));
 }
 
-export async function collectConnectedRunKpis(
-  windowParam: unknown,
-  now: Date,
-): Promise<Omit<KpisResponse, "generatedAt">> {
-  const window = parseWindow(windowParam);
+/** One run as the headline numbers read it (`listRunKpiRows`). */
+export interface RunKpiRow {
+  startedAt: Date | null;
+  firstSeenAt: Date;
+  status: string | null;
+  durationSec: number | null;
+  costUsd: number | null;
+}
+
+/** The rows the headline numbers for `window` need: this window and the one
+ *  before it, for the trend. */
+export function runKpiCutoff(window: TimeWindow, now: Date): Date | null {
   const { cutoff, previousCutoff } = bounds(window, now);
-  const rows = await connectedDashboardRunQueries.listKpis(previousCutoff ?? cutoff);
+  return previousCutoff ?? cutoff;
+}
+
+/**
+ * The four headline run numbers, from the rows `runKpiCutoff` selects.
+ *
+ * The one computation of them: the KPI route reads it through
+ * `collectConnectedRunKpis`, and `runKpis` in services/run-lifecycle (which the
+ * tests cover) through the same function. A second copy of this is how the
+ * route kept reporting a p95 of 0 s after the tested one had been corrected.
+ */
+export function runKpisFromRows(
+  rows: readonly RunKpiRow[],
+  window: TimeWindow,
+  now: Date,
+): Omit<KpisResponse, "generatedAt"> {
+  const { cutoff, previousCutoff } = bounds(window, now);
   const cutoffMs = cutoff?.getTime() ?? -Infinity;
   const previousMs = previousCutoff?.getTime() ?? -Infinity;
   const enriched = rows.map((row) => ({
@@ -94,18 +117,38 @@ export async function collectConnectedRunKpis(
     .map((row) => ({ time: row.time, duration: row.duration as number }));
   const currentDone = completed(current);
   const previousDone = completed(previous);
+  // The p95 of successful runs, so a window without one has no p95 at all:
+  // the percentile of nothing is not 0 s, and a 0 s compared with the previous
+  // window's p95 read as a large improvement in green. The trend needs a
+  // successful run on both sides; without one there is nothing it rose from.
+  const currentP95 = currentDone.length > 0
+    ? percentile(currentDone.map((row) => row.duration), 95)
+    : null;
+  const previousP95 = previousDone.length > 0
+    ? percentile(previousDone.map((row) => row.duration), 95)
+    : null;
   const currentFailed = current.filter((row) => row.status === "failed");
   const previousFailed = previous.filter((row) => row.status === "failed");
   const currentCost = sum(current.map((row) => row.cost));
   const previousCost = sum(previous.map((row) => row.cost));
-  const currentP95 = percentile(currentDone.map((row) => row.duration), 95);
   const spec = sparkSpec(window, now, current.map((row) => row.time));
   return {
     runs24h: { value: current.length, deltaPct: hasPrevious ? deltaPct(current.length, previous.length) : 0, spark: countBuckets(current.map((row) => row.time), spec) },
-    p95: { valueSec: currentP95, deltaSec: hasPrevious ? currentP95 - percentile(previousDone.map((row) => row.duration), 95) : 0, spark: p95Buckets(currentDone, spec) },
+    p95: currentP95 === null
+      ? null
+      : { valueSec: currentP95, deltaSec: previousP95 === null ? 0 : currentP95 - previousP95, spark: p95Buckets(currentDone, spec) },
     errors24h: { value: currentFailed.length, deltaPct: hasPrevious ? deltaPct(currentFailed.length, previousFailed.length) : 0, spark: countBuckets(currentFailed.map((row) => row.time), spec) },
     cost24h: { value: currentCost, deltaPct: hasPrevious ? deltaPct(currentCost, previousCost) : 0 },
   };
+}
+
+export async function collectConnectedRunKpis(
+  windowParam: unknown,
+  now: Date,
+): Promise<Omit<KpisResponse, "generatedAt">> {
+  const window = parseWindow(windowParam);
+  const rows = await connectedDashboardRunQueries.listKpis(runKpiCutoff(window, now));
+  return runKpisFromRows(rows, window, now);
 }
 
 export async function collectConnectedCostAggregate(

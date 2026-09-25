@@ -27,6 +27,7 @@ import {
   publishIntegrationChange,
   useIntegrationChangeRefresh,
 } from "@/lib/integrations/change-signal";
+import { integrationFingerprint } from "@/lib/integrations/fingerprint";
 import {
   andList,
   buildSaveRequest,
@@ -198,9 +199,11 @@ function FieldSourceTag({ source }: { source: FieldSource }) {
 /**
  * One connection field whose value runs read from the environment.
  *
- * Not an input: the value never reaches the browser, and an empty input is
- * what made a working connection look broken. It says the variable is set and
- * hides the value, or that it is not set, and names the variable either way.
+ * Not an input: it is changed where it is set, and an empty input is what made
+ * a working connection look broken. A non-secret value is shown (which site,
+ * which project); a secret's never reaches the browser, so it says the
+ * variable is set and hides the value. Either way it names the variable, or
+ * says it is not set.
  */
 function EnvironmentValue({
   field,
@@ -227,7 +230,14 @@ function EnvironmentValue({
         data-environment-value={field.key}
         className="flex min-h-[30px] flex-wrap items-center gap-x-2 rounded-[3px] border border-dashed border-neutral-300 bg-app-bg px-2 py-1 font-mono text-[12px]"
       >
-        {field.envSet ? (
+        {field.envSet && field.envValue !== undefined ? (
+          // A non-secret value is the answer to "which site, which project":
+          // hidden, no screen said what this deployment is connected to.
+          <>
+            <span className="break-all text-neutral-900">{field.envValue}</span>
+            <span className="break-all text-neutral-600">set in {field.env}</span>
+          </>
+        ) : field.envSet ? (
           <>
             <span aria-hidden="true" className="tracking-[0.2em] text-neutral-700">
               ••••••••
@@ -338,6 +348,12 @@ export function ConnectionScreen({
   useIntegrationChangeRefresh({
     enabled: !dirty,
     onSuppressed: () => setChangedElsewhere(true),
+    // Coming back to the tab is only a moment a change may have landed: the
+    // notice waits for the server to report this integration differently.
+    changedSince: (current) => {
+      const now = current.integrations.find((candidate) => candidate.id === integration.id);
+      return now === undefined || integrationFingerprint(now) !== integrationFingerprint(integration);
+    },
   });
   // Leaving with a half-typed token asks first: by a sidebar entry, a tab of
   // this area, a spotlight jump or the link back (the cockpit's guard), and by

@@ -17,6 +17,7 @@ test("cached validation does not gate saving or deploying a structural candidate
       dirty: true,
       structurallyValid: true,
       hasDraft: true,
+      draftDeployedAs: null,
     }),
     { canSave: true, canDeploy: true },
   );
@@ -28,6 +29,7 @@ test("a clean saved draft can be deployed and an unsaved invalid shape cannot", 
       dirty: false,
       structurallyValid: true,
       hasDraft: true,
+      draftDeployedAs: null,
     }),
     { canSave: false, canDeploy: true },
   );
@@ -36,6 +38,7 @@ test("a clean saved draft can be deployed and an unsaved invalid shape cannot", 
       dirty: true,
       structurallyValid: false,
       hasDraft: false,
+      draftDeployedAs: null,
     }).canDeploy,
     false,
   );
@@ -93,7 +96,13 @@ test("draftDiffersFromDeployed has nothing to compare when either side is missin
 });
 
 test("a Deploy that cannot be pressed says why, in the order the author has to act", () => {
-  const ready = { hasTrigger: true, saveIssueCount: 0, dirty: true, hasDraft: true };
+  const ready = {
+    hasTrigger: true,
+    saveIssueCount: 0,
+    dirty: true,
+    hasDraft: true,
+    draftDeployedAs: null,
+  };
   assert.equal(deployUnavailableReason(ready), null);
   assert.equal(
     deployUnavailableReason({ ...ready, hasTrigger: false, saveIssueCount: 2 }),
@@ -110,5 +119,30 @@ test("a Deploy that cannot be pressed says why, in the order the author has to a
   assert.equal(
     deployUnavailableReason({ ...ready, dirty: false, hasDraft: false }),
     "Nothing to deploy: the canvas holds no change and no saved draft.",
+  );
+});
+
+// Red when: Deploy stays available on a workflow whose saved draft is exactly
+// the deployed version. Production: DEPLOYED V2, nothing unsaved, Reset to
+// deployed disabled, and Deploy green and enabled, because a saved draft alone
+// counted as something to deploy.
+test("a saved draft that is already deployed is nothing to deploy, and the reason names the version", () => {
+  const upToDate = {
+    dirty: false,
+    structurallyValid: true,
+    hasDraft: true,
+    draftDeployedAs: 2,
+  };
+  assert.equal(workflowEditorActions(upToDate).canDeploy, false);
+  assert.equal(
+    deployUnavailableReason({ hasTrigger: true, saveIssueCount: 0, ...upToDate }),
+    "Nothing to deploy: the saved draft is already deployed as v2.",
+  );
+
+  // An edit on top of it is something to deploy again.
+  assert.equal(workflowEditorActions({ ...upToDate, dirty: true }).canDeploy, true);
+  assert.equal(
+    deployUnavailableReason({ hasTrigger: true, saveIssueCount: 0, ...upToDate, dirty: true }),
+    null,
   );
 });
