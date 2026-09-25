@@ -896,8 +896,10 @@ The tracer travels with the integration as `integrations/arthur/tracer.generated
 Memory is an integration capability. With nothing connected, runs keep what
 they learn about repositories and owners, and each ticket's notebook, in the
 built-in store in this deployment's database; nothing needs configuring. To
-store it in a hosted [Mem0](https://mem0.ai) project instead, connect the Mem0
-integration (Integrations → Mem0, or `AIW_MEM0_API_KEY`). Read
+store the facts and lessons in a hosted [Mem0](https://mem0.ai) project
+instead, connect the Mem0 integration (Integrations → Mem0, or
+`AIW_MEM0_API_KEY`). Each ticket's notebook stays in the built-in store either
+way. Read
 [`integrations/mem0/README.md`](./integrations/mem0/README.md) first: every
 deployment that shares this database switches with it, and what the built-in
 store already holds is not copied over.

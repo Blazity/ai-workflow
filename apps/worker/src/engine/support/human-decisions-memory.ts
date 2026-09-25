@@ -63,6 +63,28 @@ export function renderHumanDecisionsSection(clarifications: HumanDecision[]): st
 }
 
 /**
+ * The complete marker-delimited block in `content`, markers included, or null
+ * when it holds none. A lone start marker whose end was lost is not a block.
+ */
+export function humanDecisionsSectionOf(content: string): string | null {
+  return SECTION_REGEX.exec(content)?.[0] ?? null;
+}
+
+/**
+ * `content` with the section taken out: every complete block with the blank
+ * lines around it, and a lone start marker with everything after it, which is
+ * what the upsert below takes for a block whose end was lost.
+ */
+export function withoutHumanDecisionsSection(content: string): string {
+  const withoutBlocks = content.replace(
+    /\s*<!-- human-decisions:start -->[\s\S]*?<!-- human-decisions:end -->\s*/g,
+    "\n\n",
+  );
+  const lone = withoutBlocks.indexOf(START_MARKER);
+  return lone < 0 ? withoutBlocks : withoutBlocks.slice(0, lone);
+}
+
+/**
  * Upserts the rendered section into the memory file contents:
  * - existing file WITH a complete marker pair: replace the block in place
  *   (idempotent),
