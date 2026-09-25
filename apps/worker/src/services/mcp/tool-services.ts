@@ -35,10 +35,12 @@ import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-stor
 import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
 import { getWorkflowDefinition } from "../../db/repositories/definitions.js";
 import {
+  archiveWorkflowDefinition,
   createWorkflowDefinition,
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
   saveWorkflowDefinitionLayout,
+  unarchiveWorkflowDefinition,
   updateWorkflowDefinition,
 } from "../workflow-definitions/index.js";
 import {
@@ -244,6 +246,14 @@ export interface McpToolServices extends McpGateServices {
   updateWorkflowDefinition(
     input: Parameters<typeof updateWorkflowDefinition>[1],
   ): ReturnType<typeof updateWorkflowDefinition>;
+  /** The editor's Delete, which archives: the store refuses an enabled
+   *  definition and the last live one. */
+  archiveWorkflowDefinition(
+    input: Parameters<typeof archiveWorkflowDefinition>[1],
+  ): ReturnType<typeof archiveWorkflowDefinition>;
+  unarchiveWorkflowDefinition(
+    input: Parameters<typeof unarchiveWorkflowDefinition>[1],
+  ): ReturnType<typeof unarchiveWorkflowDefinition>;
   getWorkflowDefinition(
     definitionId: number,
   ): ReturnType<typeof getWorkflowDefinition>;
@@ -358,6 +368,8 @@ export function createMcpToolServices(
     saveWorkflowDefinitionLayout: (input) => saveWorkflowDefinitionLayout(db, input),
     deployWorkflowDefinition: (input) => deployWorkflowDefinition(db, input),
     updateWorkflowDefinition: (input) => updateWorkflowDefinition(db, input),
+    archiveWorkflowDefinition: (input) => archiveWorkflowDefinition(db, input),
+    unarchiveWorkflowDefinition: (input) => unarchiveWorkflowDefinition(db, input),
     getWorkflowDefinition: (definitionId) => getWorkflowDefinition(db, definitionId),
     getWorkflowDefinitionVersion: (definitionId, version) =>
       readWorkflowDefinitionVersion(db, definitionId, version),

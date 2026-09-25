@@ -1,7 +1,6 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { ApprovalDecisionResponse } from "@shared/contracts";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
-import { canApproveWorkflowPlans } from "../../../../../services/auth/roles.js";
 import {
   rejectApproval,
 } from "../../../../../services/approvals/approval-decisions.js";
@@ -9,14 +8,13 @@ import { toApprovalHttpError } from "../../approvals.get.js";
 
 export default defineEventHandler(async (event): Promise<ApprovalDecisionResponse | undefined> => {
   try {
+    // Who may decide is the service's question (canApproveWorkflowPlans), so
+    // this route and the MCP tools refuse the same people with one rule.
     const actor = await requireDashboardActor(event);
-    if (!canApproveWorkflowPlans(actor.role)) {
-      throw createError({ statusCode: 403, statusMessage: "Forbidden" });
-    }
     const id = getRouterParam(event, "id");
     if (!id) throw createError({ statusCode: 404, statusMessage: "Unknown approval" });
 
-    const outcome = await rejectApproval(id, { userId: actor.userId });
+    const outcome = await rejectApproval(id, { userId: actor.userId, role: actor.role });
     switch (outcome.kind) {
       case "unknown_approval":
         throw createError({ statusCode: 404, statusMessage: "Unknown approval" });

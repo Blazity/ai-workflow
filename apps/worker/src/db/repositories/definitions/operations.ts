@@ -505,6 +505,41 @@ export async function archiveWorkflowDefinition(
   return rawRows<{ id: number }>(result)[0]?.id ?? null;
 }
 
+/**
+ * Takes a definition out of the archive, as one statement.
+ *
+ * Nothing but the archive stamp moves. The archive above only ever takes a
+ * disabled definition, and a disabled one holds no trigger binding, so there is
+ * nothing to hand back: the row returns disabled, with its versions, draft,
+ * deployed pointer and layout exactly as they were.
+ *
+ * Refuses rather than collides when a live definition has taken the name since:
+ * the partial unique index frees an archived definition's name for reuse, so a
+ * bare update would trip that index instead of saying why. Null when nothing
+ * was taken out of the archive; the caller reads the row to say which case.
+ */
+export async function unarchiveWorkflowDefinition(
+  db: Db,
+  input: { definitionId: number },
+): Promise<number | null> {
+  const result = await db.execute(sql`
+    UPDATE workflow_definitions wd
+    SET archived_at = NULL,
+        updated_at = now()
+    WHERE wd.id = ${input.definitionId}
+      AND wd.archived_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM workflow_definitions live
+        WHERE live.name = wd.name
+          AND live.archived_at IS NULL
+      )
+    RETURNING wd.id
+  `);
+
+  return rawRows<{ id: number }>(result)[0]?.id ?? null;
+}
+
 // --- Serialization ---
 
 export function serializeWorkflowDefinitionVersion(

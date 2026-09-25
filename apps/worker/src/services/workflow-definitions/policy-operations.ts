@@ -9,6 +9,7 @@ import {
 import type { Db } from "../../db/types.js";
 import {
   archiveConnectedDefinition,
+  unarchiveConnectedDefinition,
   appendConnectedWorkflowDefinitionDraft,
   getConnectedWorkflowDefinition,
   insertConnectedWorkflowDefinition,
@@ -595,6 +596,50 @@ export async function archiveWorkflowDefinition(db: Db, input: { definitionId: n
   throw new raw.WorkflowDefinitionStoreError(409, "Definition changed; reload before archiving");
 }
 
+/**
+ * Take an archived definition back, disabled as it went in.
+ *
+ * The same editor gate as the archive, and one reading of the outcome for the
+ * pglite path and the connected one, so the two cannot drift. Taking back a
+ * definition that is not archived answers with it as it stands: the caller's
+ * wish, a live definition, already holds.
+ */
+export async function unarchiveWorkflowDefinition(db: Db, input: { definitionId: number; actor: WorkflowDefinitionActor }) {
+  requireEditor(input.actor.role);
+  return unarchiveWith(
+    {
+      unarchive: (definitionId) => raw.unarchiveWorkflowDefinition(db, { definitionId }),
+      read: (definitionId) => raw.getWorkflowDefinition(db, definitionId),
+    },
+    input.definitionId,
+  );
+}
+
+async function unarchiveWith(
+  store: {
+    unarchive: (definitionId: number) => Promise<number | null>;
+    read: (definitionId: number) => Promise<WorkflowDefinitionRow | null>;
+  },
+  definitionId: number,
+): Promise<WorkflowDefinitionRow> {
+  let unarchivedId: number | null;
+  try {
+    unarchivedId = await store.unarchive(definitionId);
+  } catch (error) {
+    // Two archived definitions of one name taken back at once: the statement's
+    // own check cannot see the other's uncommitted row, the index can.
+    if (!isUniqueViolation(error)) throw error;
+    unarchivedId = null;
+  }
+  const current = await store.read(definitionId);
+  if (!current) throw new raw.WorkflowDefinitionStoreError(404, "Unknown definition");
+  if (unarchivedId !== null || current.archivedAt === null) return current;
+  throw new raw.WorkflowDefinitionStoreError(
+    409,
+    `A live workflow is already named "${current.name}". Rename or archive that one first; this definition stays archived.`,
+  );
+}
+
 /** Process-bound public writes. These retain the complete policy wrapper above
  * rather than handing callers a Db value that could bypass it. */
 export function createConnectedWorkflowDefinition(
@@ -648,6 +693,19 @@ export function archiveConnectedWorkflowDefinition(
 ) {
   requireEditor(input.actor.role);
   return archiveWorkflowDefinitionConnected(input);
+}
+
+export function unarchiveConnectedWorkflowDefinition(
+  input: Parameters<typeof unarchiveWorkflowDefinition>[1],
+) {
+  requireEditor(input.actor.role);
+  return unarchiveWith(
+    {
+      unarchive: (definitionId) => unarchiveConnectedDefinition({ definitionId }),
+      read: getConnectedWorkflowDefinition,
+    },
+    input.definitionId,
+  );
 }
 
 async function createWorkflowDefinitionConnected(

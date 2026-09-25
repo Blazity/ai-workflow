@@ -25,10 +25,12 @@ import {
 import { answerConnectedClarificationAndResume } from "../clarifications/index.js";
 import { cancelConnectedRunForOperator } from "../run-lifecycle/index.js";
 import {
+  archiveConnectedWorkflowDefinition,
   createConnectedWorkflowDefinition,
   deployConnectedWorkflowDefinition,
   saveConnectedWorkflowDefinitionDraft,
   saveConnectedWorkflowDefinitionLayout,
+  unarchiveConnectedWorkflowDefinition,
   updateConnectedWorkflowDefinition,
 } from "../workflow-definitions/index.js";
 import {
@@ -121,6 +123,10 @@ export function createConnectedMcpToolServices(
     saveWorkflowDefinitionLayout: saveConnectedWorkflowDefinitionLayout,
     deployWorkflowDefinition: deployConnectedWorkflowDefinition,
     updateWorkflowDefinition: updateConnectedWorkflowDefinition,
+    // The very function the dashboard's DELETE reaches (definition-authoring.ts,
+    // archiveWorkflowDefinitionById), so the two doors archive by one rule.
+    archiveWorkflowDefinition: archiveConnectedWorkflowDefinition,
+    unarchiveWorkflowDefinition: unarchiveConnectedWorkflowDefinition,
     getWorkflowDefinition: getConnectedWorkflowDefinition,
     getWorkflowDefinitionVersion: readConnectedWorkflowDefinitionVersion,
     getCurrentWorkflowDefinitionVersion: readConnectedCurrentWorkflowDefinitionVersion,

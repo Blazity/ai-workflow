@@ -15,7 +15,8 @@ const SQL_TABLES = [
   "harness_skill_artifact_files", "harness_skill_artifacts",
   "integration_connection_versions", "integration_connections", "invitation",
   "invite_email_delivery", "jwks", "manual_dispatch_requests", "mcp_audit_events",
-  "mcp_idempotency_keys", "mcp_rate_limit_windows", "member", "oauth_access_token",
+  "mcp_idempotency_keys", "mcp_rate_limit_windows", "member", "memory_entry_state",
+  "memory_events", "oauth_access_token",
   "oauth_client", "oauth_consent", "oauth_refresh_token", "organization",
   "pre_pr_check_config_versions", "pr_autofix_attempts", "prompt_library",
   "prompt_library_versions", "repositories", "repository_catalog_state",
@@ -35,12 +36,12 @@ const SQL_TABLES = [
 ] as const;
 
 describe("schema barrel", () => {
-  it("exports the literal 77-table schema exactly once", () => {
+  it("exports the literal 79-table schema exactly once", () => {
     const names = Object.values(schema)
       .filter((value) => is(value, PgTable))
       .map((table) => getTableName(table as PgTable))
       .sort();
     expect(names).toEqual([...SQL_TABLES].sort());
-    expect(new Set(names).size).toBe(77);
+    expect(new Set(names).size).toBe(79);
   });
 });

@@ -101,6 +101,12 @@ const CATALOGUED = [
   "profiles.get",
   "profiles.refresh_skill",
   "profiles.publish",
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

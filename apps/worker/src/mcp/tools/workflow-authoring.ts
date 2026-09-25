@@ -526,21 +526,25 @@ async function currentHeads(
   }
 }
 
+/** "Draft changed; reload before saving", "Definition changed; reload before
+ *  deploying" and their kin: a compare-and-set that met a newer row. */
+const STALE_REVISION = /; reload before \w+$/u;
+
 function isStaleRevision(error: unknown): boolean {
   return (
     error instanceof WorkflowDefinitionStoreError &&
     error.statusCode === 409 &&
-    error.message.endsWith("reload before saving")
+    STALE_REVISION.test(error.message)
   );
 }
 
 /** The step that gets a refused write through, by which conflict the store named. */
 function conflictNextStep(message: string, heads: DefinitionHeads | undefined): string {
-  if (message.endsWith("reload before saving")) {
+  if (STALE_REVISION.test(message)) {
     const where = heads
       ? ` It is now at draftRevision ${heads.draftRevision}, deployedVersion ${heads.deployedVersion ?? "null"}.`
       : "";
-    return `${where} Read it with workflows.get_graph, apply your change to that graph and send it with the revisions it reports.`;
+    return `${where} Read it again with workflows.get_graph and send the revisions it reports, with your change applied to the graph it returns.`;
   }
   if (message === "Name already in use") {
     return " Pick another name; workflows.list names the ones in use.";
@@ -572,7 +576,7 @@ function graphDigest(definition: unknown): string {
  * (services/workflow-definitions/policy-operations.ts:758), and a key handed back
  * there would buy a second deployment.
  */
-function throwPublicStoreError(error: unknown, heads?: DefinitionHeads): never {
+export function throwPublicStoreError(error: unknown, heads?: DefinitionHeads): never {
   // Before the base class below, which it extends: a deployment gate failure is a
   // 422 carrying the issues, not a generic conflict.
   if (error instanceof WorkflowDefinitionValidationError) {
@@ -600,10 +604,9 @@ function throwPublicStoreError(error: unknown, heads?: DefinitionHeads): never {
     // holds, an archived definition). What the caller does instead is the next
     // step the message names.
     if (error.statusCode === 409) {
-      throw refusal(
-        "CONFLICT",
-        `${redactIntegrationVariableNames(error.message).replace(/\.?$/u, ".")}${conflictNextStep(error.message, heads)}`,
-      );
+      const said = redactIntegrationVariableNames(error.message);
+      const step = conflictNextStep(error.message, heads);
+      throw refusal("CONFLICT", step ? `${said.replace(/\.?$/u, ".")}${step}` : said);
     }
   }
   throw error;

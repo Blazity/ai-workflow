@@ -88,6 +88,12 @@ describe("MCP public contracts", () => {
       "profiles.get",
       "profiles.refresh_skill",
       "profiles.publish",
+      "workflows.archive",
+      "workflows.unarchive",
+      "approvals.list",
+      "approvals.get",
+      "approvals.approve",
+      "approvals.reject",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

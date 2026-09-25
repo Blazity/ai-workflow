@@ -776,6 +776,11 @@ describe("workflows.publish", () => {
     expect(result.isError).toBe(true);
     expect(errorPayload(result).code).toBe("CONFLICT");
     expect(errorPayload(result).message).toContain("reload before deploying");
+    // Sent again as it is, it meets the same head: the refusal says where the
+    // definition stands and where to read it, instead of inviting a retry.
+    expect(errorPayload(result).retryable).toBe(false);
+    expect(errorPayload(result).message).toContain("deployedVersion null");
+    expect(errorPayload(result).message).toContain("workflows.get_graph");
     expect(await definitionRows()).toMatchObject([{ deployedVersion: null }]);
     expect(await auditedErrorCodes()).toEqual(["CONFLICT"]);
 
