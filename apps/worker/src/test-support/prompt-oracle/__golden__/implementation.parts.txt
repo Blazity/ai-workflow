@@ -12,6 +12,7 @@
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"
+  description                       0  ticket ref=AIW-512  "Ticket description" WITHHELD (represented_by_plan)
   acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
   clarifications                   26  clarification  "Clarification answers"
   clarification:1                 184  clarification ref=1 label=Anna Nowak  "Clarification round 1"

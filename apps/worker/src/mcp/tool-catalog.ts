@@ -344,7 +344,8 @@ export const MCP_TOOL_CATALOG = {
     annotations: policyFor("system.capabilities").annotations,
   },
   "tickets.get": {
-    description: "Fetch a ticket's fields, status, labels and (optionally) its comments.",
+    description:
+      "Fetch a ticket's fields, status, labels, related tickets and (optionally) its comments. `relatedTickets` lists the ticket's parent, the tickets under it (subtasks, and an epic's child issues) and its links, each with its key, title, status and `relation`, the words that complete \"this ticket ... <key>\" (\"is a child of\", \"is the parent of\", \"blocks\"); only their titles, never their descriptions. It is null when the tracker does not report relations, and an empty list when it says there are none.",
     inputSchema: z
       .object({
         ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),

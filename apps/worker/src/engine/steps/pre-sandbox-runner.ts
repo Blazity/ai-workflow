@@ -204,6 +204,8 @@ function selectTicketFields(
       selectedTicket.comments = ticket.comments;
     } else if (field === "labels" && ticket.labels !== undefined) {
       selectedTicket.labels = ticket.labels;
+    } else if (field === "relatedTickets" && ticket.relatedTickets !== undefined) {
+      selectedTicket.relatedTickets = ticket.relatedTickets;
     }
   }
 

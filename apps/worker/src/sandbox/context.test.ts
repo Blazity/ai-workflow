@@ -1709,6 +1709,40 @@ describe("runtime parts", () => {
     expect(implementation.filter((part) => part.origin.kind === "platform")).toEqual([]);
   });
 
+  // The implementation agent works from the plan, which was written from the
+  // description (and after approval, a person approved it), so the description
+  // is not sent a second time: that is the design of the three-phase flow. What
+  // was missing is the briefing saying so. A person reading what the agent got
+  // saw no description and could not tell a deliberate omission from a lost
+  // one.
+  it("records in the briefing that the plan stands in for the description it was written from", () => {
+    const parts = implementationContextParts({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "# Plan\n1. Refresh the session before the deploy drains it.",
+    });
+
+    expect(byId(parts, "description")).toMatchObject({
+      content: "",
+      origin: { kind: "ticket", ref: "AIW-512" },
+      withheld: { reason: "represented_by_plan", text: expect.stringContaining("plan") },
+    });
+    expect(parts.map((part) => part.content).join("")).not.toContain("Logged out after a deploy.");
+  });
+
+  // Nothing stands in for it when there is no plan (an implementation agent a
+  // workflow runs straight from its trigger), and then the description was the
+  // one statement of the work the agent never got.
+  it("sends the description to an implementation agent that has no plan to work from", () => {
+    const parts = implementationContextParts({ ticket, prompt: "", researchPlanMarkdown: " \n" });
+
+    expect(byId(parts, "description")).toMatchObject({
+      content: "\n## Description\n\nLogged out after a deploy.\n",
+      origin: { kind: "ticket", ref: "AIW-512" },
+    });
+    expect(byId(parts, "description").withheld).toBeUndefined();
+  });
+
   it("keeps ids stable across repeat compositions and free of user text", () => {
     const first = research().map((part) => part.id);
     const second = research().map((part) => part.id);
