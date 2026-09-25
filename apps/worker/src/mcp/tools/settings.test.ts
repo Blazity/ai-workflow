@@ -268,6 +268,41 @@ describe("settings.get", () => {
       code: "VALIDATION_FAILED",
       message: expect.stringContaining("unknown_key"),
     });
+    expect(errorOf(result).message).toContain("settings.list");
+  });
+
+  // Red when: a key typed in the wrong case is answered with a code and no way
+  // forward, which is what a model reading the Settings page's labels sends.
+  it("names the key a lowercase spelling meant", async () => {
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "settings.get",
+      arguments: { key: "job_timeout_ms" },
+    });
+
+    expect(errorOf(result).message).toContain("JOB_TIMEOUT_MS");
+  });
+});
+
+describe("settings.set refusals", () => {
+  // Red when: a value of the wrong type is refused as "(wrong_type)" with
+  // nothing about the type the key takes.
+  it("says which type a key takes when the value has another", async () => {
+    const client = await connectedClient({ scopes: WRITE_ONLY });
+
+    const result = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "JOB_TIMEOUT_MS",
+        value: "ten minutes",
+        reason: "typed as prose",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(errorOf(result)).toMatchObject({ code: "VALIDATION_FAILED" });
+    expect(errorOf(result).message).toContain("JOB_TIMEOUT_MS takes an integer");
   });
 });
 

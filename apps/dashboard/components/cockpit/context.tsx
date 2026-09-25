@@ -19,7 +19,6 @@ export type Tweaks = {
   density: Density;
   showEditorialHero: boolean;
   showStreamingRun: boolean;
-  activityDrawerOpen: boolean;
   /** Collapses the cockpit sidebar to an icon-only rail; persists across visits. */
   sidebarCollapsed: boolean;
   /**
@@ -38,7 +37,6 @@ export const TWEAK_DEFAULTS: Tweaks = {
   density: "comfy",
   showEditorialHero: false,
   showStreamingRun: true,
-  activityDrawerOpen: false,
   sidebarCollapsed: false,
   collapsedNavGroups: [],
   accentColor: "#3C43E7",

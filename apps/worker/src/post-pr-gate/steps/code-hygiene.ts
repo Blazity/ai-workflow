@@ -29,15 +29,15 @@ const fileReportSchema = z.object({
   ),
 });
 
-const SYSTEM_PROMPT = `You review a single unified-diff patch and flag low-quality additions on ADDED lines only (lines starting with "+").
+const SYSTEM_PROMPT = `You review a single unified-diff patch and flag low-quality additions on added lines only (lines starting with "+").
 
 Flag these (with kind):
 - "comment": TODO / FIXME / HACK / XXX markers, commented-out code, filler or placeholder comments ("// trash", "// remove this", "// idk", lorem-ipsum noise), or comments that describe future work belonging in an issue tracker
-- "console": stray debugging output left in production code — console.log / console.debug / console.warn / console.error used as debug prints, print() / println(), System.out.println, fmt.Println used as debug prints
+- "console": stray debugging output left in production code: console.log / console.debug / console.warn / console.error used as debug prints, print() / println(), System.out.println, fmt.Println used as debug prints
 - "debugger": "debugger;" statements or equivalent breakpoint hooks
 
-Do NOT flag:
-- Well-written comments that explain non-obvious WHY (constraints, invariants, workarounds)
+Do not flag:
+- Well-written comments that explain a non-obvious why (constraints, invariants, workarounds)
 - Pre-existing comments or console calls on context lines (no leading "+")
 - License headers, copyright notices, generated-file markers
 - JSDoc / TSDoc public-API documentation
@@ -47,9 +47,12 @@ For each finding return:
 - kind: "comment" | "console" | "debugger"
 - line: 1-based line number in the new file when determinable, otherwise omit
 - snippet: the offending text verbatim (trim leading "+")
-- reason: one short sentence on why this is low quality
+- reason: one short sentence on why this is low quality`;
 
-If nothing is wrong, return { "issues": [] }.`;
+/** Bounds one file's review call, retries included. The gate step's own
+ *  timeoutMs only stops waiting for the handler, so without this a hung
+ *  provider call keeps running, and billing, after the step has given up. */
+const REVIEW_CALL_TIMEOUT_MS = 120_000;
 
 interface FileIssue {
   path: string;
@@ -145,13 +148,14 @@ async function reviewFile(
     const { output } = await generateText({
       model: anthropic(opts.model),
       output: Output.object({ schema: fileReportSchema }),
+      abortSignal: AbortSignal.timeout(REVIEW_CALL_TIMEOUT_MS),
       system: SYSTEM_PROMPT,
       prompt:
         `File path: ${file.path}\n\nUnified diff patch:\n\n` +
         "```diff\n" +
         patch +
         "\n```\n\n" +
-        "Report low-quality comments, stray console / print statements, and debugger statements on added lines for THIS file only.",
+        "Report low-quality comments, stray console / print statements, and debugger statements on added lines of this file only.",
     });
     const raw = output?.issues ?? [];
     return {

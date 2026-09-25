@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import {
   CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS,
   getCachedHarnessCapabilities,
   getHarnessCapabilities,
+  HARNESS_CAPABILITY_PREWARM_PERIOD_MS,
   HarnessCapabilityCatalogError,
   hashHarnessCapabilityCatalog,
   normalizeClaudeModel,
@@ -110,7 +111,7 @@ describe("Harness capability catalog", () => {
         organizationId: "org-a",
         provider: "codex",
         cliVersion: "0.144.6",
-        now: () => new Date("2026-07-27T10:14:59.999Z"),
+        now: () => new Date("2026-07-27T11:14:59.999Z"),
       }),
     ).resolves.toMatchObject({ stale: false });
     await expect(
@@ -118,12 +119,12 @@ describe("Harness capability catalog", () => {
         organizationId: "org-a",
         provider: "codex",
         cliVersion: "0.144.6",
-        now: () => new Date("2026-07-27T10:15:00.000Z"),
+        now: () => new Date("2026-07-27T11:15:00.000Z"),
       }),
     ).resolves.toMatchObject({ stale: true });
   });
 
-  it("caches a live catalog for fifteen minutes and keeps organizations isolated", async () => {
+  it("caches a live catalog for seventy-five minutes and keeps organizations isolated", async () => {
     const discover = vi.fn(async () => CATALOG);
     const first = await getHarnessCapabilities(db, {
       organizationId: "org-a",
@@ -141,7 +142,7 @@ describe("Harness capability catalog", () => {
       cliVersion: "0.144.6",
       refresh: false,
       dependencies: {
-        now: () => new Date("2026-07-27T10:14:59.999Z"),
+        now: () => new Date("2026-07-27T11:14:59.999Z"),
         discoverCodex: discover,
       },
     });
@@ -181,7 +182,7 @@ describe("Harness capability catalog", () => {
       cliVersion: "0.144.6",
       refresh: false,
       dependencies: {
-        now: () => new Date("2026-07-27T10:15:00.000Z"),
+        now: () => new Date("2026-07-27T11:15:00.000Z"),
         discoverCodex: async () => {
           throw new Error("offline");
         },
@@ -197,7 +198,7 @@ describe("Harness capability catalog", () => {
         organizationId: "org-a",
         provider: "codex",
         cliVersion: "0.144.6",
-        now: () => new Date("2026-07-27T10:15:01.000Z"),
+        now: () => new Date("2026-07-27T11:15:01.000Z"),
       }),
     ).resolves.toMatchObject({
       stale: true,
@@ -208,7 +209,7 @@ describe("Harness capability catalog", () => {
         organizationId: "org-a",
         provider: "codex",
         cliVersion: "0.144.6",
-        now: () => new Date("2026-07-27T10:16:00.000Z"),
+        now: () => new Date("2026-07-27T11:16:00.000Z"),
       }),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
@@ -279,6 +280,44 @@ describe("Harness capability catalog", () => {
     ).toMatchObject({ stale: false });
   });
 
+  // Request-time reads never refresh, so the schedule alone keeps a catalog
+  // fresh, and publishing a profile refuses a stale one. A cadence slowed
+  // without the lifetime left every profile unpublishable for half of each
+  // period.
+  it("assumes the prewarm cadence apps/worker/vercel.json schedules", async () => {
+    const config = JSON.parse(
+      await readFile(new URL("../../vercel.json", import.meta.url), "utf8"),
+    ) as { crons: Array<{ path: string; schedule: string }> };
+    const prewarm = config.crons.find((cron) => cron.path === "/cron/harness-capabilities");
+
+    expect(prewarm?.schedule).toBe(
+      `*/${HARNESS_CAPABILITY_PREWARM_PERIOD_MS / 60_000} * * * *`,
+    );
+  });
+
+  it("keeps a prewarmed catalog publishable until the next run, and past one missed run", async () => {
+    await prewarmHarnessCapabilityCatalogs(db, {
+      dependencies: {
+        now: () => new Date("2026-07-27T10:00:00.000Z"),
+        discoverCodex: async () => CATALOG,
+        discoverClaude: async () => {
+          throw new Error("missing models credential");
+        },
+      },
+    });
+
+    for (const at of ["2026-07-27T10:29:59.999Z", "2026-07-27T10:59:59.999Z"]) {
+      await expect(
+        requireFreshHarnessCapabilities(db, {
+          organizationId: "org-a",
+          provider: "codex",
+          cliVersion: "0.144.6",
+          now: () => new Date(at),
+        }),
+      ).resolves.toMatchObject({ stale: false });
+    }
+  });
+
   it("refreshes warm catalogs before they expire", async () => {
     await getHarnessCapabilities(db, {
       organizationId: "org-a",
@@ -297,7 +336,7 @@ describe("Harness capability catalog", () => {
 
     await prewarmHarnessCapabilityCatalogs(db, {
       dependencies: {
-        now: () => new Date("2026-07-27T10:09:59.999Z"),
+        now: () => new Date("2026-07-27T10:14:59.999Z"),
         discoverCodex,
         discoverClaude,
       },
@@ -306,7 +345,7 @@ describe("Harness capability catalog", () => {
 
     await prewarmHarnessCapabilityCatalogs(db, {
       dependencies: {
-        now: () => new Date("2026-07-27T10:10:00.000Z"),
+        now: () => new Date("2026-07-27T10:15:00.000Z"),
         discoverCodex,
         discoverClaude,
       },

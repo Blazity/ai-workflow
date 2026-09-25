@@ -226,6 +226,17 @@ async function loadDeployedTrigger(
   definitionName: string;
   triggerType: RunnableTriggerType;
 }> {
+  // The definition first: an id that names nothing also has no deployed
+  // version, and answering that instead sent the caller looking for a publish
+  // rather than for the right id.
+  const definition = await persistence.getDefinition(definitionId);
+  if (!definition) {
+    throw new ManualDispatchError(
+      404,
+      "invalid_input",
+      `Workflow definition ${definitionId} not found.`,
+    );
+  }
   const deployed =
     definitionVersion === undefined
       ? await persistence.getDeployed(definitionId)
@@ -238,16 +249,28 @@ async function loadDeployedTrigger(
     throw new ManualDispatchError(422, "not_eligible", RETIRED_SCHEMA_MESSAGE);
   }
   const node = deployedGraph.nodes.find((candidate) => candidate.id === triggerNodeId);
-  if (!node || !isDispatchableTriggerType(node.type)) {
+  // Named, because a node id is not guessable and the next call needs one.
+  const dispatchable = deployedGraph.nodes
+    .filter((candidate) => isDispatchableTriggerType(candidate.type))
+    .map((candidate) => `${candidate.id} (${candidate.type})`);
+  const startable =
+    dispatchable.length > 0
+      ? `Triggers a manual dispatch can start: ${dispatchable.join(", ")}.`
+      : "No trigger in it can be started by a manual dispatch.";
+  if (!node) {
+    throw new ManualDispatchError(
+      422,
+      "invalid_input",
+      // The id sent is not repeated: it is the caller's text, not the graph's.
+      `That trigger id is not in the deployed version of this workflow. ${startable}`,
+    );
+  }
+  if (!isDispatchableTriggerType(node.type)) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
-      "This trigger is not present in the deployed workflow.",
+      `Trigger "${node.id}" (${node.type}) only fires from its own source and cannot be started by a manual dispatch. ${startable}`,
     );
-  }
-  const definition = await persistence.getDefinition(definitionId);
-  if (!definition) {
-    throw new ManualDispatchError(404, "invalid_input", "Workflow definition not found.");
   }
   return {
     definition: deployed,

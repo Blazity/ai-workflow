@@ -1,6 +1,16 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { MEMORY_NOTEBOOK_MAX_BYTES } from "@integrations/sdk";
-import { fitMemoryText, utf8Bytes, utf8BoundaryEnd } from "../../memory/content.js";
+import {
+  fitMemoryText,
+  MEMORY_CUT_MARKER,
+  utf8Bytes,
+  utf8BoundaryEnd,
+} from "../../memory/content.js";
+import {
+  humanDecisionsSectionOf,
+  upsertHumanDecisionsSection,
+  withoutHumanDecisionsSection,
+} from "../support/human-decisions-memory.js";
 import type { ActiveMemory } from "../support/memory-runtime.js";
 import {
   WORKSPACE_ROOT_DIR,
@@ -28,6 +38,13 @@ const MEMORY_DIR = "ai-workflow/memory";
 /** The directory older runs wrote to. Still read as a fallback and still gated
  * everywhere, so a document an earlier run stored or committed is not orphaned. */
 const LEGACY_MEMORY_DIR = "blazebot/memory";
+/**
+ * The store every notebook call below reaches, named on the log lines that
+ * report a refusal: the built-in store, whoever serves facts and lessons
+ * (`activeMemory` never hands a notebook to an engine). Not `memory.id`,
+ * which names the provider of facts and lessons.
+ */
+const NOTEBOOK_STORE = "builtin";
 
 export interface WorkspaceMemoryTarget {
   sandboxId: string;
@@ -43,7 +60,8 @@ export interface WorkspaceMemoryTarget {
    * Hydration writes the document at the agent's starting cwd
    * (WORKSPACE_ROOT_DIR). Persist also reads every checkout the manifest names,
    * because the agent's shell moves into a checkout to work and a relative
-   * write follows it; the newest copy wins.
+   * write follows it; the newest copy wins, with the human decisions of the
+   * root copy.
    */
   workspaceManifest: WorkspaceManifest;
   runId: string;
@@ -183,16 +201,17 @@ export async function hydrateWorkspaceMemoryStep(
       }
     }
 
-    // What the provider knows about this piece of work, rendered. Which
+    // The notebook as the built-in store keeps it, whoever serves facts and
+    // lessons here (`activeMemory` never hands a notebook to an engine). Which
     // addresses it reads (the current one, and the one an older run wrote
-    // under) is the provider's own business now.
+    // under) is the store's own business.
     const recalled = await memory.recall({ subject, scope });
     if (!recalled.ok) {
       // Named, not swallowed. This is the difference between "this ticket has
       // nothing stored", which is the ordinary first run, and "this deployment
       // could not reach memory", which somebody has to be able to see.
       log.warn(
-        { code: recalled.code, provider: memory.id, detail: recalled.detail },
+        { store: NOTEBOOK_STORE, code: recalled.code, detail: recalled.detail },
         "memory_provider_unavailable",
       );
       return {
@@ -266,7 +285,7 @@ export async function hydrateWorkspaceMemoryStep(
       // `memory_document_redaction_failed` here and now carries its own
       // sentence.
       log.warn(
-        { code: seeded.code, provider: memory.id, detail: seeded.detail },
+        { store: NOTEBOOK_STORE, code: seeded.code, detail: seeded.detail },
         "memory_document_seed_refused",
       );
       return {
@@ -298,10 +317,11 @@ hydrateWorkspaceMemoryStep.maxRetries = 0;
 
 /**
  * Copies the memory document the agent left in the workspace (at the sandbox
- * root or inside any checkout, the newest copy) into the store at the end of
- * the run, including failed and canceled runs. A run that left none says so,
- * with the paths checked. Best effort: this runs inside the
- * teardown path, which must never fail because of memory.
+ * root or inside any checkout, the newest copy, carrying the human decisions
+ * of the root copy) into the store at the end of the run, including failed and
+ * canceled runs. A run that left none says so, with the paths checked. Best
+ * effort: this runs inside the teardown path, which must never fail because of
+ * memory.
  */
 export async function persistWorkspaceMemoryStep(
   input: PersistWorkspaceMemoryInput,
@@ -332,7 +352,12 @@ export async function persistWorkspaceMemoryStep(
     // agent cds into it to work, and the notebook lands there. Reading only the
     // sandbox root lost every such notebook without a word.
     const candidates = notebookCandidatePaths(input.workspaceManifest, input.taskId);
-    const file = await readNewestNotebook(sandbox, candidates);
+    const file = await readAgentNotebook(
+      sandbox,
+      candidates,
+      `${WORKSPACE_ROOT_DIR}/${docPath}`,
+      input.taskId,
+    );
     if (!file) {
       const absent = `the agent left no notebook for ${input.taskId}; checked ${candidates.join(", ")}`;
       log.warn({ checkedPaths: candidates }, "memory_document_absent");
@@ -349,7 +374,7 @@ export async function persistWorkspaceMemoryStep(
       // that history with them. Ask first, and write only over nothing.
       const withheld = await unseenNotebookHeld(memory, subject, scope);
       if (withheld !== null) {
-        log.warn({ provider: memory.id, detail: withheld }, "memory_document_persist_withheld");
+        log.warn({ store: NOTEBOOK_STORE, detail: withheld }, "memory_document_persist_withheld");
         return { persisted: false, withheld };
       }
     }
@@ -374,13 +399,17 @@ export async function persistWorkspaceMemoryStep(
       // seed refusals use is scoped to a block attempt and every attempt is
       // closed by the time this runs.
       log.warn(
-        { code: written.code, provider: memory.id, detail: written.detail },
+        { store: NOTEBOOK_STORE, code: written.code, detail: written.detail },
         "memory_provider_unavailable",
       );
       return { persisted: false, unavailable: written.detail };
     }
     log.info(
-      { bytes: utf8Bytes(file.text), notebookPath: file.path },
+      {
+        bytes: utf8Bytes(file.text),
+        notebookPath: file.path,
+        ...(file.humanDecisionsFrom ? { humanDecisionsFrom: file.humanDecisionsFrom } : {}),
+      },
       "memory_document_persisted",
     );
     return { persisted: true };
@@ -465,8 +494,82 @@ function notebookCandidatePaths(
   ];
 }
 
+interface NotebookCopy {
+  text: string;
+  truncated: boolean;
+  path: string;
+}
+
 /**
- * The notebook the agent wrote last, or null when no candidate holds one.
+ * The notebook to store, or null when no candidate holds one: the copy the
+ * agent wrote last, with the human decisions the platform keeps in the copy
+ * at the sandbox root.
+ *
+ * `writeHumanDecisionsMemory` upserts the "Human decisions" section into the
+ * root copy and nowhere else, while an agent working inside a checkout saves
+ * its notebook there, without the section or with one it copied before the
+ * latest round was answered. Stored as it is, that copy loses what a person
+ * decided, so the root copy's section replaces whatever the newest copy has in
+ * its place. The root's is always the current one: the platform renders it
+ * from every answered round, and the agent is told not to edit it.
+ */
+async function readAgentNotebook(
+  sandbox: SandboxInstance,
+  candidates: string[],
+  rootCopyPath: string,
+  taskId: string,
+): Promise<(NotebookCopy & { humanDecisionsFrom?: string }) | null> {
+  const found: NotebookCopy[] = [];
+  for (const path of candidates) {
+    const file = await readMemoryFile(sandbox, path, MAX_WORKSPACE_MEMORY_BYTES);
+    if (file && file.text.trim().length > 0) found.push({ ...file, path });
+  }
+  const newest = await newestNotebook(sandbox, found);
+  const rootCopy = found.find((copy) => copy.path === rootCopyPath);
+  if (!newest || !rootCopy || rootCopy === newest) return newest;
+  const decisions = humanDecisionsSectionOf(rootCopy.text);
+  if (decisions === null) return newest;
+  return {
+    ...newest,
+    ...withHumanDecisions(newest, decisions, taskId),
+    humanDecisionsFrom: rootCopy.path,
+  };
+}
+
+/**
+ * `notebook` with `decisions` in place of whatever section it carried, within
+ * the notebook limit. The decisions always stay whole: appended past the
+ * limit, they would be what the store cuts off the end. When the two do not
+ * fit together the agent's notes give way, and the notebook says so:
+ * - the old section comes out, the notes are cut to the room left and end
+ *   with the line saying they were cut (`fitMemoryText`), and the decisions
+ *   follow them. Cut with the old section still in, the cut can land inside
+ *   it, and the upsert then takes the rest of the notebook for that section,
+ *   the notes after it and the cut line included;
+ * - with less room left than a cut can use, that line alone stands for them;
+ * - a section that fills the limit by itself is the whole notebook. It always
+ *   fits, because it came out of a copy read no longer than the limit, and
+ *   with anything around it the store would cut its end marker off.
+ */
+function withHumanDecisions(
+  notebook: NotebookCopy,
+  decisions: string,
+  taskId: string,
+): { text: string; truncated: boolean } {
+  const merged = upsertHumanDecisionsSection(notebook.text, decisions, taskId);
+  if (!notebook.truncated && utf8Bytes(merged) <= MAX_WORKSPACE_MEMORY_BYTES) {
+    return { text: merged, truncated: false };
+  }
+  // Room for the section, the blank line before it and the newline after it.
+  const room = MAX_WORKSPACE_MEMORY_BYTES - utf8Bytes(decisions) - 3;
+  const notes =
+    fitMemoryText(withoutHumanDecisionsSection(notebook.text), room)?.text ?? MEMORY_CUT_MARKER;
+  const text = upsertHumanDecisionsSection(notes, decisions, taskId);
+  return { text: utf8Bytes(text) <= MAX_WORKSPACE_MEMORY_BYTES ? text : decisions, truncated: false };
+}
+
+/**
+ * The copy the agent wrote last, or null when there is none.
  *
  * Several copies are an ordinary state, not a corner: hydration writes the
  * stored notebook at the sandbox root, and an agent working inside a checkout
@@ -474,15 +577,10 @@ function notebookCandidatePaths(
  * run started from and drop what it learned, so the newest file wins. When
  * the modification times cannot be read, the candidate order decides.
  */
-async function readNewestNotebook(
+async function newestNotebook(
   sandbox: SandboxInstance,
-  candidates: string[],
-): Promise<{ text: string; truncated: boolean; path: string } | null> {
-  const found: { text: string; truncated: boolean; path: string }[] = [];
-  for (const path of candidates) {
-    const file = await readMemoryFile(sandbox, path, MAX_WORKSPACE_MEMORY_BYTES);
-    if (file && file.text.trim().length > 0) found.push({ ...file, path });
-  }
+  found: NotebookCopy[],
+): Promise<NotebookCopy | null> {
   if (found.length <= 1) return found[0] ?? null;
   const mtimes = await modificationTimes(
     sandbox,

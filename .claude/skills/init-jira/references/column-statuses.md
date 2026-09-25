@@ -1,4 +1,4 @@
-# Column statuses — the most common silent failure
+# Column statuses: the most common silent failure
 
 AI Workflow polls Jira with this JQL every 15 minutes (`apps/worker/vercel.json`), and a Jira trigger can override the column per workflow:
 
@@ -22,7 +22,7 @@ You can rename these. Keep the Settings page in sync with Jira.
 
 **Team-managed project:** Project settings → Board → Columns. Click **Add status** or rename inline. Each board column maps 1:1 to a status by default.
 
-**Company-managed project:** statuses live globally. Jira Settings → Issues → Statuses. Create the three names (or reuse existing — `Backlog` usually exists). Then in Project settings → Workflows, edit the workflow used by your issue type and add the new statuses.
+**Company-managed project:** statuses live globally. Jira Settings → Issues → Statuses. Create the three names (or reuse existing ones; `Backlog` usually exists). Then in Project settings → Workflows, edit the workflow used by your issue type and add the new statuses.
 
 ## Map them to board columns
 
@@ -34,7 +34,7 @@ Open the board → **... → Configure board → Columns**:
 └──────────┴────────┴───────────┴──────────┘
 ```
 
-Each column should contain exactly one status with the matching name. Don't put `AI` and `In Progress` in the same column — AI Workflow's JQL hits status, not column, but humans seeing the board will be confused.
+Each column should contain exactly one status with the matching name. Don't put `AI` and `In Progress` in the same column: AI Workflow's JQL hits status, not column, but humans seeing the board will be confused.
 
 ## Verify the status spelling
 

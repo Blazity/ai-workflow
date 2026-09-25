@@ -582,3 +582,545 @@ export interface MemoryStoreListing {
    */
   readonly complete: boolean;
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * THE MEMORY STORE PORT, VERSION 2.
+ *
+ * Everything above is version 1, which production runs until core has moved
+ * to this port; then version 1 is removed (ADR-010, change log 2026-09-25).
+ * The two sit side by side on purpose, and nothing below changes what is
+ * above.
+ *
+ * Version 1 made each provider decide policy: how many entries a subject
+ * keeps, which two sentences are "the same thing said twice", what to evict,
+ * how to render. Three stores decided it three ways, so the same fact behaved
+ * differently depending on which store held it. Version 2 makes a store thin.
+ * It HOLDS entries, RECALLS them, APPLIES the changes core decided and FORGETS
+ * what a person erases; core decides every policy (caps, sameness, redaction,
+ * budgets, eviction, ranking use, trust, placement) the same way for every
+ * store, and records every change in its own ledger.
+ *
+ * Checked by `checkMemoryStoreConformance` (`memory-conformance.ts`), which
+ * every store passes, the built-in one included.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * Which kind of knowledge an entry is. `facts` is what is true about the
+ * subject; `lessons` is what went wrong and what worked. These words are
+ * written into stored rows and never renamed.
+ *
+ * Notebooks are not a kind here: a notebook never reaches this port, because
+ * core keeps every notebook in its built-in store whichever store serves facts
+ * and lessons.
+ */
+export type MemoryKind = "facts" | "lessons";
+
+/**
+ * How an entry came to be, which a store holds and returns and never judges.
+ *
+ * - `learned`: a run concluded it and core accepted it.
+ * - `derived`: code read it out of the subject itself (a repository's
+ *   manifest), so nothing re-creates it once it is lost.
+ * - `imported`: copied from another store, or moved in from an older place.
+ * - `human`: a person wrote or restored it (an addition).
+ *
+ * A person editing or confirming an entry is not an origin: an update keeps
+ * the entry's origin and a confirmation writes nothing to the store, so both
+ * live in core's trust record. Trust, pins and status are core's and live in
+ * core's own record; the origin is the one fact about provenance that travels
+ * with the entry.
+ */
+export type MemoryEntryOrigin = "learned" | "derived" | "imported" | "human";
+
+/**
+ * One entry as a store holds it.
+ *
+ * THE FIELDS ARE THESE AND NO OTHER. A store returns no field of its own: no
+ * trust, status, pin, topic, area, routing or score of its engine beside
+ * `score` in a recall. What core knows about an entry beyond this is core's,
+ * and a store that carried a second copy of it would disagree with core the
+ * first time either changed.
+ */
+export interface MemoryStoreEntry {
+  /**
+   * The store's own address for the entry: unique within its subject and
+   * kind, unchanged across reads while its text is unchanged, and opaque to
+   * core, which uses it only with the subject and kind it came with.
+   *
+   * It MAY change when the text changes (a store whose ids derive from the
+   * text, or one that replaces an entry its engine will not edit in place).
+   * That is why an update's outcome carries the id the entry has afterwards.
+   */
+  readonly id: string;
+  /** The subject it was applied under, exactly (see `MemoryStoreApplyRequest.subject`). */
+  readonly subject: string;
+  readonly kind: MemoryKind;
+  /**
+   * The text as last written, VERBATIM: never reworded, trimmed, re-cased or
+   * joined to another entry. Core sends one line with no surrounding
+   * whitespace and has already taken every known secret out of it; how long
+   * it may be is core's rule. The one exception is a store that consolidates
+   * (`MemoryStoreTraits`), whose engine may rewrite it on its own.
+   */
+  readonly text: string;
+  readonly origin: MemoryEntryOrigin;
+  /** The run whose apply last wrote the text; absent when that apply named none. */
+  readonly runId?: string;
+  /** The ticket of the apply that last wrote the text; absent when it named none. */
+  readonly ticketKey?: string;
+  /** When the text was last written, as an ISO 8601 date, when the store records it. */
+  readonly updatedAt?: string;
+  /**
+   * Set only by a store that consolidates (`MemoryStoreTraits`): the id of
+   * the entry, in the same subject and kind, that superseded this one on the
+   * store's own initiative. The store still returns it; core leaves it out of
+   * a prompt and says why. A store that does not consolidate never sets it.
+   */
+  readonly replacedBy?: string;
+}
+
+/** An entry as `recall` returns it: a stored entry, and its relevance when the recall was ranked. */
+export interface MemoryRecalledEntry extends MemoryStoreEntry {
+  /**
+   * The store's relevance of this entry to the query, higher is more
+   * relevant, a finite number comparable only within one answer. Present only
+   * in a ranked recall, and even there absent for an entry the store's search
+   * did not score, which then comes after every scored one.
+   */
+  readonly score?: number;
+}
+
+/**
+ * Why a store could not answer. The codes are the store's three of
+ * `MemoryFailure`, with the meaning that union gives them: `unavailable` is
+ * worth asking again later (and is the answer to a write whose fate the store
+ * cannot tell), `contended` is a version that moved under an apply, and
+ * `rejected` is a refusal that asking again will not change. Core's own four
+ * (`no_provider`, `ambiguous`, `unreadable`, `moved`) are never a store's.
+ */
+export type MemoryStoreFailure = Extract<MemoryFailure, "unavailable" | "contended" | "rejected">;
+
+/**
+ * What stopped the engine, in words core can put on a run card and a store
+ * status without parsing a sentence. Optional: a store that cannot tell
+ * leaves it out and says it in `detail`.
+ *
+ * - `key_rejected`: the engine refused the credential (401, or 403 on the key).
+ * - `quota`: the engine's plan or quota is spent (Mem0's own SDK reads 413 so).
+ * - `rate_limited`: the engine asked to slow down (429).
+ * - `timeout`: no answer within the time the call had.
+ * - `unreachable`: no connection to the engine at all.
+ *
+ * EVERY REASON GOES WITH `unavailable`, on a refusal and on a failed item
+ * alike: each is the engine's state, not the request's fault, and asking again
+ * once a person replaces the key, the quota renews, the limit passes or the
+ * engine comes back succeeds. A `rejected` or `contended` answer carries no
+ * reason.
+ */
+export type MemoryStoreFailureReason = "key_rejected" | "quota" | "rate_limited" | "timeout" | "unreachable";
+
+export interface MemoryStoreRefusal {
+  readonly ok: false;
+  readonly code: MemoryStoreFailure;
+  /** One sentence a person reads: what failed and, where it helps, what to do. Never empty. */
+  readonly detail: string;
+  /** Only with `unavailable` (see `MemoryStoreFailureReason`). */
+  readonly reason?: MemoryStoreFailureReason;
+  /** The HTTP status the engine answered with, when one did. */
+  readonly status?: number;
+}
+
+/**
+ * Every member of the port answers this way, and NONE THROWS. A failure is an
+ * answer: memory must never be able to change a run's outcome, and core
+ * records every refusal where a person reads it.
+ */
+export type MemoryStoreAnswer<T> = ({ readonly ok: true } & T) | MemoryStoreRefusal;
+
+export interface MemoryStoreRecallRequest {
+  /**
+   * The subjects to recall, each addressed exactly (see
+   * `MemoryStoreApplyRequest.subject`). An empty list recalls nothing.
+   */
+  readonly subjects: readonly string[];
+  readonly kinds: readonly MemoryKind[];
+  /**
+   * Text about the work at hand (a ticket's title and description, cleaned of
+   * secrets and cut to core's length), for a store that can rank by it. A
+   * blank query is no query. A store that cannot rank ignores it.
+   */
+  readonly query?: string;
+}
+
+export interface MemoryStoreRecall {
+  /**
+   * True when the entries are ordered by relevance to the query, which needs
+   * a query. False when they are in stored order, which is the answer to
+   * every recall without a query and the honest answer of a store whose
+   * search could not rank this time.
+   */
+  readonly ranked: boolean;
+  /**
+   * THE COMPLETE SET for the subjects and kinds asked, and nothing from any
+   * other subject or kind: every entry held, those with `replacedBy`
+   * included, however many there are and whatever the query says.
+   *
+   * Relevance orders, it never filters. A store that dropped the entries its
+   * search found irrelevant would make the run card say "left out 0" while
+   * the agent missed a fact; core cuts what a prompt carries, by its own
+   * budget, and reports every entry it cut.
+   *
+   * Ranked: scored entries first, in order of falling `score`, then every
+   * entry the search did not score, without a score. Not ranked: no entry
+   * carries a score, and each subject and kind comes in the order `held`
+   * lists it.
+   */
+  readonly entries: readonly MemoryRecalledEntry[];
+}
+
+export interface MemoryStoreHeldRequest {
+  readonly subject: string;
+  readonly kind: MemoryKind;
+}
+
+export interface MemoryStoreHeld {
+  /**
+   * EVERYTHING held for this subject and kind, never ranked and never cut,
+   * so core can dedup, update, apply its caps and see what changed. Oldest
+   * first: an entry added by a later apply comes after one added by an
+   * earlier apply. An update may move an entry to the end (a store that
+   * replaces the entry adds it anew); core reads the order again after
+   * every write.
+   */
+  readonly entries: readonly MemoryStoreEntry[];
+  /**
+   * A token the store changes whenever what it holds for this subject and
+   * kind changes. Handed back as `ifVersion`, it makes an apply all or
+   * nothing against a concurrent writer.
+   *
+   * A store that cannot compare and swap answers none. Core then applies
+   * without one, and two runs writing at once may both add the same entry,
+   * which core collapses on its next read.
+   */
+  readonly version?: string;
+}
+
+/**
+ * Why core removes an entry. The detail behind it is in core's ledger.
+ *
+ * - `refuted`: a run showed it false.
+ * - `cap`: the subject holds more than core keeps, and this one was evicted.
+ * - `forgotten`: a person erased it.
+ * - `retired`: core's lifecycle retired it (a person, or disputes it upheld).
+ * - `reverted`: core undid a change it had applied.
+ */
+export type MemoryRemovalReason = "refuted" | "cap" | "forgotten" | "retired" | "reverted";
+
+export interface MemoryStoreAddition {
+  readonly text: string;
+  readonly origin: MemoryEntryOrigin;
+  /**
+   * Keep this entry out of the store's own consolidation (Mem0: `immutable`).
+   * A store that consolidates and can do this declares `protects: true`; one
+   * that cannot still accepts the flag and stores the entry, and core
+   * restores what the store changes. A store that never consolidates has
+   * nothing to protect from and accepts it too.
+   */
+  readonly protect?: true;
+}
+
+/**
+ * Replace one entry's text.
+ *
+ * A store whose engine will not edit an entry in place (Mem0's legacy
+ * immutable entries) REPLACES it: it adds the new text first and deletes the
+ * old entry second, so a failure between the two leaves the old text held
+ * rather than neither. It answers `updated` when both halves finished,
+ * `pending` when the delete finished and the engine queued the add, and
+ * `failed` with `unavailable` whenever it cannot say both halves landed (the
+ * delete failed, or it cannot tell which half did); core reads `held` before
+ * it tries again and finds whichever half landed.
+ *
+ * A store whose ids follow the text cannot give the new text an id another
+ * entry already has. When the new text is already held under another id
+ * (their normalised texts are equal), it changes nothing and answers `failed`
+ * with `rejected` and `heldId`, the id of the entry holding that text; core
+ * decides which of the two to keep. It never folds one entry into the other
+ * on its own. A store that can hold two entries with the same normalised text
+ * updates as asked.
+ */
+export interface MemoryStoreUpdate {
+  /** An id `held` or an earlier outcome returned for this subject and kind. */
+  readonly id: string;
+  readonly text: string;
+  /** As on an addition, for the entry's new text. */
+  readonly protect?: true;
+}
+
+export interface MemoryStoreRemoval {
+  readonly id: string;
+  readonly reason: MemoryRemovalReason;
+}
+
+export interface MemoryStoreApplyRequest {
+  /**
+   * Core's address for what the entries are about (`repo:github:acme/api`,
+   * `org:github:acme`), OPAQUE to a store: stored and compared exactly, never
+   * parsed, trimmed or re-cased, so two subjects that differ only in case are
+   * two subjects. The same holds for every subject any member receives.
+   *
+   * A pattern character is a character. A store whose engine reads `*` or `%`
+   * in a filter as "any" escapes it or refuses the call as `rejected`, and an
+   * empty subject is always refused: against an engine that deletes by
+   * filter, an empty or wildcard subject is every subject. A store sharing
+   * its engine with another application also writes a namespace of its own on
+   * every write and requires it on every read and delete, so nothing of the
+   * other application reaches a prompt or an erasure.
+   */
+  readonly subject: string;
+  readonly kind: MemoryKind;
+  /** The run on whose behalf this is written; stamped on what it adds and updates. Never a partition key. */
+  readonly runId?: string;
+  /** The ticket that run worked on; stamped likewise. */
+  readonly ticketKey?: string;
+  /**
+   * The `version` of the `held` answer core planned against. When the store's
+   * version has moved since, the apply changes nothing and answers
+   * `contended`, and core reads again. A store that answers no version
+   * refuses an apply carrying one as `rejected`, because ignoring it would
+   * promise core a protection it does not get.
+   */
+  readonly ifVersion?: string;
+  readonly add: readonly MemoryStoreAddition[];
+  /**
+   * An update keeps the entry's origin and stamps this call's `runId` and
+   * `ticketKey` as its last writer.
+   */
+  readonly update: readonly MemoryStoreUpdate[];
+  readonly remove: readonly MemoryStoreRemoval[];
+}
+
+/** An item that did not land, or whose fate the store cannot tell (`unavailable`). */
+export interface MemoryStoreItemFailure {
+  readonly op: "add" | "update" | "remove";
+  readonly index: number;
+  readonly result: "failed";
+  readonly code: Extract<MemoryStoreFailure, "unavailable" | "rejected">;
+  readonly detail: string;
+  /** Only with `unavailable` (see `MemoryStoreFailureReason`). */
+  readonly reason?: MemoryStoreFailureReason;
+  readonly status?: number;
+  /**
+   * Only on an update refused as `rejected` because its new text is already
+   * held under another id (`MemoryStoreUpdate`): that entry's id.
+   */
+  readonly heldId?: string;
+}
+
+/**
+ * What became of one item of an apply. `op` and `index` (its position in its
+ * own list) say which item.
+ */
+export type MemoryStoreApplyOutcome =
+  /**
+   * Stored; `id` is its id, one `held` lists right away.
+   *
+   * A store that consolidates may merge the addition into an entry it
+   * already holds during the write (Mem0 turning an add into an update of a
+   * similar memory). It still answers `added`, with the id its engine gave,
+   * which may be an entry already held, and the text under that id may differ
+   * from the text sent; core reconciles through `held`. It never answers an
+   * id its engine did not give.
+   */
+  | { readonly op: "add"; readonly index: number; readonly result: "added"; readonly id: string }
+  /**
+   * Not written, because this store already holds an entry with the same
+   * normalised text (`normalizeMemoryText`) and its ids derive from the text;
+   * `id` is that entry's. A store that can hold two such entries adds.
+   */
+  | { readonly op: "add"; readonly index: number; readonly result: "already_held"; readonly id: string }
+  /**
+   * Accepted by an engine that queues writes and not stored yet, so no id
+   * exists; core finds the entry on a later `held` by its text. Never the
+   * answer of a store whose write has finished.
+   */
+  | { readonly op: "add"; readonly index: number; readonly result: "pending" }
+  /**
+   * The text was replaced. `id` is the entry's id AFTER the update, which may
+   * differ from `previousId`: then the old id is gone and core chains the two
+   * in its record. A store that keeps ids answers the same one.
+   */
+  | {
+      readonly op: "update";
+      readonly index: number;
+      readonly result: "updated";
+      readonly previousId: string;
+      readonly id: string;
+    }
+  /**
+   * Replaced by a store whose engine queues writes (`MemoryStoreUpdate`): the
+   * old entry is deleted, so `previousId` is gone, and the new text is
+   * accepted but not stored yet, so no new id exists. Core finds the entry on
+   * a later `held` by its text, as for a pending add. Never the answer of a
+   * store whose write has finished.
+   */
+  | { readonly op: "update"; readonly index: number; readonly result: "pending"; readonly previousId: string }
+  /** Removed, for the reason core gave, which the outcome repeats. */
+  | {
+      readonly op: "remove";
+      readonly index: number;
+      readonly result: "removed";
+      readonly id: string;
+      readonly reason: MemoryRemovalReason;
+    }
+  /** No entry with this id is held (another writer removed it first). Nothing changed; not a failure. */
+  | { readonly op: "update" | "remove"; readonly index: number; readonly result: "missing"; readonly id: string }
+  | MemoryStoreItemFailure;
+
+export interface MemoryStoreApplied {
+  /**
+   * EXACTLY ONE OUTCOME PER ITEM, never a bare count: core records each one,
+   * so every change a run concluded ends in exactly one record.
+   */
+  readonly outcomes: readonly MemoryStoreApplyOutcome[];
+}
+
+export interface MemoryStoreForgetRequest {
+  readonly subject: string;
+  /** Only this kind; both when absent. */
+  readonly kind?: MemoryKind;
+  /**
+   * `memoryTextHash` of the text to erase. Every entry whose own text hashes
+   * to it goes, duplicates written by parallel runs included. Absent: every
+   * entry of the subject (and kind) goes.
+   */
+  readonly textHash?: string;
+}
+
+export interface MemoryStoreForgotten {
+  /** Every entry removed, by id and kind; empty when nothing matched. */
+  readonly removed: readonly { readonly id: string; readonly kind: MemoryKind }[];
+}
+
+/** What one subject holds of one kind, for a person or core listing a store. */
+export interface MemoryHolding {
+  readonly subject: string;
+  readonly kind: MemoryKind;
+  /** How many entries; a subject and kind holding none is not listed. */
+  readonly entries: number;
+  /** When its newest entry was written, as an ISO 8601 date, when the store records it. */
+  readonly updatedAt?: string;
+}
+
+export interface MemoryStoreHoldings {
+  readonly holdings: readonly MemoryHolding[];
+  /**
+   * False when the store cannot promise the list is everything it holds, so
+   * a screen says so instead of letting a person read absence as proof.
+   */
+  readonly complete: boolean;
+}
+
+/**
+ * Whether a store changes what it holds on its own.
+ *
+ * A store that CONSOLIDATES may merge entries, rewrite their text, mark one as
+ * superseded by another (`replacedBy`) or drop one, on its own initiative,
+ * during a write or between calls: an engine that runs its own deduplication
+ * does (Mem0's Supersede and Merge). Core then compares what `held` returns
+ * with its own record after every write and records what the store changed.
+ * `protects` says whether `protect` keeps an entry out of it.
+ *
+ * A store that does not consolidate declares so, and then what it holds is
+ * exactly what `apply` left: the same ids, the same text, the same count,
+ * however alike or contradictory two entries are. The built-in store never
+ * consolidates.
+ */
+export type MemoryStoreTraits =
+  | { readonly consolidates: false }
+  | { readonly consolidates: true; readonly protects: boolean };
+
+/**
+ * The port a memory store implements, version 2. Stores are thin: they hold
+ * entries per subject and kind, recall them, apply what core decided and
+ * forget what a person erases. Every policy is core's. Every member answers
+ * and none throws (`MemoryStoreAnswer`).
+ */
+export interface MemoryStore {
+  readonly traits: MemoryStoreTraits;
+  /** The prompt path: the complete set for the subjects and kinds, ranked when the store can. */
+  recall(request: MemoryStoreRecallRequest): Promise<MemoryStoreAnswer<MemoryStoreRecall>>;
+  /** The write path and a person reading one subject: everything of one subject and kind, with a version when the store has one. */
+  held(request: MemoryStoreHeldRequest): Promise<MemoryStoreAnswer<MemoryStoreHeld>>;
+  /**
+   * One call per subject and kind. Removals first, then updates, then
+   * additions, so a text a removal or an update frees can be written again in
+   * the same call. A store whose ids follow the text that took them in
+   * another order would answer `already_held` for an entry it is about to
+   * delete, or refuse an update to a text it is about to free.
+   *
+   * Two applies to one subject and kind may run at once (two runs finishing
+   * together). Neither loses the other's writes: whatever either adds is held
+   * afterwards, unless an item of the other removes it. The items of the two
+   * may interleave, and which lands first is not promised; a caller that
+   * needs no other writer between its `held` and its apply passes
+   * `ifVersion`. A store that reads what it holds, waits and writes it back
+   * whole serialises its applies, or it loses one.
+   *
+   * The answer as a whole is a refusal only when NOTHING was applied: the
+   * version moved, the subject or kind is not one the store can address, the
+   * engine could not be reached before the first write. Once anything may
+   * have landed, the answer is `ok` and each item that did not land says so in
+   * its own outcome.
+   */
+  apply(request: MemoryStoreApplyRequest): Promise<MemoryStoreAnswer<MemoryStoreApplied>>;
+  /**
+   * Erase by text, never by id, because an erasure that left a copy behind
+   * is not one. Safe to repeat: a store that could not finish answers
+   * `unavailable`, and core asks again.
+   */
+  forget(request: MemoryStoreForgetRequest): Promise<MemoryStoreAnswer<MemoryStoreForgotten>>;
+  /** Every subject and kind the store holds anything for. */
+  list(): Promise<MemoryStoreAnswer<MemoryStoreHoldings>>;
+}
+
+/**
+ * The comparison form of an entry's text: two texts are the same entry exactly
+ * when these are equal. NUL characters go (no stored text can hold one),
+ * surrounding whitespace, leading list markers and one final full stop go,
+ * inner whitespace collapses to one space, the rest is lower-cased, and the
+ * result is in Unicode NFC, so an accent typed as a combining mark matches
+ * the precomposed one. The stored text keeps whichever spelling was written.
+ *
+ * One rule for everyone who decides sameness: core's dedup, `forget` in every
+ * store, and core's record of erased text.
+ */
+export function normalizeMemoryText(text: string): string {
+  // Every leading marker goes, not one: text that passes through a list
+  // renderer and back more than once would otherwise lose one marker per
+  // pass, and its comparison form would change each time.
+  return text
+    .replaceAll("\u0000", "")
+    .normalize("NFC")
+    .trim()
+    .replace(/^(?:[-*]\s+)+/, "")
+    .replace(/\s+/g, " ")
+    .replace(/\.$/, "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFC");
+}
+
+/**
+ * What `forget` matches by: SHA-256 of the UTF-8 bytes of
+ * `normalizeMemoryText(text)`, as 64 lowercase hex digits. A hash rather than
+ * the text, so core's record can keep what was erased findable without keeping
+ * the text. Asynchronous because it uses WebCrypto (`crypto.subtle`), which the
+ * worker and a browser share; this entry reaches no Node module.
+ */
+export async function memoryTextHash(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalizeMemoryText(text)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}

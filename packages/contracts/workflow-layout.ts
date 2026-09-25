@@ -1,4 +1,5 @@
 import type {
+  WorkflowDefinition,
   WorkflowDefinitionLayout,
 } from "./domain";
 
@@ -60,4 +61,26 @@ export function normalizeWorkflowDefinitionLayout(
     nodes,
     edges,
   };
+}
+
+/**
+ * A stored graph with the definition's layout put back on it.
+ *
+ * The store keeps positions apart from the graph (a version is saved with every
+ * node at 0,0, so moving a block never mints a version or changes its hash) and
+ * one layout per definition. Every reader that shows or hands back a graph for
+ * editing applies it here, so they agree on where a node sits. A node the
+ * layout has no entry for keeps the coordinates it carries.
+ */
+export function applyWorkflowDefinitionLayout(
+  definition: WorkflowDefinition,
+  layout: WorkflowDefinitionLayout,
+): WorkflowDefinition {
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => {
+      const position = layout.nodes[node.id];
+      return position ? { ...node, ...position } : node;
+    }),
+  } as WorkflowDefinition;
 }

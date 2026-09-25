@@ -1,5 +1,7 @@
 import type { WorkflowDefinitionValidationIssue } from "@shared/contracts";
 
+import { issueTextForPeople } from "./issue-text";
+
 /**
  * What the editor says when Deploy was pressed and nothing was deployed.
  *
@@ -34,7 +36,7 @@ export function deployRefusal(
   const where =
     first.nodeId === null ? "" : `${nodeNames[first.nodeId] ?? first.nodeId}: `;
   return {
-    sentence: `Not deployed. ${where}${first.message}`,
+    sentence: `Not deployed. ${where}${issueTextForPeople(first.message, first.nodeId, nodeNames)}`,
     nodeId: first.nodeId,
     issueCount: issues.length,
   };

@@ -2,6 +2,7 @@
 // integration can implement it. Every name core imported from here is still
 // exported from here, with the same kind, so no caller changed.
 export {
+  IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
   RELATED_TICKET_CHILD,
   type IssueTrackerAdapter,

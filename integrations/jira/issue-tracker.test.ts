@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { JiraAdapter } from "./issue-tracker";
-import { IssueTrackerNotFoundError } from "@integrations/sdk";
+import { IssueTrackerInputRejectedError, IssueTrackerNotFoundError } from "@integrations/sdk";
 
 // The adapter reaches Jira only through the fetch its context hands it, which
 // is the one production passes (`ctx.http.fetch`). The global one is a
@@ -2144,6 +2144,84 @@ describe("JiraAdapter", () => {
       await expect(adapter.createTicket({ summary: "x" })).rejects.toThrow(
         /no issue key/,
       );
+    });
+
+    it("hands Jira's own field errors back as a rejected input, not a bare failure", async () => {
+      // What Jira Cloud answers for an issue type the project does not have and a
+      // label with a space in it: an ErrorCollection keyed by field.
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: async () => ({
+          errorMessages: [],
+          errors: {
+            issuetype: "Specify a valid issue type",
+            labels: "The label 'has space' contains spaces which is invalid.",
+          },
+        }),
+      });
+
+      const rejected = await jiraAdapter()
+        .createTicket({ summary: "x", issueType: "Bug", labels: ["has space"] })
+        .catch((error: unknown) => error);
+
+      expect(rejected).toBeInstanceOf(IssueTrackerInputRejectedError);
+      const error = rejected as IssueTrackerInputRejectedError;
+      expect(error.message).toContain("issuetype: Specify a valid issue type");
+      expect(error.message).toContain("labels: The label 'has space' contains spaces");
+      // The issue type is named in the create input's own words, so a caller can
+      // tell which of its fields to fix without knowing Jira's field keys.
+      expect(error.issueTypeRejected).toBe(true);
+      // Still a refusal to anything that reads the status.
+      expect(error.status).toBe(400);
+    });
+
+    it("keeps a 400 with no field errors a rejection that says so", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: async () => ({ errorMessages: ["Field 'x' cannot be set."], errors: {} }),
+      });
+
+      const rejected = await jiraAdapter()
+        .createTicket({ summary: "x" })
+        .catch((error: unknown) => error);
+
+      expect(rejected).toBeInstanceOf(IssueTrackerInputRejectedError);
+      expect((rejected as Error).message).toContain("Field 'x' cannot be set.");
+      expect((rejected as IssueTrackerInputRejectedError).issueTypeRejected).toBe(false);
+    });
+  });
+
+  describe("listIssueTypes", () => {
+    it("lists the issue types a ticket can be created as, without subtask types", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          issueTypes: [
+            { id: "10001", name: "Zadanie", subtask: false },
+            { id: "10002", name: "Epik", subtask: false },
+            { id: "10003", name: "Subtask", subtask: true },
+          ],
+          startAt: 0,
+          maxResults: 100,
+          total: 3,
+        }),
+      });
+
+      const types = await jiraAdapter().listIssueTypes();
+
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        `${API_BASE}/rest/api/3/issue/createmeta/PROJ/issuetypes?maxResults=100`,
+      );
+      // A subtask needs a parent, which createTicket never sends, so offering one
+      // would name a type the next create is refused for.
+      expect(types).toEqual([
+        { id: "10001", name: "Zadanie" },
+        { id: "10002", name: "Epik" },
+      ]);
     });
   });
 });

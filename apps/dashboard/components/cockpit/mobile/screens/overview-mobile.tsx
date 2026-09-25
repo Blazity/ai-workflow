@@ -53,7 +53,7 @@ export function OverviewMobileScreen({
 
       <div className="grid grid-cols-2 gap-2.5">
         <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : MISSING_VALUE} />
-        <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : MISSING_VALUE} />
+        <CkKPI label="p95 · successful" value={k.p95 ? `${k.p95.valueSec}s` : MISSING_VALUE} />
         <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : MISSING_VALUE} />
         <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : MISSING_VALUE} />
       </div>
@@ -194,7 +194,9 @@ export function OverviewMobileScreen({
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-semibold text-[13px] text-neutral-900">{w.name}</span>
                   {w.primary && <CkChip tone="mariner">primary</CkChip>}
-                  <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
+                  {w.gateway && (
+                    <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
+                  )}
                 </div>
                 <div className="grid grid-cols-4 gap-2 mt-2.5 pt-2 border-t border-neutral-200">
                   <Stat label="Runs" value={w.runs24h === null ? MISSING_VALUE : w.runs24h.toLocaleString("en-US")} />

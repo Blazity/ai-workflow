@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canonicalTicketKey } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
@@ -12,6 +13,7 @@ import { requireIssueTracker } from "../issue-tracker-access.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 const DEFAULT_COMMENTS_LIMIT = 20;
+const EVERY_COMMENT = new Date(0).toISOString();
 const DEFAULT_RUNS_LIMIT = 20;
 
 type TicketGetData = {
@@ -61,7 +63,16 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           let ticket;
           try {
-            ticket = await issueTracker.fetchTicket(input.ticketKey);
+            // With comments wanted, ask for every comment. An issue read may
+            // embed only a first page, so without a window the newest ones,
+            // usually the latest human instruction, can be exactly the ones
+            // missing. A window from the start of time is "all of them" by the
+            // port's own contract, and the adapter bounds how far it pages.
+            ticket = input.includeComments
+              ? await issueTracker.fetchTicket(input.ticketKey, {
+                  commentsSince: EVERY_COMMENT,
+                })
+              : await issueTracker.fetchTicket(input.ticketKey);
           } catch (error) {
             // Only the specific "no such ticket" case gets a public code; any
             // other adapter failure (auth, network, malformed response) falls
@@ -73,15 +84,16 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             throw error;
           }
 
-          // fetchTicket always returns every comment (no includeComments
-          // param, no pagination on the adapter side); this tool decides how
-          // much of that to hand back.
+          // Adapters hand comments over oldest first (Jira reads them
+          // orderBy=created). The newest `commentsLimit` are the ones kept:
+          // cutting the tail instead dropped the latest human instruction on
+          // any long ticket.
           const commentsLimit = input.commentsLimit ?? DEFAULT_COMMENTS_LIMIT;
           const comments = input.includeComments
-            ? ticket.comments.slice(0, commentsLimit).map((c) => ({
+            ? ticket.comments.slice(-commentsLimit).map((c) => ({
                 author: c.author,
                 body: c.body,
-                createdAt: c.createdAt,
+                createdAt: utcInstant(c.createdAt),
               }))
             : null;
 
@@ -96,8 +108,11 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             statusId: ticket.trackerStatusId ?? null,
             commentCount: ticket.comments.length,
             comments,
+            // Also true when the adapter itself stopped short of the whole
+            // list: comments exist that neither side handed over.
             commentsTruncated:
-              Boolean(input.includeComments) && ticket.comments.length > commentsLimit,
+              Boolean(input.includeComments) &&
+              (ticket.comments.length > commentsLimit || ticket.commentsComplete === false),
             attachments: ticket.attachments.map((a) => ({
               id: a.id,
               filename: a.filename,
@@ -139,7 +154,12 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           // would make a sliced-after-the-fact page carry a runCount wider
           // than what's actually returned. Reading workflow_runs directly
           // keeps the LIMIT in the query and this tool's page honest.
-          const rows = await deps.services.listTicketRunPage(input.ticketKey, limit);
+          // Runs record the key in its one spelling; a key typed in another
+          // case listed no runs for a ticket tickets.get could read.
+          const rows = await deps.services.listTicketRunPage(
+            canonicalTicketKey(input.ticketKey),
+            limit,
+          );
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;
@@ -173,4 +193,10 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
       };
     },
   );
+}
+
+/** Jira writes `+0200` offsets; every other time on this surface is ISO in Z. */
+function utcInstant(value: string): string {
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? value : new Date(at).toISOString();
 }

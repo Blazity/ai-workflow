@@ -32,6 +32,7 @@ import {
   type ClarificationRoundHeader,
   type ClarificationRoundRows,
 } from "@shared/agent-visibility";
+import { canonicalSubjectKey } from "@shared/contracts";
 import {
   listClarificationAnswerDeliveryRows,
   listClarificationQuestionRows,
@@ -119,7 +120,9 @@ export async function assembleSubjectRounds(
   reads: RoundReads,
   input: { subjectKey: string; organizationId: string },
 ): Promise<AssembledRounds> {
-  const all = await reads.questions(input.subjectKey);
+  // The spelling the questions were recorded under, whatever case was typed.
+  const subjectKey = canonicalSubjectKey(input.subjectKey);
+  const all = await reads.questions(subjectKey);
   if (all.length === 0) return { rounds: [], unreadable: [], deliveryIds: new Map() };
 
   // THE SAME AUDIENCE AS THE REPLAY OF THE RUN THAT ASKED, decided per
@@ -161,13 +164,13 @@ export async function assembleSubjectRounds(
   // opposite case, and is served alongside them above.
   if (questions.length === 0) {
     throw notFound(
-      `This installation has no clarification rounds for ${input.subjectKey} that you may read.`,
+      `This installation has no clarification rounds for ${subjectKey} that you may read.`,
     );
   }
 
   const [deliveries, trail] = await Promise.all([
     reads.deliveries(questions.map((row) => row.clarificationId)),
-    reads.trail(input.subjectKey),
+    reads.trail(subjectKey),
   ]);
   const readable = new Set(questions.map((row) => row.clarificationId));
   const safe = serveSafeText(await reads.knownSecrets());

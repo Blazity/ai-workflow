@@ -11,8 +11,10 @@ import React, {
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import { useRouter } from "next/navigation";
 import {
+  autoLayoutPositions,
   isManuallyDispatchableTrigger,
   isTriggerBlockType,
+  positionsCarryNoLayout,
   pinnedRepositoriesNotEnabledSentence,
   RETIRED_SCHEMA_MESSAGE,
   type RunBlockStatusesResponse,
@@ -39,6 +41,7 @@ import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-l
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { DeployPinWarning } from "@/components/cockpit/flow-editor/deploy-pin-warning";
+import { NODE_H, NODE_W } from "@/components/cockpit/flow-editor/ports";
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
 import { Button, Input, Select } from "@/components/ui";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
@@ -75,6 +78,7 @@ import { useWorkflowValidationController } from "@/lib/workflow-editor/use-valid
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
   deployUnavailableReason,
+  draftDeployedAs,
   draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -109,6 +113,33 @@ interface WorkflowEditorDocument {
   budgets: WorkflowExecutionBudgets;
   repositoryScope: WorkflowRepositoryScope;
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
+}
+
+/** One column and one row apart, with room for the arrow between two blocks,
+ *  on the editor's own card size (the replay's cards are smaller). */
+const AUTO_LAYOUT_STEP = { x: NODE_W + 96, y: NODE_H + 48 };
+
+/**
+ * The flow the canvas draws for a definition. A graph whose every node sits on
+ * one point was never placed (it was saved through MCP or the API without
+ * positions), so it is laid out the way the replay lays it out rather than
+ * drawn as one pile where only the top block can be clicked. A definition
+ * somebody placed keeps exactly what they placed.
+ */
+function canvasFlowOf(definition: WorkflowDefinition): ReturnType<typeof toFlowDefinition> {
+  const flow = toFlowDefinition(definition);
+  if (!positionsCarryNoLayout(flow.nodes)) return flow;
+  // toFlowDefinition builds these nodes afresh on every call, so placing them
+  // in place touches nothing anybody else holds.
+  const placed = autoLayoutPositions(flow.nodes, flow.edges, AUTO_LAYOUT_STEP);
+  for (const node of flow.nodes) {
+    const point = placed.get(node.id);
+    if (point) {
+      node.x = point.x;
+      node.y = point.y;
+    }
+  }
+  return flow;
 }
 
 function semanticKeyForDefinition(definition: WorkflowDefinition): string {
@@ -268,7 +299,7 @@ export function WorkflowEditorScreen({
     initialDetail.draft ??
     runnableVersionDefinition(initialDetail.deployed) ??
     defaultDefinition;
-  const seedFlow = toFlowDefinition(seed);
+  const seedFlow = canvasFlowOf(seed);
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
@@ -590,17 +621,31 @@ export function WorkflowEditorScreen({
     );
   }, [canDispatch, deployed, nodes]);
   const saveIssues = useMemo(() => nodeSaveIssues(nodes), [nodes]);
+  const deployedDraftVersion = draftDeployedAs(
+    draftSemanticKey,
+    deployedSemanticKey,
+    deployed?.version ?? null,
+  );
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
+    draftDeployedAs: deployedDraftVersion,
   });
   const deployDisabledTitle = deployUnavailableReason({
     hasTrigger: nodes.some((node) => isTriggerBlockType(node.type)),
     saveIssueCount: saveIssues.length,
     dirty,
     hasDraft: baselineDraft !== null,
+    draftDeployedAs: deployedDraftVersion,
   });
+  // Said on the page, not only in the button's tooltip, which a phone never
+  // shows. The block errors have their own control in the header, so their
+  // count is not said twice.
+  const deployReasonNote =
+    canEdit && !canDeploy && busy === null && saveIssues.length === 0
+      ? deployDisabledTitle
+      : null;
   const canResetToDeployed =
     canEdit && deployed !== null && semanticKey !== deployedSemanticKey;
 
@@ -964,7 +1009,7 @@ export function WorkflowEditorScreen({
   // draft correctly shows as unsaved rather than being silently treated as
   // the new baseline.
   function loadDefinitionIntoCanvas(definition: WorkflowDefinition) {
-    const flow = toFlowDefinition(definition);
+    const flow = canvasFlowOf(definition);
     const nextDocument: WorkflowEditorDocument = {
       nodes: flow.nodes,
       edges: flow.edges,
@@ -1029,7 +1074,7 @@ export function WorkflowEditorScreen({
       detail.draft ??
       runnableVersionDefinition(detail.deployed) ??
       defaultDefinition;
-    const flow = toFlowDefinition(definition);
+    const flow = canvasFlowOf(definition);
     const nextDocument: WorkflowEditorDocument = {
       nodes: flow.nodes,
       edges: flow.edges,
@@ -1329,6 +1374,14 @@ export function WorkflowEditorScreen({
           headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
           headerInlineExtra={
             <>
+              {deployReasonNote !== null && (
+                <span
+                  data-deploy-reason=""
+                  className="font-body text-[12px] leading-[1.3] text-neutral-700"
+                >
+                  {deployReasonNote}
+                </span>
+              )}
               {showDraftDiffersFromDeployed && (
                 <span
                   title="The saved draft no longer matches the deployed version. Use Reset to deployed to load what is live into the canvas."

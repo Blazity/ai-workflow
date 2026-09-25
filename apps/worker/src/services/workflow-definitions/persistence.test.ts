@@ -1206,7 +1206,9 @@ describe("schedule trigger rows", () => {
       updateWorkflowDefinition(db, { definitionId: second.id, enabled: true, actor: ADMIN }),
     ).rejects.toMatchObject({
       statusCode: 409,
-      message: 'Its trigger is already handled by the enabled definition "PR one"',
+      // The id and the trigger, because "which one, and for what" is the next
+      // question, and a name alone may not be unique among archived ones.
+      message: `Its trigger trigger_pr_created is already handled by the enabled definition "PR one" (definition ${first.id}). Disable that one first, or remove the trigger from this one.`,
     });
   });
 

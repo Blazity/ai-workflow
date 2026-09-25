@@ -156,6 +156,33 @@ export class IssueTrackerNotFoundError extends Error {
   }
 }
 
+/**
+ * The tracker read a write and refused what it said: a field value it does not
+ * accept, such as an issue type the project does not have or a label with a
+ * space in it. Nothing was written.
+ *
+ * The message is the provider's own sentence per field, because that is what
+ * tells a caller what to change and no core wording could be as exact. Every
+ * field is a string, number or boolean on purpose: core passes on a copy of
+ * what an integration throws and keeps only fields of those kinds.
+ *
+ * `status` is 400, so anything reading the answer (`readProviderFailure`)
+ * still reads a refusal rather than an outage.
+ */
+export class IssueTrackerInputRejectedError extends Error {
+  readonly code = "INPUT_REJECTED";
+  readonly status = 400;
+  /** The provider named the issue type among what it refused, so the types it
+   *  does accept are the useful next thing to show. */
+  readonly issueTypeRejected: boolean;
+
+  constructor(providerMessage: string, options: { issueTypeRejected: boolean }) {
+    super(providerMessage);
+    this.name = "IssueTrackerInputRejectedError";
+    this.issueTypeRejected = options.issueTypeRejected;
+  }
+}
+
 export interface TicketComment {
   author: string;
   /** Stable account id of the comment author, used to recognise the bot's own comments. */
@@ -276,6 +303,10 @@ export interface IssueTrackerAdapter {
    * `labels` is written WITH the ticket rather than added afterwards, because a caller
    * that marks a ticket for idempotency needs the mark to exist for certain the moment
    * the ticket does.
+   *
+   * A value the provider refuses (an issue type the project does not have, a
+   * label it cannot store) throws `IssueTrackerInputRejectedError` carrying the
+   * provider's own words, so the caller can say what to fix.
    */
   createTicket?(input: {
     summary: string;
@@ -284,6 +315,13 @@ export interface IssueTrackerAdapter {
     issueType?: string;
     labels?: string[];
   }): Promise<{ identifier: string; url: string | null }>;
+  /**
+   * The issue types `createTicket` can create in the adapter's project, by the
+   * names it accepts. Optional: used to answer a refused issue type with the
+   * ones that would have worked. Types that need a parent are left out, because
+   * `createTicket` never sends one.
+   */
+  listIssueTypes?(): Promise<Array<{ id: string; name: string }>>;
   /**
    * The keys of every ticket sitting in one status, oldest first.
    *

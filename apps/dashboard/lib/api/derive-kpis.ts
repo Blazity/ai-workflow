@@ -23,9 +23,13 @@ export function deriveKpisFromRuns(
   const curFailed = cur.filter((r) => r.status === "failed");
   const prevFailed = prev.filter((r) => r.status === "failed");
 
-  const curDur = durations(cur);
-  const prevDur = durations(prev);
-  const curP95 = percentile(curDur, 95);
+  // The p95 of successful runs, as the worker's tile is, and none without one:
+  // this fills in whenever the worker's tile is null, which is what the worker
+  // answers for a window without a successful run.
+  const curDone = cur.filter((r) => r.status === "success");
+  const curDur = durations(curDone);
+  const prevDur = durations(prev.filter((r) => r.status === "success"));
+  const curP95 = curDur.length > 0 ? percentile(curDur, 95) : null;
   const prevP95 = prevDur.length > 0 ? percentile(prevDur, 95) : null;
 
   return {
@@ -35,11 +39,13 @@ export function deriveKpisFromRuns(
       deltaPct: prev.length > 0 ? deltaPct(cur.length, prev.length) : 0,
       spark: hourlyCounts(cur),
     },
-    p95: {
-      valueSec: curP95,
-      deltaSec: prevP95 === null ? 0 : curP95 - prevP95,
-      spark: hourlyP95(cur),
-    },
+    p95: curP95 === null
+      ? null
+      : {
+          valueSec: curP95,
+          deltaSec: prevP95 === null ? 0 : curP95 - prevP95,
+          spark: hourlyP95(curDone),
+        },
     errors24h: {
       value: curFailed.length,
       deltaPct:

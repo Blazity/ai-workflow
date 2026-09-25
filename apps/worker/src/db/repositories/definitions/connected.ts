@@ -20,6 +20,7 @@ import {
   appendWorkflowDefinitionDraft,
   updateWorkflowDefinitionLayout,
   archiveWorkflowDefinition,
+  unarchiveWorkflowDefinition,
 } from "./operations.js";
 import { createDefinitionsRepository } from "./atomic.js";
 import {
@@ -125,3 +126,4 @@ export function insertConnectedWorkflowDefinition(input: Parameters<typeof inser
 export function appendConnectedWorkflowDefinitionDraft(input: Parameters<typeof appendWorkflowDefinitionDraft>[1]) { return appendWorkflowDefinitionDraft(getDb(), input); }
 export function updateConnectedWorkflowDefinitionLayout(input: Parameters<typeof updateWorkflowDefinitionLayout>[1]) { return updateWorkflowDefinitionLayout(getDb(), input); }
 export function archiveConnectedDefinition(input: Parameters<typeof archiveWorkflowDefinition>[1]) { return archiveWorkflowDefinition(getDb(), input); }
+export function unarchiveConnectedDefinition(input: Parameters<typeof unarchiveWorkflowDefinition>[1]) { return unarchiveWorkflowDefinition(getDb(), input); }

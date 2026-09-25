@@ -22,6 +22,11 @@
  * throws on read turns those into a failure far from the call that was wrong.
  * ADR-010 decision 12 states the rule this implements: a run that cannot reach
  * memory continues without it AND SAYS SO.
+ *
+ * ONE SCOPE IS NEVER THE SELECTED PROVIDER'S: the ticket notebook. It is a
+ * document a run writes into the workspace and reads back byte for byte, so
+ * the built-in store keeps it on every deployment and a connected engine only
+ * ever serves facts and lessons (`withNotebooksInBuiltin`).
  */
 import type {
   IntegrationConnectionPin,
@@ -104,20 +109,24 @@ interface MemoryRefusal {
  * without reaching the provider.
  */
 export interface ActiveMemory {
-  /** `builtin`, or the id of the integration serving `memory`. Null when nothing could be resolved. */
+  /** `builtin`, or the id of the integration serving `memory` (its facts and
+   *  lessons; notebooks are always `builtin`'s). Null when nothing could be resolved. */
   readonly id: string | null;
   /** What to call it in a sentence a person reads. */
   readonly name: string;
   /**
-   * Non-null when nothing serves memory here, in which case every call below
-   * answers exactly this. Readable without making a call, so a caller that
-   * would otherwise do expensive work first (deriving facts out of a checkout)
-   * can skip it and report once.
+   * Non-null when nothing serves facts and lessons here, in which case every
+   * call about them below answers exactly this. A notebook call is the
+   * built-in store's either way and answers for itself. Readable without
+   * making a call, so a caller that would otherwise do expensive work first
+   * (deriving facts out of a checkout) can skip it and report once.
    */
   readonly refusal: MemoryRefusal | null;
   /**
    * The admin half, or null when this provider cannot enumerate what it holds.
-   * Null is not an empty store and a screen must not show it as one.
+   * Null is not an empty store and a screen must not show it as one. Beside a
+   * connected engine it carries the built-in store's notebooks too
+   * (`withBuiltinNotebooks`).
    */
   readonly store: MemoryStoreAdapter | null;
   recall(request: MemoryRecallRequest): Promise<MemoryRecall>;
@@ -157,6 +166,26 @@ export async function activeMemory(
    */
   pins?: readonly IntegrationConnectionPin[],
 ): Promise<ActiveMemory> {
+  // One reader of the secret set for the whole step, whichever store answers a
+  // call: the provider of facts and lessons, or the built-in store beside it.
+  const knownSecrets = knownSecretsReader();
+  const selected = await selectedProvider(pins, knownSecrets);
+  if (selected === BUILTIN_SERVES_ALL) return await builtinActiveMemory(knownSecrets);
+  return withNotebooksInBuiltin(selected, knownSecrets);
+}
+
+/** `selectedProvider`'s answer when nothing is connected, so the built-in store
+ *  serves facts, lessons and notebooks alike and there is nothing to route. */
+const BUILTIN_SERVES_ALL: unique symbol = Symbol("the built-in store serves all memory");
+
+/**
+ * Who serves facts and lessons on this deployment right now, or the refusal
+ * saying why nothing can. Never throws, for the reasons `activeMemory` gives.
+ */
+async function selectedProvider(
+  pins: readonly IntegrationConnectionPin[] | undefined,
+  knownSecrets: KnownSecretsReader,
+): Promise<ActiveMemory | typeof BUILTIN_SERVES_ALL> {
   try {
     const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
     // The provider's context lives exactly as long as the budget below lets it:
@@ -198,7 +227,7 @@ export async function activeMemory(
       // The default, and the common case: nothing is connected (or what is
       // connected is disabled, which is the admin's choice), so the built-in
       // store serves. This is not a refusal and never reports one.
-      return await builtinActiveMemory();
+      return BUILTIN_SERVES_ALL;
     }
     const manifestOf = (id: string) => integrationManifests.find((manifest) => manifest.id === id);
     if (choice.kind === "ambiguous") {
@@ -273,7 +302,7 @@ export async function activeMemory(
     return wrap(only.manifest.id, only.manifest.name, adapter, {
       redaction: only.redaction,
       budget: memoryBudget(only.manifest.name, lifetime, MEMORY_CALL_BUDGET_MS),
-      knownSecrets: knownSecretsReader(),
+      knownSecrets,
     });
   } catch (error) {
     return refusing({
@@ -286,20 +315,208 @@ export async function activeMemory(
   }
 }
 
-async function builtinActiveMemory(): Promise<ActiveMemory> {
-  const { builtinMemoryAdapter, BUILTIN_MEMORY_PROVIDER_ID, BUILTIN_MEMORY_PROVIDER_NAME } =
-    await import("../../memory/builtin/adapter.js");
-  // No budget and nothing to redact: the built-in store is core's own
-  // database, bounded where every other query is, and holds no connection.
-  // One reader of the secret set for the wrapper and the store together, so
-  // cleaning what the store holds costs the step no second read.
-  const knownSecrets = knownSecretsReader();
-  return wrap(
-    BUILTIN_MEMORY_PROVIDER_ID,
-    BUILTIN_MEMORY_PROVIDER_NAME,
-    builtinMemoryAdapter(knownSecrets),
-    { redaction: NOTHING_TO_REDACT, budget: UNBOUNDED, knownSecrets },
-  );
+/**
+ * The built-in store, or the refusal saying it could not be loaded. Never
+ * throws.
+ *
+ * `besideEngine` when it keeps only the notebooks, next to an engine serving
+ * facts and lessons. Its own refusals and throws then say which store they
+ * came from, because on that deployment a bare database message reads as the
+ * engine failing. What core refuses around it (the secret set it could not
+ * read) already names its cause, and is left as it is.
+ */
+async function builtinActiveMemory(
+  knownSecrets: KnownSecretsReader,
+  besideEngine = false,
+): Promise<ActiveMemory> {
+  try {
+    const { builtinMemoryAdapter, BUILTIN_MEMORY_PROVIDER_ID, BUILTIN_MEMORY_PROVIDER_NAME } =
+      await import("../../memory/builtin/adapter.js");
+    const adapter = builtinMemoryAdapter(knownSecrets);
+    // No budget and nothing to redact: the built-in store is core's own
+    // database, bounded where every other query is, and holds no connection.
+    // One reader of the secret set for the wrapper and the store together, so
+    // cleaning what the store holds costs the step no second read.
+    return wrap(
+      BUILTIN_MEMORY_PROVIDER_ID,
+      BUILTIN_MEMORY_PROVIDER_NAME,
+      besideEngine ? namingTheNotebookStore(adapter) : adapter,
+      { redaction: NOTHING_TO_REDACT, budget: UNBOUNDED, knownSecrets },
+    );
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    return refusing({
+      code: "unreadable",
+      detail: besideEngine
+        ? `the built-in store, which keeps notebooks, could not be loaded (${said})`
+        : `the built-in store could not be loaded (${said}), so memory was not used`,
+      providers: [],
+    });
+  }
+}
+
+/** The built-in adapter, every answer and throw of its own saying it is the
+ *  store that keeps notebooks (see `besideEngine` above). */
+function namingTheNotebookStore(adapter: MemoryAdapter): MemoryAdapter {
+  const named = (detail: string) =>
+    `notebooks are kept in the built-in store, which could not answer: ${detail}`;
+  const rethrown = async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      throw new Error(named(error instanceof Error ? error.message : String(error)), {
+        cause: error,
+      });
+    }
+  };
+  const { store } = adapter;
+  const namedStore: MemoryStoreAdapter | undefined = store && {
+    list: (options) => rethrown(() => store.list(options)),
+    read: (ref) => rethrown(() => store.read(ref)),
+    forget: (ref) => rethrown(() => store.forget(ref)),
+  };
+  return {
+    async recall(request) {
+      const answer = await adapter.recall(request);
+      return answer.ok ? answer : { ...answer, detail: named(answer.detail) };
+    },
+    async observe(request) {
+      const answer = await adapter.observe(request);
+      return answer.ok ? answer : { ...answer, detail: named(answer.detail) };
+    },
+    ...(namedStore ? { store: namedStore } : {}),
+  };
+}
+
+/**
+ * The selected provider, with every notebook call answered by the built-in
+ * store instead.
+ *
+ * A notebook is a document a run hydrates into the workspace and stores back
+ * byte for byte: the plan, the human decisions from clarification rounds, the
+ * notes for the next run on the ticket. An engine that extracts and
+ * consolidates what it is given (Mem0 does both) may rewrite or merge it, and
+ * the next run would start from the engine's version of what a person
+ * decided. So the built-in store keeps notebooks on every deployment, and no
+ * notebook call reaches an engine: not the hydration, not the capture, not
+ * the distill reading what the run wrote down.
+ *
+ * Everything else is the selected provider's, refusal included: `id` and
+ * `name` still describe it, and `store` is its admin half with the built-in
+ * store's notebooks in it (`withBuiltinNotebooks`). An engine that is failing,
+ * or two switched on at once, refuse facts and lessons and leave notebooks
+ * working, because the built-in store never depended on them. It is loaded on
+ * the first notebook call, so a step that makes none pays nothing for it.
+ */
+function withNotebooksInBuiltin(
+  selected: ActiveMemory,
+  knownSecrets: KnownSecretsReader,
+): ActiveMemory {
+  let builtin: Promise<ActiveMemory> | undefined;
+  const notebooks = () => (builtin ??= builtinActiveMemory(knownSecrets, true));
+  return {
+    ...selected,
+    store: selected.store && withBuiltinNotebooks(selected.store, notebooks),
+    async recall(request) {
+      if (request.scope.kind !== "notebook") return selected.recall(request);
+      return (await notebooks()).recall(request);
+    },
+    async observe(request) {
+      if (request.scope.kind !== "notebook") return selected.observe(request);
+      return (await notebooks()).observe(request);
+    },
+  };
+}
+
+/**
+ * Where the built-in store files a notebook: the directory runs write to and
+ * the one older runs wrote to. Spelled again here because the admin half is
+ * addressed by these strings alone; `memory/builtin/adapter.ts` owns them and
+ * neither may ever be renamed. The route suite writes and reads a notebook
+ * through the real store, so the two drifting apart is a red test.
+ * An engine's own notebook addresses (Mem0's are `notebook/<KEY>`) stay its.
+ */
+const BUILTIN_NOTEBOOK_DIRECTORIES = ["ai-workflow/memory/", "blazebot/memory/"] as const;
+
+function isBuiltinNotebook(docPath: string): boolean {
+  return BUILTIN_NOTEBOOK_DIRECTORIES.some((directory) => docPath.startsWith(directory));
+}
+
+/**
+ * An engine's admin half, with the notebooks the built-in store keeps beside
+ * it: listed with the engine's documents, and read and erased where they are.
+ * Without it the memory screen and the MCP tools show a complete listing that
+ * leaves the notebooks out, find no document at a notebook's address and
+ * answer an erasure request for one with "nothing there", while it still
+ * holds what people answered, by name.
+ *
+ * Only the built-in store's notebooks: what else it holds (facts and lessons
+ * from before the engine was connected) nothing serves while the engine does,
+ * and the screen shows what runs use. The listing is complete only when both
+ * are, so an engine that stopped early, a built-in listing cut at its cap, or
+ * one that could not be read says "this may not be everything". The engine's
+ * failure still fails the listing, as it always has.
+ */
+function withBuiltinNotebooks(
+  engine: MemoryStoreAdapter,
+  builtin: () => Promise<ActiveMemory>,
+): MemoryStoreAdapter {
+  const builtinStore = async (): Promise<MemoryStoreAdapter> => {
+    const loaded = await builtin();
+    if (!loaded.store) throw new Error(loaded.refusal?.detail ?? "the built-in store keeps no admin half");
+    return loaded.store;
+  };
+  return {
+    async list(options) {
+      const [held, notebooks] = await Promise.all([
+        engine.list(options),
+        builtinNotebookListing(builtinStore, options),
+      ]);
+      // Newest first across both, as the port asks of one listing. A stable
+      // sort, so documents written in the same instant keep each store's order.
+      const documents = [...held.documents, ...notebooks.documents].sort(
+        (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
+      );
+      const kept = options.limit === undefined ? documents : documents.slice(0, options.limit);
+      return {
+        documents: kept,
+        complete: held.complete && notebooks.complete && kept.length === documents.length,
+      };
+    },
+    read: async (ref) =>
+      isBuiltinNotebook(ref.docPath) ? (await builtinStore()).read(ref) : engine.read(ref),
+    forget: async (ref) =>
+      isBuiltinNotebook(ref.docPath) ? (await builtinStore()).forget(ref) : engine.forget(ref),
+  };
+}
+
+/**
+ * The built-in store's notebooks for this listing, or none and incomplete when
+ * it could not answer: the engine's documents are still worth showing, and the
+ * screen says the list may be partial. The reason goes to the log.
+ */
+async function builtinNotebookListing(
+  builtinStore: () => Promise<MemoryStoreAdapter>,
+  options: Parameters<MemoryStoreAdapter["list"]>[0],
+): Promise<MemoryStoreListing> {
+  try {
+    const listing = await (await builtinStore()).list(options);
+    return {
+      documents: listing.documents.filter((document) => isBuiltinNotebook(document.docPath)),
+      complete: listing.complete,
+    };
+  } catch (error) {
+    try {
+      const { logger } = await import("../../infra/logger.js");
+      logger.warn(
+        { store: "builtin", detail: error instanceof Error ? error.message : String(error) },
+        "memory_list_notebooks_unavailable",
+      );
+    } catch {
+      // The listing is still answered, and says it is partial; only the log is lost.
+    }
+    return { documents: [], complete: false };
+  }
 }
 
 function servesMemory(manifest: IntegrationManifest): boolean {

@@ -9,7 +9,8 @@ import {
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { IntegrationConnectionPin, ReviewResult } from "@shared/contracts";
 import type { WorkflowOwnedBranchRecord } from "../../../db/repositories/runs.js";
-import { prSubjectKey } from "../../support/subject-key.js";
+import { isSameRepository } from "../../support/repository-access.js";
+import { canonicalSubjectKey, prSubjectKey } from "../../support/subject-key.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -25,14 +26,15 @@ export function reviewPrAtWorkflowPublishedHead(args: {
   // The run proves it owns this publication through its own subject. That subject
   // is the pull request, not the ticket: one ticket can own a pull request per
   // repository, so a ticket subject would have let the sibling's run retarget to
-  // this pull request's published head.
+  // this pull request's published head. Both sides compare by identity: a run
+  // started before PR keys were cased down carries the provider's spelling in
+  // its journal, and the publication keeps whatever spelling it was made under.
   if (
     !owned?.publishedHeadSha ||
     !owned.pr ||
-    args.subjectKey !==
+    canonicalSubjectKey(args.subjectKey) !==
       prSubjectKey(owned.provider, owned.repoPath, owned.pr.id) ||
-    owned.provider !== pr.provider ||
-    owned.repoPath !== pr.repoPath ||
+    !isSameRepository(owned, pr) ||
     owned.pr.id !== pr.prNumber ||
     owned.branchName !== pr.headRef ||
     owned.pr.branch !== pr.headRef ||

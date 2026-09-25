@@ -2,16 +2,20 @@
  * Positions for a graph that carries none.
  *
  * A definition authored in the editor stores a position per node. One written
- * through the API or MCP does not: every node arrives at 0,0, and every screen
- * that draws it stacks the whole workflow in one pile at the top left. The pile
- * is not only unreadable, it swallows the clicks: only the node drawn last is
- * on top, so selecting a block always selects that one.
+ * through the API or MCP often does not: every node arrives at 0,0, and every
+ * screen that draws it stacks the whole workflow in one pile at the top left.
+ * The pile is not only unreadable, it swallows the clicks: only the node drawn
+ * last is on top, so selecting a block always selects that one.
  *
- * So a drawing surface asks here instead of trusting the stored numbers. This
+ * So a drawing surface asks here instead of trusting the stored numbers, and
+ * the worker asks the same question before it stores the positions a caller
+ * sent: one rule for "these positions say nothing", read by every side. This
  * module is pure and deterministic: the same graph lays out the same way every
  * time, which matters because a replay is read alongside a run and must not
  * shuffle between two people looking at it.
  */
+import type { WorkflowLayoutPoint } from "./domain";
+
 
 /** Nodes in the order the definition lists them, which is the order used to
  *  break ties inside a layer. */
@@ -24,11 +28,6 @@ export interface AutoLayoutNode {
 export interface AutoLayoutEdge {
   from: string;
   to: string;
-}
-
-export interface Point {
-  x: number;
-  y: number;
 }
 
 /**
@@ -57,8 +56,8 @@ export function positionsCarryNoLayout(nodes: readonly AutoLayoutNode[]): boolea
 export function autoLayoutPositions(
   nodes: readonly AutoLayoutNode[],
   edges: readonly AutoLayoutEdge[],
-  step: Point,
-): Map<string, Point> {
+  step: WorkflowLayoutPoint,
+): Map<string, WorkflowLayoutPoint> {
   const ids = new Set(nodes.map((node) => node.id));
   const incoming = new Map<string, string[]>();
   for (const node of nodes) incoming.set(node.id, []);
@@ -99,7 +98,7 @@ export function autoLayoutPositions(
   }
 
   const rowsInColumn = new Map<number, number>();
-  const positions = new Map<string, Point>();
+  const positions = new Map<string, WorkflowLayoutPoint>();
   for (const node of nodes) {
     const column = depth.get(node.id)!;
     const row = rowsInColumn.get(column) ?? 0;

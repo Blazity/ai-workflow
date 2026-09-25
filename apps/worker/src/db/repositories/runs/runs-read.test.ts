@@ -343,6 +343,27 @@ describe("runKpis", () => {
     expect(k.runs24h!.spark).toHaveLength(7);
   });
 
+  // Red when: the percentile of no successful run is read as 0. Production
+  // showed "P95 LATENCY 0s ↘ 544.0s" in green over a day whose two runs had
+  // failed after 53 s and 32 s.
+  it("reports no p95 when no run in the window succeeded", async () => {
+    await seed({ status: "failed", durationSec: 53, startedAt: new Date(NOW.getTime() - 2 * HOUR) });
+    await seed({ status: "failed", durationSec: 32, startedAt: new Date(NOW.getTime() - 3 * HOUR) });
+    await seed({ status: "success", durationSec: 544, startedAt: new Date(NOW.getTime() - 30 * HOUR) });
+    const k = await runKpis({ db, window: "24h", now: NOW });
+    expect(k.runs24h!.value).toBe(2); // the window's runs were read
+    expect(k.p95).toBeNull();
+  });
+
+  it("does not compare a p95 with a window that had no successful run", async () => {
+    await seed({ status: "success", durationSec: 60, startedAt: new Date(NOW.getTime() - 2 * HOUR) });
+    await seed({ status: "failed", durationSec: 500, startedAt: new Date(NOW.getTime() - 30 * HOUR) });
+    const k = await runKpis({ db, window: "24h", now: NOW });
+    expect(k.p95!.valueSec).toBe(60);
+    // Not "+60 s": the previous window has no p95 to have risen from.
+    expect(k.p95!.deltaSec).toBe(0);
+  });
+
   it("for 'all' counts everything with no delta", async () => {
     await seed({ startedAt: new Date(NOW.getTime() - 100 * DAY) });
     await seed({ startedAt: new Date(NOW.getTime() - 1 * HOUR) });
@@ -374,6 +395,51 @@ describe("workflowAgg", () => {
     const agent = rows.find((r) => r.id === "wf_agent")!;
     expect(agent.runs24h).toBe(0); // none in 24h
     expect(agent.latestRun?.ticket).toBe("AWT-NEW");
+  });
+
+  // Red when: the registry names one provider for every run of a workflow,
+  // taken from the built-in default profile. Production: "Agent · openai" on
+  // the Overview beside a run that executed on claude-haiku.
+  it("names the providers the window's runs were launched on, and none it has no run for", async () => {
+    const on = (provider: string, nodeId = "agent") =>
+      ({ nodeId, manifest: { model: { id: `${provider}-model` }, harness: { provider } } }) as unknown as HarnessRunManifestRecord;
+    await seed({ workflowId: "wf_agent", harnessManifests: [on("claude")] });
+    await seed({ workflowId: "wf_agent", harnessManifests: [on("claude", "plan"), on("codex", "review")] });
+    await seed({ workflowId: "wf_post_pr_gate", harnessManifests: null });
+    const { rows } = await workflowAgg({ db, window: "24h", ...base });
+    expect(rows.find((r) => r.id === "wf_agent")!.gateway).toBe("anthropic + openai");
+    expect(rows.find((r) => r.id === "wf_post_pr_gate")!.runs24h).toBe(1);
+    expect(rows.find((r) => r.id === "wf_post_pr_gate")!.gateway).toBe("");
+  });
+
+  it("names one provider when every run in the window used it", async () => {
+    const claude = { nodeId: "agent", manifest: { model: { id: "claude-haiku" }, harness: { provider: "claude" } } } as unknown as HarnessRunManifestRecord;
+    await seed({ workflowId: "wf_agent", harnessManifests: [claude] });
+    // Outside the window: not what this window ran on.
+    await seed({
+      workflowId: "wf_agent",
+      startedAt: new Date(NOW.getTime() - 3 * DAY),
+      harnessManifests: [{ ...claude, manifest: { ...claude.manifest, harness: { provider: "codex" } } } as unknown as HarnessRunManifestRecord],
+    });
+    const { rows } = await workflowAgg({ db, window: "24h", ...base });
+    expect(rows.find((r) => r.id === "wf_agent")!.gateway).toBe("anthropic");
+  });
+
+  // Red when: a workflow's latency counts its failed runs while the Overview's
+  // p95 tile counts only successful ones, so a workflow whose runs fail fast
+  // reads as fast, and one whose runs all failed shows a latency at all.
+  it("reads a workflow's latency from its successful runs only", async () => {
+    await seed({ workflowId: "wf_agent", status: "success", durationSec: 400 });
+    await seed({ workflowId: "wf_agent", status: "failed", durationSec: 30 });
+    await seed({ workflowId: "wf_post_pr_gate", status: "failed", durationSec: 53 });
+    const { rows } = await workflowAgg({ db, window: "24h", ...base });
+    const agent = rows.find((r) => r.id === "wf_agent")!;
+    expect(agent.p50).toBe(400);
+    expect(agent.p95).toBe(400);
+    const gate = rows.find((r) => r.id === "wf_post_pr_gate")!;
+    expect(gate.runs24h).toBe(1);
+    expect(gate.p50).toBeNull();
+    expect(gate.p95).toBeNull();
   });
 
   it("sums per-workflow cost (costToday) from persisted cost", async () => {

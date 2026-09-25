@@ -11,7 +11,7 @@ paths:
 
 # Memory
 
-Memory is a capability since S13, and the built-in store is one provider of it
+Memory is a capability, and the built-in store is one provider of it
 (`memory/builtin/adapter.ts`), a core module because it needs core's database
 (ADR-010 decision 10). Three things bind every edit under these paths:
 
@@ -20,7 +20,8 @@ Memory is a capability since S13, and the built-in store is one provider of it
   caller outside `memory/builtin/**` may import `db/repositories/memory.ts`,
   parse or render a stored document, or hold a version. The one exception is
   routing memory in `engine/pre-sandbox/steps/repo-selection.ts`, which is not
-  on the port and says so in the plan's "S13 scope not taken".
+  on the port (reason: "S13 scope not taken" in
+  `docs/plans/2026-09-18-integrations.md`).
 - **No provider is a legitimate state, and it is not a refusal.** Zero
   connected memory integrations means the built-in store, resolved before any
   pin comparison. Making `builtin` something an admin has to connect would

@@ -56,14 +56,25 @@ vi.mock("@integrations/registry", async (importOriginal) => ({
 
 const builtinRecall = vi.fn();
 const builtinObserve = vi.fn();
+/** The built-in store's admin half: empty and complete unless a case says otherwise. */
+const builtinStore = vi.hoisted(() => ({
+  list: vi.fn(),
+  read: vi.fn(),
+  forget: vi.fn(),
+}));
+/** Makes building the built-in store throw, which nothing should let escape. */
+const builtinLoad = vi.hoisted(() => ({ broken: false }));
 vi.mock("../../memory/builtin/adapter.js", () => ({
   BUILTIN_MEMORY_PROVIDER_ID: "builtin",
   BUILTIN_MEMORY_PROVIDER_NAME: "Built-in memory",
-  builtinMemoryAdapter: () => ({
-    recall: builtinRecall,
-    observe: builtinObserve,
-    store: { list: vi.fn(), read: vi.fn(), forget: vi.fn() },
-  }),
+  builtinMemoryAdapter: () => {
+    if (builtinLoad.broken) throw new Error("the built-in adapter failed to load");
+    return {
+      recall: builtinRecall,
+      observe: builtinObserve,
+      store: builtinStore,
+    };
+  },
 }));
 
 import { redactedError } from "../../services/integrations/context.js";
@@ -78,6 +89,14 @@ const OBSERVE = {
   runId: "run_1",
   ticketKey: null,
   observation: { kind: "items", learned: ["a fact"], refuted: [] },
+} as const;
+const NOTEBOOK_SUBJECT = { key: "ticket:jira:AIW-1", label: "AIW-1" };
+const NOTEBOOK_RECALL = { subject: NOTEBOOK_SUBJECT, scope: { kind: "notebook", name: "AIW-1" } } as const;
+const NOTEBOOK_OBSERVE = {
+  ...NOTEBOOK_RECALL,
+  runId: "run_1",
+  ticketKey: "AIW-1",
+  observation: { kind: "document", text: "# AIW-1\n- the plan" },
 } as const;
 const SECRET = "m0-key-8f3a91c2d7";
 const withoutKey = (text: string) => text.split(SECRET).join("[redacted]");
@@ -176,6 +195,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   registered.splice(0);
   redaction.broken = false;
+  builtinLoad.broken = false;
   knownSecretValues.mockResolvedValue([]);
   builtinRecall.mockResolvedValue({ ok: true, held: false, entries: [], rendering: "" });
   builtinObserve.mockResolvedValue({
@@ -185,6 +205,9 @@ beforeEach(() => {
     dropped: 0,
     remaining: 1,
   });
+  builtinStore.list.mockResolvedValue({ documents: [], complete: true });
+  builtinStore.read.mockResolvedValue(null);
+  builtinStore.forget.mockResolvedValue(false);
 });
 
 describe("a deployment that has connected nothing", () => {
@@ -244,6 +267,99 @@ describe("a deployment that connected one engine", () => {
     // Connecting an engine REPLACES the provider. A deployment writing into
     // both would split its memory in two with nobody told.
     expect(builtinRecall).not.toHaveBeenCalled();
+  });
+
+  it("keeps every notebook in the built-in store, and the engine never sees one", async () => {
+    // A notebook is a document a run reads back byte for byte, and an engine
+    // that extracts and merges what it is given may rewrite it. Mistake that
+    // turns this red: resolving a notebook's store like facts and lessons.
+    const recall = vi.fn<MemoryAdapter["recall"]>(async () => ({
+      ok: true,
+      held: false,
+      entries: [],
+      rendering: "",
+    }));
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => ({
+      ok: true,
+      stored: true,
+      removed: 0,
+      dropped: 0,
+      remaining: 1,
+    }));
+    readable(provider("Recall Engine", { recall, observe }));
+    builtinRecall.mockResolvedValue({
+      ok: true,
+      held: true,
+      entries: [{ text: "# AIW-1" }],
+      rendering: "# AIW-1",
+    });
+
+    const memory = await activeMemory();
+
+    expect(memory.id).toBe("recall engine");
+    expect(await memory.recall(NOTEBOOK_RECALL)).toEqual({
+      ok: true,
+      held: true,
+      entries: [{ text: "# AIW-1" }],
+      rendering: "# AIW-1",
+    });
+    expect(await memory.observe(NOTEBOOK_OBSERVE)).toMatchObject({ ok: true, stored: true });
+    await memory.recall(RECALL);
+    await memory.observe(OBSERVE);
+
+    expect(builtinRecall.mock.calls).toEqual([[NOTEBOOK_RECALL]]);
+    expect(builtinObserve.mock.calls).toEqual([[NOTEBOOK_OBSERVE]]);
+    // Facts and lessons are still the engine's, and only they.
+    expect(recall.mock.calls).toEqual([[RECALL]]);
+    expect(observe.mock.calls).toEqual([[OBSERVE]]);
+  });
+
+  it("names the built-in store when it cannot answer for a notebook", async () => {
+    // The run shows this sentence on a deployment an engine serves; a bare
+    // driver message there reads as the engine failing.
+    readable(provider("Recall Engine", { recall: vi.fn(), observe: vi.fn() }));
+    builtinRecall.mockResolvedValue({ ok: false, code: "unavailable", detail: "connection terminated" });
+
+    expect(await (await activeMemory()).recall(NOTEBOOK_RECALL)).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: "notebooks are kept in the built-in store, which could not answer: connection terminated",
+    });
+  });
+
+  it("answers a refusal rather than throwing when the built-in store cannot be built for a notebook", async () => {
+    readable(provider("Recall Engine", { recall: vi.fn(), observe: vi.fn() }));
+    builtinLoad.broken = true;
+    const memory = await activeMemory();
+
+    // Named once: the store that could not be loaded, and why.
+    const refusal = {
+      ok: false,
+      code: "unreadable",
+      detail: "the built-in store, which keeps notebooks, could not be loaded (the built-in adapter failed to load)",
+    };
+    expect(await memory.recall(NOTEBOOK_RECALL)).toEqual(refusal);
+    expect(await memory.observe(NOTEBOOK_OBSERVE)).toEqual(refusal);
+  });
+
+  it("does not blame the built-in store for a notebook when this deployment's secrets could not be read", async () => {
+    // The store was never asked: core refused before reaching it, and its
+    // sentence already names the cause.
+    readable(provider("Recall Engine", { recall: vi.fn(), observe: vi.fn() }));
+    knownSecretValues.mockRejectedValue(new Error("settings unreadable"));
+    const memory = await activeMemory();
+
+    expect(await memory.recall(NOTEBOOK_RECALL)).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: "this deployment's secrets could not be read, so memory was not read",
+    });
+    expect(await memory.observe(NOTEBOOK_OBSERVE)).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: "this deployment's secrets could not be read, so nothing was written to memory",
+    });
+    expect(builtinObserve).not.toHaveBeenCalled();
   });
 
   it("answers rather than throwing when the engine throws", async () => {
@@ -372,6 +488,142 @@ describe("a deployment that connected one engine", () => {
     // store instead would have their memory written somewhere they did not
     // choose and cannot see.
     expect(builtinRecall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The memory screen and the MCP tools on a deployment an engine serves. The
+ * engine's admin half answers for facts and lessons; the ticket notebooks are
+ * the built-in store's, so they are listed, read and erased there, or the
+ * screen shows a complete listing without them and an erasure answers
+ * "nothing there" for a notebook that is stored.
+ */
+describe("the admin half beside a connected engine", () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 8, 25, 10, minute));
+  const summary = (subjectKey: string, docPath: string, minute: number) => ({
+    subjectKey,
+    docPath,
+    ticketKey: null,
+    bytes: 1,
+    sourceRunId: "",
+    createdAt: at(minute),
+    updatedAt: at(minute),
+  });
+  const engineStore = (documents: ReturnType<typeof summary>[], complete = true) => ({
+    list: vi.fn(async () => ({ documents, complete })),
+    read: vi.fn(async () => null),
+    forget: vi.fn(async () => true),
+  });
+  const engineWith = (store: ReturnType<typeof engineStore>) =>
+    readable(provider("Recall Engine", { recall: vi.fn(), observe: vi.fn(), store }));
+
+  it("lists the built-in store's notebooks beside the engine's documents, newest first, and none of its facts or lessons", async () => {
+    engineWith(engineStore([summary(SUBJECT.key, "facts", 20), summary(NOTEBOOK_SUBJECT.key, "notebook/AIW-1", 5)]));
+    builtinStore.list.mockResolvedValue({
+      documents: [
+        summary("ticket:jira:AIW-2", "blazebot/memory/AIW-2.md", 40),
+        summary(SUBJECT.key, "facts", 30),
+        summary(NOTEBOOK_SUBJECT.key, "ai-workflow/memory/AIW-1.md", 10),
+        summary(SUBJECT.key, "lessons", 1),
+      ],
+      complete: true,
+    });
+
+    expect(await (await activeMemory()).store?.list({ ticketKey: "AIW-1" })).toEqual({
+      documents: [
+        summary("ticket:jira:AIW-2", "blazebot/memory/AIW-2.md", 40),
+        summary(SUBJECT.key, "facts", 20),
+        summary(NOTEBOOK_SUBJECT.key, "ai-workflow/memory/AIW-1.md", 10),
+        summary(NOTEBOOK_SUBJECT.key, "notebook/AIW-1", 5),
+      ],
+      complete: true,
+    });
+    // Both asked the same question.
+    expect(builtinStore.list).toHaveBeenCalledWith({ ticketKey: "AIW-1" });
+  });
+
+  it("says the listing may be partial when the built-in store's is, or when it cannot answer, and still lists the engine's", async () => {
+    const engine = engineStore([summary(SUBJECT.key, "facts", 20)]);
+    engineWith(engine);
+    builtinStore.list.mockResolvedValue({
+      documents: [summary(NOTEBOOK_SUBJECT.key, "ai-workflow/memory/AIW-1.md", 10)],
+      complete: false,
+    });
+    expect(await (await activeMemory()).store?.list({})).toMatchObject({ complete: false });
+
+    builtinStore.list.mockRejectedValue(new Error("connection terminated"));
+    expect(await (await activeMemory()).store?.list({})).toEqual({
+      documents: [summary(SUBJECT.key, "facts", 20)],
+      complete: false,
+    });
+  });
+
+  it("cuts a listing asked for a limit to that many, newest first, and says it is partial", async () => {
+    engineWith(engineStore([summary(SUBJECT.key, "facts", 20), summary(SUBJECT.key, "lessons", 5)]));
+    builtinStore.list.mockResolvedValue({
+      documents: [summary(NOTEBOOK_SUBJECT.key, "ai-workflow/memory/AIW-1.md", 10)],
+      complete: true,
+    });
+
+    expect(await (await activeMemory()).store?.list({ limit: 2 })).toEqual({
+      documents: [
+        summary(SUBJECT.key, "facts", 20),
+        summary(NOTEBOOK_SUBJECT.key, "ai-workflow/memory/AIW-1.md", 10),
+      ],
+      complete: false,
+    });
+  });
+
+  it("sends a read and an erasure of a built-in notebook to the built-in store, and every other address to the engine", async () => {
+    const engine = engineStore([]);
+    engineWith(engine);
+    builtinStore.read.mockResolvedValue({ content: "# AIW-1", bytes: 7, updatedAt: at(1), sourceRunId: "run_1" });
+    builtinStore.forget.mockResolvedValue(true);
+    const store = (await activeMemory()).store;
+    const current = { subjectKey: NOTEBOOK_SUBJECT.key, docPath: "ai-workflow/memory/AIW-1.md" };
+    const legacy = { subjectKey: NOTEBOOK_SUBJECT.key, docPath: "blazebot/memory/AIW-1.md" };
+    const engines = [
+      { subjectKey: NOTEBOOK_SUBJECT.key, docPath: "notebook/AIW-1" },
+      { subjectKey: SUBJECT.key, docPath: "facts" },
+    ];
+
+    expect(await store?.read(current)).toMatchObject({ content: "# AIW-1" });
+    expect(await store?.forget(legacy)).toBe(true);
+    for (const ref of engines) {
+      await store?.read(ref);
+      await store?.forget(ref);
+    }
+
+    expect(builtinStore.read.mock.calls).toEqual([[current]]);
+    expect(builtinStore.forget.mock.calls).toEqual([[legacy]]);
+    expect(engine.read.mock.calls).toEqual(engines.map((ref) => [ref]));
+    expect(engine.forget.mock.calls).toEqual(engines.map((ref) => [ref]));
+  });
+
+  it("names the built-in store when it fails to read or erase a notebook", async () => {
+    // On this deployment the screen puts the engine's name in front of what a
+    // store threw; a bare driver message there reads as the engine failing.
+    engineWith(engineStore([]));
+    builtinStore.forget.mockRejectedValue(new Error("connection terminated"));
+
+    await expect(
+      (await activeMemory()).store?.forget({
+        subjectKey: NOTEBOOK_SUBJECT.key,
+        docPath: "ai-workflow/memory/AIW-1.md",
+      }),
+    ).rejects.toThrow("notebooks are kept in the built-in store, which could not answer: connection terminated");
+  });
+
+  it("offers no admin half while the engine refuses, rather than a listing of notebooks alone", async () => {
+    // A listing of the notebooks by themselves would read as the whole of this
+    // deployment's memory; the refusal says why nothing can be listed.
+    deployment([], [
+      { name: "Recall Engine", state: { status: "failing", connection: "failing", usable: false } },
+    ]);
+
+    const memory = await activeMemory();
+    expect(memory.refusal).toMatchObject({ code: "unavailable" });
+    expect(memory.store).toBeNull();
   });
 });
 
@@ -623,6 +875,26 @@ describe("a memory integration that is switched on and failing", () => {
     expect(builtinObserve).not.toHaveBeenCalled();
   });
 
+  it("still keeps notebooks, which the built-in store serves whatever state the engine is in", async () => {
+    // The refusal is about facts and lessons. Refusing the notebook too would
+    // start the agent without its plan and the human decisions, for an engine
+    // the notebook never depended on.
+    deployment([], [
+      {
+        name: "Recall Engine",
+        state: { status: "failing", connection: "failing", usable: false },
+      },
+    ]);
+
+    const memory = await activeMemory();
+
+    expect(memory.refusal).toMatchObject({ code: "unavailable" });
+    expect(await memory.observe(NOTEBOOK_OBSERVE)).toMatchObject({ ok: true, stored: true });
+    expect(builtinObserve.mock.calls).toEqual([[NOTEBOOK_OBSERVE]]);
+    expect(await memory.observe(OBSERVE)).toMatchObject({ ok: false, code: "unavailable" });
+    expect(builtinObserve).toHaveBeenCalledTimes(1);
+  });
+
   it("serves the built-in store once an admin switches it off", async () => {
     deployment([], [
       {
@@ -719,7 +991,7 @@ describe("the secrets memory text carries in and out of this deployment", () => 
   const STORED_TOKEN = "stored-dashboard-token-5e1f0c";
   const written = { ok: true, stored: true, removed: 0, dropped: 0, remaining: 1 } as const;
 
-  it("hands a connected engine every text with this deployment's secrets taken out", async () => {
+  it("hands a connected engine, and the built-in store keeping notebooks beside it, every text with this deployment's secrets taken out", async () => {
     knownSecretValues.mockResolvedValue([STORED_TOKEN]);
     const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
     readable(provider("Recall Engine", { recall: vi.fn(), observe }));
@@ -748,6 +1020,8 @@ describe("the secrets memory text carries in and out of this deployment", () => 
         refuted: ["The token [REDACTED:configured_secret] is read from .env"],
         derived: true,
       },
+    ]);
+    expect(builtinObserve.mock.calls.map(([request]) => request.observation)).toEqual([
       {
         kind: "document",
         text: 'curl -H "x-key: [REDACTED:configured_secret]"',
@@ -759,7 +1033,8 @@ describe("the secrets memory text carries in and out of this deployment", () => 
   it("leaves core's addresses as they were sent, even when a secret is spelled in them", async () => {
     // Addresses are core's, compared exactly: rewriting one would orphan what
     // is stored under it. A known value inside one is the case that tells
-    // "left alone" from "happened not to match".
+    // "left alone" from "happened not to match". A notebook's address reaches
+    // the built-in store whichever engine is connected.
     knownSecretValues.mockResolvedValue([STORED_TOKEN]);
     const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
     readable(provider("Recall Engine", { recall: vi.fn(), observe }));
@@ -775,10 +1050,11 @@ describe("the secrets memory text carries in and out of this deployment", () => 
       observation: { kind: "document", text: `uses ${STORED_TOKEN}` },
     });
 
-    expect(observe.mock.calls[0]?.[0]).toEqual({
+    expect(builtinObserve.mock.calls[0]?.[0]).toEqual({
       ...addressed,
       observation: { kind: "document", text: "uses [REDACTED:configured_secret]" },
     });
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("takes a secret out of everything a recall hands back, rendering and entries", async () => {
@@ -840,7 +1116,10 @@ describe("the secrets memory text carries in and out of this deployment", () => 
     await memory.recall(RECALL);
     await memory.recall(RECALL);
     await memory.observe(OBSERVE);
+    // A notebook goes to the built-in store, and still costs no second read.
+    await memory.observe(NOTEBOOK_OBSERVE);
 
+    expect(builtinObserve).toHaveBeenCalledTimes(1);
     expect(knownSecretValues).toHaveBeenCalledTimes(1);
   });
 

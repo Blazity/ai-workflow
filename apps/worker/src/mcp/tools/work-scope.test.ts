@@ -191,6 +191,44 @@ describe("work_scope.edit", () => {
     expect(dataOf(read)).toMatchObject({ version: 0, entries: [] });
   });
 
+  it("writes a key typed in another case onto the record runs read", async () => {
+    // Production answered success for ticket:jira:awp-281 while the real
+    // ticket:jira:AWP-281 stayed at version 0: the edit landed on an empty twin
+    // no run ever reads. Red while the tool compares keys verbatim.
+    const client = await connectedClient({ scopes: DISPATCH_ONLY });
+    const first = await edit(
+      client,
+      [{ repositoryKey: API, action: "select", rationale: "the fix lives here" }],
+      0,
+      KEY_ONE,
+    );
+    expect(first.isError).not.toBe(true);
+
+    const typed = await edit(
+      client,
+      [{ repositoryKey: WEB, action: "exclude", rationale: "not this one" }],
+      1,
+      KEY_TWO,
+      " ticket:Jira:aiw-401 ",
+    );
+
+    expect(typed.isError).not.toBe(true);
+    expect(dataOf(typed).scope).toMatchObject({ subjectKey: SUBJECT, version: 2 });
+    const reader = await connectedClient({ scopes: READ_ONLY });
+    const read = await reader.callTool({
+      name: "work_scope.get",
+      arguments: { subjectKey: SUBJECT },
+    });
+    expect(dataOf(read)).toMatchObject({
+      subjectKey: SUBJECT,
+      version: 2,
+      entries: expect.arrayContaining([
+        expect.objectContaining({ repositoryKey: API, state: "selected" }),
+        expect.objectContaining({ repositoryKey: WEB, state: "excluded" }),
+      ]),
+    });
+  });
+
   it("refuses a stale expected version and says which version to read again", async () => {
     const client = await connectedClient();
     await edit(client, [{ repositoryKey: API, action: "select" }], 0, KEY_ONE);
@@ -288,6 +326,30 @@ describe("work_scope.get", () => {
     expect(trail).toHaveLength(2);
     // Newest first, so the decision a person is about to undo is the first line.
     expect(trail[0]?.event.entry?.repositoryKey).toBe(WEB);
+  });
+
+  it("reads the record of a key typed in another case", async () => {
+    // Production answered "nothing recorded" for ticket:jira:awp-274 while
+    // AWP-274 was at version 1. Red while the read compares keys verbatim.
+    const client = await connectedClient({ scopes: DISPATCH_ONLY });
+    await edit(
+      client,
+      [{ repositoryKey: API, action: "select", rationale: "the fix lives here" }],
+      0,
+      KEY_ONE,
+    );
+    const reader = await connectedClient({ scopes: READ_ONLY });
+
+    const result = await reader.callTool({
+      name: "work_scope.get",
+      arguments: { subjectKey: "ticket:jira:aiw-401" },
+    });
+
+    expect(dataOf(result)).toMatchObject({
+      subjectKey: SUBJECT,
+      version: 1,
+      entries: [expect.objectContaining({ repositoryKey: API, state: "selected" })],
+    });
   });
 
   it("answers a subject with no record with the version an edit must expect", async () => {

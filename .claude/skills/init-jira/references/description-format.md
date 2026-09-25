@@ -1,16 +1,10 @@
-# Description format — the Acceptance Criteria block
+# Description format: the Acceptance Criteria block
 
-The agent reads `summary`, `description`, `comments`, and `attachments`. The description has one special section.
+The agent reads `summary`, `description`, `comments` and `attachments`, plus one line each about the parent, subtasks and linked issues. The description has one special section.
 
 ## Acceptance Criteria block
 
-`extractAcceptanceCriteria` (`integrations/jira/issue-tracker.ts`) runs this regex on the description text:
-
-```regex
-/acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i
-```
-
-Anything between the words "Acceptance Criteria" and the next blank line or `# heading` becomes the AC block in the agent prompt. Outside that block, description text is still available to the agent — but AC is what gets pulled into a structured field.
+`extractAcceptanceCriteria` (`integrations/jira/issue-tracker.ts`) looks for a label: "Acceptance criteria" anywhere, or "Acceptance" or "AC" alone at the start of a line followed by a colon or nothing (a heading, bullet or bold around it is fine). What follows the label, up to the next blank line or `#` heading, becomes the AC block in the agent prompt; a heading right after the label means the block is empty. The rest of the description still reaches the agent, but only the AC block gets its own field.
 
 ## Recommended description template
 
@@ -29,12 +23,11 @@ Implementation hints, files to look at, gotchas.
 
 The agent will see the whole description; the AC list just gets a slot at the top of `requirements.md`.
 
-## What the agent does NOT see
+## What the agent does not see
 
-- **Custom fields** (Story Points, Epic Link, Sprint, etc.) — only `summary`, `description`, `comment`, `labels`, `status`, `project`, `attachment` are fetched. Put implementation-relevant info in the description.
-- **Linked issues** — not followed. Inline relevant content.
-- **Sub-tasks** — not fetched. Either inline or merge before sending.
-- **Confluence pages** — not fetched. Paste relevant excerpts into the description.
+- **Custom fields** (Story Points, Epic Link, Sprint, etc.): the fetched fields are `summary`, `description`, `comment`, `labels`, `status`, `project`, `attachment`, `parent`, `subtasks` and `issuelinks`. Put implementation-relevant info in the description.
+- **What related tickets say.** The parent, subtasks and linked issues reach the prompt as one line each (key, relation, status, title), without their descriptions or comments. Inline what the agent needs.
+- **Confluence pages**: not fetched. Paste relevant excerpts into the description.
 
 ## Attachments
 

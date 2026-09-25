@@ -22,7 +22,10 @@ import {
 } from "../../db/repositories/harness-profiles.js";
 import { listConnectedHarnessProfileUsage } from "../../db/harness-profile-usage-store.js";
 import type { Db } from "../../db/types.js";
-import { ensureConnectedSystemHarnessProfiles } from "../../harness-profiles/system-seed.js";
+import {
+  ensureConnectedSystemHarnessProfiles,
+  ensureSystemHarnessProfilesOnDb,
+} from "../../harness-profiles/system-seed.js";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
 
 /** The actor fields every profile operation needs, as the route knows them. */
@@ -45,6 +48,75 @@ export async function listHarnessProfilesForOrganization(input: {
   const repository = createConnectedHarnessProfileRepository();
   await ensureConnectedSystemHarnessProfiles();
   return repository.listProfiles(input);
+}
+
+/**
+ * One profile as a workflow author pins it on an agent block.
+ *
+ * Read off the PUBLISHED version, because that is what a pin runs: the draft
+ * may name another model entirely and runs nothing until it is published. A
+ * profile nobody published yet is still listed, from its draft, with `pin`
+ * null, so an author learns it exists and why it cannot be chosen.
+ */
+export interface HarnessProfilePinOption {
+  profileId: string;
+  slug: string;
+  name: string;
+  /** Shipped with the deployment rather than authored in this organization. */
+  system: boolean;
+  provider: string;
+  model: string;
+  publishedVersion: number | null;
+  /** Exactly what a node's `configuration.harnessProfile` takes, or null when
+   *  nothing is published to pin. */
+  pin: { profileId: string; version: number } | null;
+}
+
+async function pinOptionsFrom(
+  repository: ReturnType<typeof createHarnessProfileRepository>,
+  organizationId: string,
+): Promise<HarnessProfilePinOption[]> {
+  const profiles = await repository.listProfiles({ organizationId, includeArchived: false });
+  return Promise.all(
+    profiles.map(async (profile): Promise<HarnessProfilePinOption> => {
+      const published =
+        profile.publishedVersion === null
+          ? null
+          : await repository.getVersion({
+              organizationId,
+              profileId: profile.id,
+              version: profile.publishedVersion,
+            });
+      const manifest = published?.manifest ?? profile.draft;
+      return {
+        profileId: profile.id,
+        slug: profile.slug,
+        name: manifest.displayName,
+        system: profile.system,
+        provider: manifest.harness.provider,
+        model: manifest.model.id,
+        publishedVersion: published ? published.version : null,
+        pin: published ? { profileId: profile.id, version: published.version } : null,
+      };
+    }),
+  );
+}
+
+/** The profiles an organization can pin, archived ones left out. */
+export async function listHarnessProfilePinOptions(
+  organizationId: string,
+): Promise<HarnessProfilePinOption[]> {
+  await ensureConnectedSystemHarnessProfiles();
+  return pinOptionsFrom(createConnectedHarnessProfileRepository(), organizationId);
+}
+
+/** The same, over a caller's own database handle. */
+export async function listHarnessProfilePinOptionsFromDb(
+  db: Db,
+  organizationId: string,
+): Promise<HarnessProfilePinOption[]> {
+  await ensureSystemHarnessProfilesOnDb(db);
+  return pinOptionsFrom(createHarnessProfileRepository(db), organizationId);
 }
 
 /** One profile with its versions and usage, or null when it names nothing. */

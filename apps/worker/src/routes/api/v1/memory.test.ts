@@ -2,6 +2,12 @@ import { eq } from "drizzle-orm";
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
+import type {
+  MemoryAdapter,
+  MemoryStoreAdapter,
+  MemoryStoredDocumentRef,
+  MemoryStoredSummary,
+} from "@integrations/sdk";
 import type { ActiveMemory } from "../../../engine/support/memory-runtime.js";
 import { agentMemoryDocuments, member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
@@ -13,9 +19,28 @@ const state = vi.hoisted(() => ({
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
   /** Non-null puts a different memory provider behind all three routes. */
   memory: null as unknown,
+  /** Non-null is what this deployment's integration rows answer: a memory
+   *  integration connected, resolved by the real `activeMemory`. */
+  integrations: null as null | { usable: unknown[]; states: Map<string, unknown> },
 }));
 
 vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../services/integrations/runtime.js")>();
+  return {
+    ...actual,
+    resolveUsableIntegrations: (async (input) =>
+      state.integrations
+        ? {
+            readable: true as const,
+            usable: state.integrations.usable,
+            states: state.integrations.states,
+            connectionFailures: new Map(),
+          }
+        : actual.resolveUsableIntegrations(input)) as typeof actual.resolveUsableIntegrations,
+  };
+});
 // Every test below runs against the real built-in provider unless it puts
 // another one in `state.memory`, which is how the provider-shaped answers
 // (501 and 503) get exercised without a second database.
@@ -43,6 +68,7 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
 
 const memoryGet = (await import("./memory.get.js")).default;
 const memoryDelete = (await import("./memory.delete.js")).default;
+const { activeMemory } = await import("../../../engine/support/memory-runtime.js");
 
 const SUBJECT_KEY = "ticket:jira:AIW-177";
 const DOC_PATH = "blazebot/memory/AIW-177.md";
@@ -74,6 +100,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
   state.memory = null;
+  state.integrations = null;
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -434,5 +461,228 @@ describe("memory routes answer for the provider, not for the store", () => {
     // The guard on the fix above: a reachable provider that holds nothing
     // still owes a person "no such document", not "this cannot be browsed".
     expect(await statuses()).toEqual([200, 404, 404]);
+  });
+});
+
+/**
+ * Mem0 connected, as the deployment's rows answer it, serving facts and
+ * lessons. Its store has the real one's addresses (`integrations/mem0/memory.ts`):
+ * `facts`, `lessons` and `notebook/<KEY>`. It holds a repository's facts and
+ * the notebook production's Mem0 kept for this ticket before notebooks stopped
+ * going there, and records every read and erase it is asked for.
+ */
+function mem0Serves({ complete = true }: { complete?: boolean } = {}) {
+  const at = new Date("2026-09-20T10:00:00.000Z");
+  const stored = (subjectKey: string, docPath: string, ticketKey: string | null, content: string) => ({
+    subjectKey,
+    docPath,
+    ticketKey,
+    content,
+    bytes: content.length,
+    sourceRunId: "run_mem0",
+    createdAt: at,
+    updatedAt: at,
+  });
+  const held = [
+    stored("repo:github:acme/web", "facts", null, "- uses pnpm"),
+    stored(SUBJECT_KEY, "notebook/AIW-177", "AIW-177", "# the copy Mem0 kept"),
+  ];
+  const asked = { reads: [] as MemoryStoredDocumentRef[], erasures: [] as MemoryStoredDocumentRef[], runs: 0 };
+  const find = (ref: MemoryStoredDocumentRef) =>
+    held.find((document) => document.subjectKey === ref.subjectKey && document.docPath === ref.docPath);
+  const store: MemoryStoreAdapter = {
+    async list(options) {
+      const documents: MemoryStoredSummary[] = held
+        .filter(
+          (document) =>
+            (options.subjectKey === undefined || document.subjectKey === options.subjectKey) &&
+            (options.ticketKey === undefined || document.ticketKey === options.ticketKey),
+        )
+        .map(({ content: _content, ...summary }) => summary);
+      return { documents, complete };
+    },
+    async read(ref) {
+      asked.reads.push(ref);
+      const document = find(ref);
+      return document
+        ? { content: document.content, bytes: document.bytes, updatedAt: document.updatedAt, sourceRunId: document.sourceRunId }
+        : null;
+    },
+    async forget(ref) {
+      asked.erasures.push(ref);
+      const document = find(ref);
+      if (!document) return false;
+      held.splice(held.indexOf(document), 1);
+      return true;
+    },
+  };
+  const adapter: MemoryAdapter = {
+    recall: async () => {
+      asked.runs += 1;
+      return { ok: true, held: false, entries: [], rendering: "" };
+    },
+    observe: async () => {
+      asked.runs += 1;
+      return { ok: true, stored: true, removed: 0, dropped: 0, remaining: 1 };
+    },
+    store,
+  };
+  state.integrations = {
+    usable: [
+      {
+        manifest: { id: "mem0", name: "Mem0", capabilities: ["memory"] },
+        runtime: { capabilities: { memory: () => adapter } },
+        ctx: {},
+        redaction: { text: (text: string) => text },
+      },
+    ],
+    states: new Map([
+      [
+        "mem0",
+        { integrationId: "mem0", status: "connected", connection: "connected", enabled: true, usable: true, failure: null },
+      ],
+    ]),
+  };
+  return asked;
+}
+
+/**
+ * A ticket's notebook is the built-in store's on every deployment, so on one
+ * Mem0 serves the memory screen and the MCP tools must still show it, read it
+ * and erase it. It holds what people answered in clarification rounds, by
+ * name: an erasure request for it that answers "nothing there" leaves it
+ * stored.
+ */
+describe("memory routes on a deployment Mem0 serves", () => {
+  const REPO = "repo:github:acme/web";
+  const NOTEBOOK = [
+    "# Session Memory: AIW-177",
+    "",
+    "<!-- human-decisions:start -->",
+    "### Round 1 (answered by Ada Lovelace)",
+    "1. Ship it behind a flag?",
+    "",
+    "Answer: yes",
+    "<!-- human-decisions:end -->",
+    "",
+  ].join("\n");
+
+  /** Written the way a run's teardown writes it, through the real store. */
+  async function runStoresNotebook(): Promise<void> {
+    const written = await (await activeMemory()).observe({
+      subject: { key: SUBJECT_KEY, label: "AIW-177" },
+      scope: { kind: "notebook", name: "AIW-177" },
+      runId: "run_9",
+      ticketKey: "AIW-177",
+      observation: { kind: "document", text: NOTEBOOK },
+    });
+    expect(written).toMatchObject({ ok: true, stored: true });
+  }
+
+  /** What the built-in store kept from before Mem0 was connected, which
+   *  nothing serves while Mem0 does. */
+  async function builtinKeptFactsFromBefore(): Promise<void> {
+    await upsertMemoryDocument(db, {
+      subjectKey: REPO,
+      docPath: "facts",
+      ticketKey: null,
+      content: "- from before Mem0",
+      sourceRunId: "run_old",
+    });
+  }
+
+  const pairs = (body: { documents: { subjectKey: string; docPath: string }[] }) =>
+    body.documents.map((document) => `${document.subjectKey} ${document.docPath}`).sort();
+
+  it("lists the ticket's notebook beside what Mem0 holds, shows it, and erases it once", async () => {
+    // Mistake that turns this red: handing the memory screen Mem0's store
+    // alone, which answers a complete listing without the notebook, no
+    // document for its address and "nothing there" to the erasure.
+    const mem0 = mem0Serves();
+    await builtinKeptFactsFromBefore();
+    await runStoresNotebook();
+    const notebookPath = "ai-workflow/memory/AIW-177.md";
+
+    const listed = await (await get()).json();
+    expect(pairs(listed)).toEqual(
+      [`${REPO} facts`, `${SUBJECT_KEY} ${notebookPath}`, `${SUBJECT_KEY} notebook/AIW-177`].sort(),
+    );
+    expect(listed.complete).toBe(true);
+    expect(pairs(await (await get("?ticketKey=AIW-177")).json())).toEqual(
+      [`${SUBJECT_KEY} ${notebookPath}`, `${SUBJECT_KEY} notebook/AIW-177`].sort(),
+    );
+
+    const shown = await get(documentQuery(SUBJECT_KEY, notebookPath));
+    expect(shown.status).toBe(200);
+    expect((await shown.json()).document).toMatchObject({ content: NOTEBOOK, sourceRunId: "run_9" });
+
+    const erased = await del(documentQuery(SUBJECT_KEY, notebookPath));
+    expect(erased.status).toBe(200);
+    expect(await erased.json()).toEqual({ deleted: true });
+    expect(await getMemoryDocument(db, SUBJECT_KEY, notebookPath)).toBeNull();
+    expect((await del(documentQuery(SUBJECT_KEY, notebookPath))).status).toBe(404);
+    expect((await get(documentQuery(SUBJECT_KEY, notebookPath))).status).toBe(404);
+
+    expect(mem0.reads).toEqual([]);
+    expect(mem0.erasures).toEqual([]);
+    expect(mem0.runs).toBe(0);
+  });
+
+  it("keeps facts and lessons Mem0's: its listing of a repository is unchanged, and its own notebook address still reaches it", async () => {
+    // The Q14 wipe erases through `memory_forget`, by the `notebook/<KEY>`
+    // addresses Mem0 lists, so those must stay Mem0's.
+    const mem0 = mem0Serves();
+    await builtinKeptFactsFromBefore();
+
+    const repository = await (await get(`?subjectKey=${encodeURIComponent(REPO)}`)).json();
+    expect(repository).toMatchObject({
+      documents: [{ subjectKey: REPO, docPath: "facts", sourceRunId: "run_mem0" }],
+      complete: true,
+    });
+    expect(repository.documents).toHaveLength(1);
+
+    expect(await (await get(documentQuery(REPO, "facts"))).json()).toMatchObject({
+      document: { content: "- uses pnpm" },
+    });
+    expect((await del(documentQuery(SUBJECT_KEY, "notebook/AIW-177"))).status).toBe(200);
+    expect((await del(documentQuery(REPO, "facts"))).status).toBe(200);
+    expect(mem0.erasures).toEqual([
+      { subjectKey: SUBJECT_KEY, docPath: "notebook/AIW-177" },
+      { subjectKey: REPO, docPath: "facts" },
+    ]);
+    expect((await getMemoryDocument(db, REPO, "facts"))?.content).toBe("- from before Mem0");
+  });
+
+  it("shows and erases a notebook an older run filed under the legacy directory", async () => {
+    mem0Serves();
+    const legacyPath = "blazebot/memory/AIW-9.md";
+    await upsertMemoryDocument(db, {
+      subjectKey: "ticket:jira:AIW-9",
+      docPath: legacyPath,
+      ticketKey: "AIW-9",
+      content: "# AIW-9, from an older run",
+      sourceRunId: "run_legacy",
+    });
+    // The premise: the built-in store still reads a notebook from there.
+    expect(
+      await (await activeMemory()).recall({
+        subject: { key: "ticket:jira:AIW-9", label: "AIW-9" },
+        scope: { kind: "notebook", name: "AIW-9" },
+      }),
+    ).toMatchObject({ ok: true, held: true, rendering: "# AIW-9, from an older run" });
+
+    expect(pairs(await (await get("?ticketKey=AIW-9")).json())).toEqual([`ticket:jira:AIW-9 ${legacyPath}`]);
+    expect((await get(documentQuery("ticket:jira:AIW-9", legacyPath))).status).toBe(200);
+    expect((await del(documentQuery("ticket:jira:AIW-9", legacyPath))).status).toBe(200);
+    expect(await getMemoryDocument(db, "ticket:jira:AIW-9", legacyPath)).toBeNull();
+  });
+
+  it("says the listing may be partial when Mem0's is", async () => {
+    mem0Serves({ complete: false });
+    await runStoresNotebook();
+
+    const listed = await (await get()).json();
+    expect(listed.complete).toBe(false);
+    expect(pairs(listed)).toContain(`${SUBJECT_KEY} ai-workflow/memory/AIW-177.md`);
   });
 });

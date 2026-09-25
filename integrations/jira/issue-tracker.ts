@@ -1,4 +1,5 @@
 import {
+  IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
   RELATED_TICKET_CHILD,
   RELATED_TICKET_PARENT,
@@ -48,6 +49,40 @@ const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
  */
 function answered(message: string, res: Response): Error {
   return Object.assign(new Error(message), { status: res.status });
+}
+
+/**
+ * A 400 on a write, read as what Jira refused. Jira answers with an
+ * ErrorCollection: `errors` maps a field key to its sentence and
+ * `errorMessages` carries the ones about no field in particular. Each is kept
+ * in Jira's own words, prefixed by the field it is about.
+ */
+async function rejectedInput(res: Response, fallback: string): Promise<IssueTrackerInputRejectedError> {
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    // A 400 with a body nobody can read is still a refusal; it just cannot say
+    // which field.
+  }
+  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const fieldErrors =
+    record.errors !== null && typeof record.errors === "object" && !Array.isArray(record.errors)
+      ? Object.entries(record.errors as Record<string, unknown>).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim() !== "",
+        )
+      : [];
+  const general = Array.isArray(record.errorMessages)
+    ? record.errorMessages.filter((message): message is string => typeof message === "string" && message.trim() !== "")
+    : [];
+  const sentences = [
+    ...fieldErrors.map(([field, message]) => `${field}: ${message.trim()}`),
+    ...general.map((message) => message.trim()),
+  ];
+  return new IssueTrackerInputRejectedError(
+    sentences.length > 0 ? sentences.join("; ") : `Jira refused the request (${fallback}).`,
+    { issueTypeRejected: fieldErrors.some(([field]) => field === "issuetype") },
+  );
 }
 
 type JiraTransition = {
@@ -173,7 +208,16 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return `${ATLASSIAN_API_ORIGIN}/ex/jira/${cloudId}${path}`;
   }
 
-  private async request(path: string, options?: RequestInit) {
+  /**
+   * `readsFieldErrors` is for a write whose caller chose the values: there a
+   * 400 is Jira refusing one of them, and its ErrorCollection says which and
+   * why. Everywhere else a 400 stays the plain answered error it always was.
+   */
+  private async request(
+    path: string,
+    options?: RequestInit,
+    { readsFieldErrors = false }: { readsFieldErrors?: boolean } = {},
+  ) {
     const url = await this.apiUrl(path, options?.signal);
     const res = await this.fetch(url, {
       ...options,
@@ -186,6 +230,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
     if (!res.ok) {
       if (res.status === 404) {
         throw new IssueTrackerNotFoundError("Jira resource", path);
+      }
+      if (res.status === 400 && readsFieldErrors) {
+        throw await rejectedInput(res, `${res.status} ${res.statusText} on ${path}`);
       }
       throw answered(`Jira API error: ${res.status} ${res.statusText} on ${path}`, res);
     }
@@ -518,7 +565,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
           ...(input.labels?.length ? { labels: input.labels } : {}),
         },
       }),
-    });
+    }, { readsFieldErrors: true });
     const key = typeof data?.key === "string" ? data.key.trim() : "";
     if (!key) {
       // The ticket may well exist; what is missing is its key, so a caller must not
@@ -529,6 +576,22 @@ export class JiraAdapter implements IssueTrackerAdapter {
       identifier: key,
       url: this.issuePage(key),
     };
+  }
+
+  async listIssueTypes(): Promise<Array<{ id: string; name: string }>> {
+    // One page, and a generous one: a project has a handful of issue types, and
+    // this answers a refused create rather than driving anything.
+    const data = await this.request(
+      `/rest/api/3/issue/createmeta/${encodeURIComponent(this.projectKey)}/issuetypes?maxResults=100`,
+    );
+    const types = Array.isArray(data?.issueTypes) ? data.issueTypes : [];
+    return types.flatMap((type: any) => {
+      const id = type?.id == null ? "" : String(type.id).trim();
+      const name = typeof type?.name === "string" ? type.name.trim() : "";
+      // A subtask needs a parent, which createTicket never sends.
+      if (!id || !name || type?.subtask === true) return [];
+      return [{ id, name }];
+    });
   }
 
   async downloadAttachment(

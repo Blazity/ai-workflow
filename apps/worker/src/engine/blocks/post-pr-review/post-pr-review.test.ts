@@ -55,6 +55,20 @@ describe("reviewPrAtWorkflowPublishedHead", () => {
     ).toBe("fixed-head");
   });
 
+  it("reviews the published head for a run keyed, and a publication recorded, in the provider's spelling", () => {
+    // A run started before PR subject keys were cased down carries
+    // pr:github:Acme/App#318 in its journal, and the publication keeps the
+    // provider's spelling of the repository. Red while either comparison is
+    // made verbatim: the review lands on the trigger head instead.
+    expect(
+      reviewPrAtWorkflowPublishedHead({
+        subjectKey: "pr:github:Acme/App#318",
+        pr,
+        owned: { ...owned, repoPath: "Acme/App" },
+      }).headSha,
+    ).toBe("fixed-head");
+  });
+
   it.each([
     ["another pull request owns the run", { subjectKey: "pr:github:acme/app#319" }],
     ["the ticket subject owns the run", { subjectKey: "ticket:jira:AWP-26" }],
