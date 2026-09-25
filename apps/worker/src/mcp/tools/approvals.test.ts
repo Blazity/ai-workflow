@@ -467,50 +467,50 @@ describe("approvals.reject", () => {
 describe("who may decide a plan", () => {
   // One rule, whichever door: the dashboard asks canApproveWorkflowPlans, and so
   // does this surface, through the same service and through its policy.
-  for (const action of ["approve", "reject"] as const) {
-    it(`refuses a member on ${action} over MCP exactly where the dashboard refuses one`, async () => {
-      const row = await seedPending("AWT-1");
-      const before = await getApproval(db, row.id);
+  const ACTIONS = ["approve", "reject"] as const;
 
-      state.sessionUserId = "user_member";
-      const http = await httpDecision(action, row.id);
-      const client = await connectedClient({ role: "member", userId: "user_member" });
-      const mcp = errorOf(
-        await client.callTool({
-          name: `approvals.${action}`,
-          arguments: { approvalId: row.id, idempotencyKey: KEY_ONE },
-        }),
-      );
+  it.each(ACTIONS)("refuses a member on %s over MCP exactly where the dashboard refuses one", async (action) => {
+    const row = await seedPending("AWT-1");
+    const before = await getApproval(db, row.id);
 
-      expect(http.status).toBe(403);
-      expect(mcp.code).toBe("FORBIDDEN");
-      expect(await getApproval(db, row.id)).toEqual(before);
-      expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
-      expect(mocks.postComment).not.toHaveBeenCalled();
+    state.sessionUserId = "user_member";
+    const http = await httpDecision(action, row.id);
+    const client = await connectedClient({ role: "member", userId: "user_member" });
+    const mcp = errorOf(
+      await client.callTool({
+        name: `approvals.${action}`,
+        arguments: { approvalId: row.id, idempotencyKey: KEY_ONE },
+      }),
+    );
+
+    expect(http.status).toBe(403);
+    expect(mcp.code).toBe("FORBIDDEN");
+    expect(await getApproval(db, row.id)).toEqual(before);
+    expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
+    expect(mocks.postComment).not.toHaveBeenCalled();
+  });
+
+  // The decision a plan waits on is a person's: a token with nobody behind it
+  // is refused even when it carries the dispatch scope.
+  it.each(ACTIONS)("refuses a client-credentials token on %s", async (action) => {
+    const row = await seedPending("AWT-1");
+    const client = await connectedClient({
+      kind: "service",
+      role: "service",
+      userId: null,
+      subject: "client:automation",
     });
 
-    // The decision a plan waits on is a person's: a token with nobody behind it
-    // is refused even when it carries the dispatch scope.
-    it(`refuses a client-credentials token on ${action}`, async () => {
-      const row = await seedPending("AWT-1");
-      const client = await connectedClient({
-        kind: "service",
-        role: "service",
-        userId: null,
-        subject: "client:automation",
-      });
+    const error = errorOf(
+      await client.callTool({
+        name: `approvals.${action}`,
+        arguments: { approvalId: row.id, idempotencyKey: KEY_ONE },
+      }),
+    );
 
-      const error = errorOf(
-        await client.callTool({
-          name: `approvals.${action}`,
-          arguments: { approvalId: row.id, idempotencyKey: KEY_ONE },
-        }),
-      );
-
-      expect(error.code).toBe("FORBIDDEN");
-      expect((await getApproval(db, row.id))?.status).toBe("pending");
-    });
-  }
+    expect(error.code).toBe("FORBIDDEN");
+    expect((await getApproval(db, row.id))?.status).toBe("pending");
+  });
 
   it("holds the rule in the service both doors call, not only in each door", async () => {
     const row = await seedPending("AWT-1");

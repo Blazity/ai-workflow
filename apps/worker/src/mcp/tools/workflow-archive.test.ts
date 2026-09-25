@@ -302,43 +302,43 @@ describe("workflows.archive and workflows.unarchive", () => {
 });
 
 describe("who may archive a workflow", () => {
-  for (const tool of ["workflows.archive", "workflows.unarchive"] as const) {
-    it(`refuses a member on ${tool}, as the dashboard's DELETE does, and changes nothing`, async () => {
-      if (tool === "workflows.unarchive") {
-        dataOf(await archive(await connectedClient()));
-      }
-      const stamp = await archivedAt();
-      const client = await connectedClient({ role: "member" });
+  const TOOLS = ["workflows.archive", "workflows.unarchive"] as const;
 
-      const error = errorOf(
-        await client.callTool({
-          name: tool,
-          arguments: { definitionId, idempotencyKey: KEY_THREE },
-        }),
-      );
+  it.each(TOOLS)("refuses a member on %s, as the dashboard's DELETE does, and changes nothing", async (tool) => {
+    if (tool === "workflows.unarchive") {
+      dataOf(await archive(await connectedClient()));
+    }
+    const stamp = await archivedAt();
+    const client = await connectedClient({ role: "member" });
 
-      expect(error.code).toBe("FORBIDDEN");
-      expect(await archivedAt()).toEqual(stamp);
+    const error = errorOf(
+      await client.callTool({
+        name: tool,
+        arguments: { definitionId, idempotencyKey: KEY_THREE },
+      }),
+    );
+
+    expect(error.code).toBe("FORBIDDEN");
+    expect(await archivedAt()).toEqual(stamp);
+  });
+
+  it.each(TOOLS)("refuses a client-credentials token on %s", async (tool) => {
+    const client = await connectedClient({
+      kind: "service",
+      role: "service",
+      userId: null,
+      subject: "client:automation",
     });
 
-    it(`refuses a client-credentials token on ${tool}`, async () => {
-      const client = await connectedClient({
-        kind: "service",
-        role: "service",
-        userId: null,
-        subject: "client:automation",
-      });
+    const error = errorOf(
+      await client.callTool({
+        name: tool,
+        arguments: { definitionId, idempotencyKey: KEY_THREE },
+      }),
+    );
 
-      const error = errorOf(
-        await client.callTool({
-          name: tool,
-          arguments: { definitionId, idempotencyKey: KEY_THREE },
-        }),
-      );
-
-      expect(error.code).toBe("FORBIDDEN");
-    });
-  }
+    expect(error.code).toBe("FORBIDDEN");
+  });
 
   it("holds the unarchive rule in the service, with the predicate the dashboard's editor checks", async () => {
     dataOf(await archive(await connectedClient()));
