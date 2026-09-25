@@ -138,3 +138,30 @@ test("renders a selected block's notices apart from its errors", () => {
   assert.doesNotMatch(html, /Validation errors/);
   assert.equal(renderToStaticMarkup(<NodeValidationNotices notices={[]} />), "");
 });
+
+// Red when: the list of issues names blocks by id while its headings name them
+// by the name the author gave them.
+test("the issue list names blocks the way the canvas does", () => {
+  const validation: WorkflowValidationState = {
+    status: "invalid",
+    issues: [
+      {
+        code: "unreachable",
+        nodeId: "clean-copy",
+        message: 'Block "clean-copy" is not reachable from a trigger.',
+      },
+    ] as WorkflowDefinitionValidationIssue[],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  };
+  const html = renderToStaticMarkup(
+    <ValidationSummary
+      validation={validation}
+      nodeNames={{ "clean-copy": "Allow clean input (copy)" }}
+      onSelectNode={() => undefined}
+    />,
+  );
+  assert.match(html, /Allow clean input \(copy\)/);
+  assert.match(html, /This block is not reachable from a trigger\./);
+  assert.doesNotMatch(html, /clean-copy&quot;/);
+});

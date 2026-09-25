@@ -113,6 +113,15 @@ export type V2RunObservationHooks = Pick<
   | "observationHooksFor"
 > & {
   finalize(reason: string): Promise<void>;
+  /**
+   * The stdout and stderr tails an agent failure carries, for the attempt that
+   * failed. Only a stream the attempt has not already logged is recorded, so
+   * the output an invocation reported itself is not stored a second time.
+   */
+  recordFailureTails(
+    identity: V2InvocationIdentity,
+    tails: { readonly stdoutTail?: string; readonly stderrTail?: string },
+  ): void;
 };
 
 export function buildV2ReplayGraphSnapshot(
@@ -345,6 +354,18 @@ interface PendingAttemptCapture {
   attemptId: Promise<number | null>;
   observations: V2InvocationObservation[];
   persistenceTail: Promise<void>;
+  /** The log streams this attempt has recorded, kept past each persist. */
+  loggedStreams: Set<string>;
+}
+
+/** The stream an agent log names (`{ stream, tail }`), or null for a note. */
+function logStream(observation: V2InvocationObservation): string | null {
+  if (observation.kind !== "log") return null;
+  const value = observation.value;
+  return value !== null && typeof value === "object" && "stream" in value &&
+    typeof value.stream === "string"
+    ? value.stream
+    : null;
 }
 
 /**
@@ -454,6 +475,7 @@ export function createV2RunObservationHooks(input: {
         },
       }],
       persistenceTail: Promise.resolve(),
+      loggedStreams: new Set(),
     };
     attempts.set(key, capture);
     return capture;
@@ -464,6 +486,8 @@ export function createV2RunObservationHooks(input: {
     observation: V2InvocationObservation,
   ): void => {
     capture.observations.push(structuredClone(observation));
+    const stream = logStream(observation);
+    if (stream !== null) capture.loggedStreams.add(stream);
   };
 
   // Returns the chain so callers can await it. The chain is caught below, so it
@@ -588,6 +612,24 @@ export function createV2RunObservationHooks(input: {
         },
         event.completedAt,
       );
+    },
+    // An agent invocation logs its own stdout and stderr before it reports a
+    // failure (emitAgentInvocationObservations), and the failure's diagnostic
+    // carries tails of that same output. Logging both put every event of the
+    // tail in the Logs tab twice. The diagnostic is the record only for a
+    // failure that logged nothing first: a runtime that could not be prepared,
+    // an install that failed, a launch that never started.
+    recordFailureTails(identity, tails) {
+      const capture = attempts.get(identityKey(identity));
+      if (!capture) return;
+      const streams = [
+        ["stdout", tails.stdoutTail],
+        ["stderr", tails.stderrTail],
+      ] as const;
+      for (const [stream, tail] of streams) {
+        if (!tail || capture.loggedStreams.has(stream)) continue;
+        observe(capture, { kind: "log", value: { stream, tail } });
+      }
     },
     observationHooksFor(identity) {
       const capture = attempts.get(identityKey(identity));

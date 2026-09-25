@@ -27,7 +27,9 @@ import {
   TicketSelectionProvider,
   DetailArea,
 } from "@/components/cockpit/screens/ticket-selection";
+import { integrationsFingerprint } from "@/lib/integrations/fingerprint";
 import type {
+  IntegrationDto,
   Run,
   RunsResponse,
   RunDetailResponse,
@@ -206,6 +208,7 @@ function mountShell(
   t: TestContext,
   pathname: string,
   child: React.ReactNode,
+  shellProps: Partial<React.ComponentProps<typeof CockpitShell>> = {},
 ): {
   refreshes: string[];
   pushes: string[];
@@ -235,7 +238,7 @@ function mountShell(
     <AppRouterContext.Provider value={router as never}>
       <PathnameContext.Provider value={pathname}>
         <SearchParamsContext.Provider value={new URLSearchParams() as never}>
-          <CockpitShell session={session as never}>{inner}</CockpitShell>
+          <CockpitShell session={session as never} {...shellProps}>{inner}</CockpitShell>
         </SearchParamsContext.Provider>
       </PathnameContext.Provider>
     </AppRouterContext.Provider>
@@ -850,13 +853,123 @@ test("a settings form with nothing typed in it never interrupts a navigation", (
 
 // ── The sidebar's own freshness ─────────────────────────────────────────────
 
-test("a sidebar refresh refused over unsaved work says so instead of going quiet", (t) => {
-  // The sidebar carries one entry per connected integration, so a colleague
-  // connecting one has to reach this tab. The refresh that would deliver it
-  // re-runs every server component on screen and empties a form somebody is
-  // half way through, so it is refused while the cockpit holds unsaved work.
-  // A refused refresh with nothing said leaves a sidebar that is quietly
-  // wrong, which is worse than one that flickers.
+function integrationDto(
+  id: string,
+  change: { enabled?: boolean } = {},
+): IntegrationDto {
+  const enabled = change.enabled ?? true;
+  return {
+    id,
+    name: id,
+    description: "",
+    capabilities: [],
+    blocks: [],
+    pages: [],
+    fields: [],
+    state: {
+      integrationId: id,
+      enabled,
+      source: "environment",
+      status: enabled ? "connected" : "disabled",
+      connection: "connected",
+      verification: { state: "passed", at: "2026-09-25T07:00:00.000Z" },
+      failure: null,
+      usable: enabled,
+      environment: { setVariables: [], missingVariables: [], complete: true },
+      stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+      pin: { integrationId: id, configFingerprint: "abc123" },
+      secretsKeyAvailable: true,
+    },
+  };
+}
+
+/** The integrations list the worker answers with, for the tab's own check. */
+function serveIntegrations(integrations: IntegrationDto[]): void {
+  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
+    fetched.push(`${init?.method ?? "GET"} ${String(url)}`);
+    if (String(url) !== "/api/integrations") return new Response("{}", { status: 500 });
+    return new Response(JSON.stringify({ integrations, writes: { allowed: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+}
+
+/** Let a request or a message from another tab land. Timers are mocked here,
+ *  so this waits on the event loop itself. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    for (let turn = 0; turn < 10; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  });
+}
+
+function staleNavNotices(root: ReactTestInstance): number {
+  return root.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length;
+}
+
+/** A settings form with a typed value, and the tab coming back into focus once
+ *  the "one arrival" gap has passed. */
+function dirtyShellComesBack(
+  t: TestContext,
+  loaded: IntegrationDto[],
+): { refreshes: string[]; root: ReactTestInstance; before: number } {
+  const { refreshes, root } = mountShell(t, "/settings", <div>Settings</div>, {
+    integrationsVersion: integrationsFingerprint(loaded),
+  });
+  t.after(resetUnsavedSettings);
+  act(() => {
+    trackUnsavedSettings("settings:agent", true);
+  });
+  advance(20_000);
+  const before = refreshes.length;
+  act(() => {
+    for (const listener of Array.from(focusListeners)) listener();
+  });
+  return { refreshes, root, before };
+}
+
+// Red when: coming back to the tab is itself treated as a change. Production
+// showed "Integrations changed elsewhere" on the editor and on Settings every
+// time the window regained focus with something unsaved on screen, whether or
+// not anything had changed.
+test("coming back to a tab with unsaved work says nothing when no integration changed", async (t) => {
+  beginTest(t);
+  const loaded = [integrationDto("jira"), integrationDto("github")];
+  // The same integrations, in another order: nothing a person would see.
+  serveIntegrations([integrationDto("github"), integrationDto("jira")]);
+  const { refreshes, root, before } = dirtyShellComesBack(t, loaded);
+  await settle();
+
+  assert.equal(refreshes.length, before, "a dirty form must not be refreshed away");
+  assert.equal(staleNavNotices(root), 0, "nothing changed, so nothing is said");
+  assert.ok(
+    fetched.includes("GET /api/integrations"),
+    "the tab asked the server what is true now, so the silence is an answer",
+  );
+});
+
+test("coming back to a tab with unsaved work says so when an integration did change", async (t) => {
+  // The sidebar carries one entry per integration in use, so a colleague
+  // switching one off has to reach this tab. The refresh that would deliver it
+  // empties a form somebody is half way through, so it is refused while the
+  // cockpit holds unsaved work, and a refused refresh with nothing said leaves
+  // a sidebar that is quietly wrong.
+  beginTest(t);
+  serveIntegrations([integrationDto("jira", { enabled: false })]);
+  const { refreshes, root, before } = dirtyShellComesBack(t, [integrationDto("jira")]);
+  await settle();
+
+  assert.equal(refreshes.length, before, "a dirty form must not be refreshed away");
+  assert.equal(
+    staleNavNotices(root),
+    2,
+    "the desktop topbar and the mobile header both say the sidebar is behind",
+  );
+});
+
+test("another tab's change reaches a tab with unsaved work as a notice, not a refresh", async (t) => {
   beginTest(t);
   const { refreshes, root } = mountShell(t, "/settings", <div>Settings</div>);
   t.after(resetUnsavedSettings);
@@ -864,32 +977,24 @@ test("a sidebar refresh refused over unsaved work says so instead of going quiet
     trackUnsavedSettings("settings:agent", true);
   });
 
-  // Coming back to a tab twice in a few seconds is one arrival, so the signal
-  // is only due once the gap has passed.
-  advance(20_000);
-  const before = refreshes.length;
-  act(() => {
-    for (const listener of Array.from(focusListeners)) listener();
-  });
-  assert.equal(refreshes.length, before, "a dirty form must not be refreshed away");
-  assert.equal(
-    root.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
-    2,
-    "the desktop topbar and the mobile header both say the sidebar is behind",
-  );
+  const otherTab = new BroadcastChannel("ai-workflow:integrations");
+  t.after(() => otherTab.close());
+  // eslint-disable-next-line unicorn/require-post-message-target-origin -- A BroadcastChannel message has no target origin; the rule is about window.postMessage.
+  otherTab.postMessage("changed");
+  await settle();
 
-  // With nothing to lose, the refresh happens and there is nothing to say.
-  act(() => {
-    trackUnsavedSettings("settings:agent", false);
-  });
-  const { refreshes: clean, root: cleanRoot } = mountShell(t, "/runs", <div>Runs</div>);
+  assert.deepEqual(refreshes, [], "a dirty form must not be refreshed away");
+  assert.equal(staleNavNotices(root), 2);
+});
+
+test("coming back to a tab with nothing unsaved refreshes it and says nothing", (t) => {
+  beginTest(t);
+  resetUnsavedSettings();
+  const { refreshes, root } = mountShell(t, "/runs", <div>Runs</div>);
   advance(20_000);
   act(() => {
     for (const listener of Array.from(focusListeners)) listener();
   });
-  assert.ok(clean.length > 0, "a cockpit with nothing typed takes the refresh");
-  assert.equal(
-    cleanRoot.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
-    0,
-  );
+  assert.ok(refreshes.length > 0, "a cockpit with nothing typed takes the refresh");
+  assert.equal(staleNavNotices(root), 0);
 });

@@ -75,6 +75,7 @@ import { useWorkflowValidationController } from "@/lib/workflow-editor/use-valid
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
   deployUnavailableReason,
+  draftDeployedAs,
   draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -590,17 +591,31 @@ export function WorkflowEditorScreen({
     );
   }, [canDispatch, deployed, nodes]);
   const saveIssues = useMemo(() => nodeSaveIssues(nodes), [nodes]);
+  const deployedDraftVersion = draftDeployedAs(
+    draftSemanticKey,
+    deployedSemanticKey,
+    deployed?.version ?? null,
+  );
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
+    draftDeployedAs: deployedDraftVersion,
   });
   const deployDisabledTitle = deployUnavailableReason({
     hasTrigger: nodes.some((node) => isTriggerBlockType(node.type)),
     saveIssueCount: saveIssues.length,
     dirty,
     hasDraft: baselineDraft !== null,
+    draftDeployedAs: deployedDraftVersion,
   });
+  // Said on the page, not only in the button's tooltip, which a phone never
+  // shows. The block errors have their own control in the header, so their
+  // count is not said twice.
+  const deployReasonNote =
+    canEdit && !canDeploy && busy === null && saveIssues.length === 0
+      ? deployDisabledTitle
+      : null;
   const canResetToDeployed =
     canEdit && deployed !== null && semanticKey !== deployedSemanticKey;
 
@@ -1329,6 +1344,14 @@ export function WorkflowEditorScreen({
           headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
           headerInlineExtra={
             <>
+              {deployReasonNote !== null && (
+                <span
+                  data-deploy-reason=""
+                  className="font-body text-[12px] leading-[1.3] text-neutral-700"
+                >
+                  {deployReasonNote}
+                </span>
+              )}
               {showDraftDiffersFromDeployed && (
                 <span
                   title="The saved draft no longer matches the deployed version. Use Reset to deployed to load what is live into the canvas."
