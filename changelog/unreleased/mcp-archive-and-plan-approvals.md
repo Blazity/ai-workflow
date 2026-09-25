@@ -1,2 +1,0 @@
-- MCP clients can archive a workflow with `workflows.archive`, which is what Delete does in the dashboard's workflow editor, and bring it back with `workflows.unarchive`, disabled and with every version, its draft and its deployed version as they were.
-- MCP clients can work the plan approvals queue like the dashboard's Approvals page: `approvals.list` shows the plans waiting, `approvals.get` reads one in full, and `approvals.approve` and `approvals.reject` decide it, open to the same owners and admins as the dashboard.

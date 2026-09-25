@@ -1,2 +1,0 @@
-- The dashboard says "Integrations changed elsewhere" only when an integration really changed while you had unsaved work, and the Overview's p95 tile now reads as the p95 of successful runs, showing N/A when none succeeded.
-- The workflow editor keeps Deploy off when the saved draft is already live and says why on every screen size, validation messages name blocks by the names you gave them, integration settings show the non-secret values the environment sets (such as the Jira site and project), and the Overview names the providers a workflow's runs actually used.
