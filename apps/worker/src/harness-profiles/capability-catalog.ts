@@ -26,8 +26,19 @@ import {
   stableJson,
 } from "./manifest.js";
 
-const HARNESS_CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1_000;
-const HARNESS_CAPABILITY_PREWARM_LEAD_MS = 5 * 60 * 1_000;
+/** How often `/cron/harness-capabilities` runs (the schedule in
+ *  `apps/worker/vercel.json`). Request-time reads never refresh a catalog, so
+ *  this cadence is the only thing that keeps one fresh. */
+export const HARNESS_CAPABILITY_PREWARM_PERIOD_MS = 30 * 60 * 1_000;
+/** Fresh across one missed or late prewarm. Publishing a profile refuses a
+ *  stale catalog, so a lifetime shorter than the period leaves every profile
+ *  unpublishable for part of each period. */
+const HARNESS_CAPABILITY_CACHE_TTL_MS =
+  2 * HARNESS_CAPABILITY_PREWARM_PERIOD_MS + 15 * 60 * 1_000;
+/** Every prewarm refreshes what the previous one wrote, however late that one
+ *  finished: its catalog is at least this old by the next run. */
+const HARNESS_CAPABILITY_PREWARM_REFRESH_AGE_MS =
+  HARNESS_CAPABILITY_PREWARM_PERIOD_MS / 2;
 const CLAUDE_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
 export const CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
 const HARNESS_CAPABILITY_REFRESH_THROTTLE_MS = 30_000;
@@ -392,8 +403,7 @@ async function prewarmHarnessCapabilityCatalogsFromRepository(
               !cached ||
               !isCachedCatalogFresh(cached, now) ||
               now.getTime() - cached.fetchedAt.getTime() >=
-                HARNESS_CAPABILITY_CACHE_TTL_MS -
-                  HARNESS_CAPABILITY_PREWARM_LEAD_MS,
+                HARNESS_CAPABILITY_PREWARM_REFRESH_AGE_MS,
             dependencies: input.dependencies,
           });
           if (capabilities.stale) result.stale++;
