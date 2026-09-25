@@ -1,0 +1,1 @@
+- The p95 column in the Overview's workflow table counts successful runs only, as the p95 tile above it does. A workflow whose runs failed shows no p95 instead of the failures' duration.
