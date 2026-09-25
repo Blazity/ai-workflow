@@ -147,6 +147,22 @@ describe("enforcePrAutofixCap", () => {
     ]);
   });
 
+  it("spends one budget for one pull request whatever case its repository is spelled in", async () => {
+    // A repository renamed from Acme/API to acme/api on the provider, or reached
+    // through a path typed by a person, is still one pull request. Red while the
+    // counter is keyed by the spelling: each spelling got a full budget of its own.
+    await enforcePrAutofixCap(db, { ...pr, repoPath: "Acme/API" }, 1, t0);
+
+    await expect(enforcePrAutofixCap(db, pr, 1, t1)).resolves.toMatchObject({
+      allowed: false,
+      attempts: 2,
+    });
+    await refundPrAutofixCap(db, { ...pr, repoPath: "ACME/api" });
+    await expect(db.select().from(prAutofixAttempts)).resolves.toMatchObject([
+      { repoPath: "acme/api", attempts: 1 },
+    ]);
+  });
+
   it("loses no increment when deliveries for one pull request arrive together", async () => {
     // The whole update is one INSERT ... ON CONFLICT DO UPDATE, so every caller
     // reads the row it just wrote and none can act on a value another caller is

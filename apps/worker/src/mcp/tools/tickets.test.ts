@@ -424,6 +424,17 @@ describe("tickets.list_runs", () => {
     expect(typeof data.runs[0]?.createdAt).toBe("string");
   });
 
+  it("lists a ticket's runs for its key typed in another case", async () => {
+    // Production answered no runs for "awp-274" while tickets.get read the
+    // ticket. Red while the key is compared verbatim.
+    await seedRun({ runId: "mine", ticketKey: "PROJ-1" });
+
+    const result = await listRuns({ ticketKey: " proj-1 " });
+
+    const data = (result.structuredContent as { data: { runs: McpRunSummary[] } }).data;
+    expect(data.runs.map((r) => r.runId)).toEqual(["mine"]);
+  });
+
   it("does not return runs belonging to a different ticket", async () => {
     await seedRun({ runId: "mine", ticketKey: "PROJ-1" });
     await seedRun({ runId: "other", ticketKey: "PROJ-2" });
