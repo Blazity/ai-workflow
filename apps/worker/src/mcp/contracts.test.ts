@@ -84,6 +84,10 @@ describe("MCP public contracts", () => {
       "memory.list",
       "memory.get",
       "memory.forget",
+      "profiles.list",
+      "profiles.get",
+      "profiles.refresh_skill",
+      "profiles.publish",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

@@ -247,7 +247,7 @@ describe("tickets.get", () => {
     expect(serialized).not.toContain("Use OAuth for login");
   });
 
-  it("with includeComments and a limit, returns truncated comment bodies", async () => {
+  it("with includeComments and a limit, returns the newest comments, oldest of them first", async () => {
     const fetchTicket = vi.fn().mockResolvedValue(
       ticketContent({
         comments: [
@@ -268,8 +268,33 @@ describe("tickets.get", () => {
       data: { comments: Array<{ body: string }>; commentCount: number; commentsTruncated: boolean };
     }).data;
     expect(data.comments).toHaveLength(2);
-    expect(data.comments.map((c) => c.body)).toEqual(["first", "second"]);
+    expect(data.comments.map((c) => c.body)).toEqual(["second", "third"]);
     expect(data.commentCount).toBe(3);
+    expect(data.commentsTruncated).toBe(true);
+  });
+
+  // Jira embeds only a first page of comments in an issue read, so a read
+  // without a window can miss exactly the newest ones. This tracker behaves
+  // that way: the newest comment is there only for a read from the newest end.
+  it("reads comments from the newest end, so the latest one is never the one missing", async () => {
+    const oldest = { author: "A", body: "oldest", createdAt: "2026-03-20T10:00:00Z" };
+    const newest = { author: "B", body: "newest", createdAt: "2026-03-21T10:00:00Z" };
+    const fetchTicket = vi.fn(async (_id: string, options?: { commentsSince?: string }) =>
+      options?.commentsSince === undefined
+        ? ticketContent({ comments: [oldest], commentsComplete: false })
+        : ticketContent({ comments: [newest], commentsComplete: false }),
+    );
+    const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
+
+    const result = await client.callTool({
+      name: "tickets.get",
+      arguments: { ticketKey: "PROJ-1", includeComments: true },
+    });
+
+    const data = (result.structuredContent as {
+      data: { comments: Array<{ body: string }>; commentsTruncated: boolean };
+    }).data;
+    expect(data.comments.map((c) => c.body)).toEqual(["newest"]);
     expect(data.commentsTruncated).toBe(true);
   });
 });

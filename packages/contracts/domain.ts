@@ -990,5 +990,9 @@ export const FIRST_SLICE_TOOLS = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

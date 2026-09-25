@@ -62,7 +62,16 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           let ticket;
           try {
-            ticket = await issueTracker.fetchTicket(input.ticketKey);
+            // With comments wanted, read from the newest end. A Jira issue read
+            // embeds only a first page of comments, so without a window the
+            // newest ones, usually the latest human instruction, can be exactly
+            // the ones missing. A window that starts now asks the adapter for
+            // the most recent page and nothing older.
+            ticket = input.includeComments
+              ? await issueTracker.fetchTicket(input.ticketKey, {
+                  commentsSince: new Date().toISOString(),
+                })
+              : await issueTracker.fetchTicket(input.ticketKey);
           } catch (error) {
             // Only the specific "no such ticket" case gets a public code; any
             // other adapter failure (auth, network, malformed response) falls
@@ -74,12 +83,13 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             throw error;
           }
 
-          // fetchTicket always returns every comment (no includeComments
-          // param, no pagination on the adapter side); this tool decides how
-          // much of that to hand back.
+          // Adapters hand comments over oldest first (Jira reads them
+          // orderBy=created). The newest `commentsLimit` are the ones kept:
+          // cutting the tail instead dropped the latest human instruction on
+          // any long ticket.
           const commentsLimit = input.commentsLimit ?? DEFAULT_COMMENTS_LIMIT;
           const comments = input.includeComments
-            ? ticket.comments.slice(0, commentsLimit).map((c) => ({
+            ? ticket.comments.slice(-commentsLimit).map((c) => ({
                 author: c.author,
                 body: c.body,
                 createdAt: c.createdAt,
@@ -97,8 +107,11 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             statusId: ticket.trackerStatusId ?? null,
             commentCount: ticket.comments.length,
             comments,
+            // Also true when the adapter itself read only part of the list:
+            // older comments exist that neither side handed over.
             commentsTruncated:
-              Boolean(input.includeComments) && ticket.comments.length > commentsLimit,
+              Boolean(input.includeComments) &&
+              (ticket.comments.length > commentsLimit || ticket.commentsComplete === false),
             attachments: ticket.attachments.map((a) => ({
               id: a.id,
               filename: a.filename,
