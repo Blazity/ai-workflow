@@ -29,6 +29,7 @@ import {
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
+import { isSameRepository } from "../../engine/support/repository-access.js";
 import {
   issueTrackerWiring,
   ticketSubject,
@@ -400,12 +401,15 @@ async function resolvePullRequestDispatch(
       "The pull request provider could not be reached.",
     );
   }
+  // Every question from here on is asked of the repository as the provider
+  // spells it, which is how the records a run is checked against spell it.
+  const target = await providerSpelledPullRequest(parsed, snapshot.prUrl);
   const params = triggerNodeParams(
     runnableDefinitionOf(deployed.definition),
     deployed.triggerType,
   );
   const providers = Array.isArray(params.providers) ? params.providers : [];
-  if (providers.length > 0 && !providers.includes(parsed.provider)) {
+  if (providers.length > 0 && !providers.includes(target.provider)) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
@@ -417,8 +421,8 @@ async function resolvePullRequestDispatch(
   if (
     scope === "any" &&
     !isRepositoryDispatchable(input.repositoryCatalog, {
-      provider: parsed.provider,
-      path: parsed.repoPath,
+      provider: target.provider,
+      path: target.repoPath,
     })
   ) {
     // The definition's own pin is deliberately not consulted: a pin selects
@@ -436,8 +440,8 @@ async function resolvePullRequestDispatch(
     scope === "any" &&
     pinnedScope &&
     !isRepositoryWithinPinnedScope(pinnedScope, {
-      provider: parsed.provider,
-      repoPath: parsed.repoPath,
+      provider: target.provider,
+      repoPath: target.repoPath,
     })
   ) {
     throw new ManualDispatchError(
@@ -446,7 +450,7 @@ async function resolvePullRequestDispatch(
       "This repository is outside the repositories pinned to this workflow.",
     );
   }
-  const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);
+  const pr = snapshotToPayload(target.provider, target.repoPath, snapshot);
   const eligible = selectManualTriggerEvent(
     deployed.triggerType,
     pr,
@@ -522,7 +526,7 @@ async function resolvePullRequestDispatch(
     inputPayload: { kind: "pull_request", scope, pr: eligible.pr },
     subjectKey,
     ticketKey,
-    subjectTitle: snapshot.title || `${parsed.repoPath}#${parsed.prNumber}`,
+    subjectTitle: snapshot.title || `${target.repoPath}#${target.prNumber}`,
     subjectUrl: snapshot.prUrl,
     aiColumn: input.settings.COLUMN_AI,
     blockTypes: deployedBlockTypes(deployed.definition),
@@ -622,6 +626,49 @@ function baseEvent(
     triggerType,
     pr,
   };
+}
+
+/**
+ * The pull request as its provider names it.
+ *
+ * A pasted URL carries whatever case the person typed: `github.com/blazity/x`
+ * for the repository GitHub calls `Blazity/x`. The provider reads either
+ * spelling and answers with its own in the pull request's URL, and the records
+ * a run is later checked against (the run that published the pull request, its
+ * workflow-owned branch, the workspace manifest) all carry that spelling. A run
+ * started from the typed one asked "did we publish this?" in the wrong case, was
+ * told no, and its fix agent refused to push.
+ *
+ * Only a respelling is adopted. A URL that names another repository (a rename
+ * the provider redirected to) is a different question for the catalog and the
+ * pin, and one no connected provider parses says nothing, so both leave the
+ * pasted path as it was.
+ */
+async function providerSpelledPullRequest(
+  pasted: { provider: string; repoPath: string; prNumber: number },
+  providerUrl: string,
+): Promise<{ provider: string; repoPath: string; prNumber: number }> {
+  let url: URL;
+  try {
+    url = new URL(providerUrl);
+  } catch {
+    return pasted;
+  }
+  let answered: Awaited<ReturnType<typeof resolveConfiguredPullRequestUrl>>;
+  try {
+    answered = await resolveConfiguredPullRequestUrl(url);
+  } catch (error) {
+    if (error instanceof IntegrationSettingsUnreadableError) {
+      throw settingsUnreadableForDispatch("the pull request's repository could not be matched to a provider");
+    }
+    throw error;
+  }
+  return answered &&
+    answered.provider === pasted.provider &&
+    answered.prNumber === pasted.prNumber &&
+    isSameRepository(answered, pasted)
+    ? answered
+    : pasted;
 }
 
 function snapshotToPayload(

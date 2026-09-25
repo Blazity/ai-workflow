@@ -426,6 +426,7 @@ describe("repository scripts block output", () => {
             declaredIn: ["github:acme/api"],
             missing: ["github:acme/web"],
             skipped: [],
+            skippedReasons: [],
           },
         ],
       }),
@@ -441,6 +442,7 @@ describe("repository scripts block output", () => {
         declaredIn: ["github:acme/api"],
         missing: ["github:acme/web"],
         skipped: [],
+        skippedReasons: [],
       },
     ]);
     expect(output.uncoveredGroupCount).toBe(1);
@@ -458,12 +460,14 @@ describe("repository scripts block output", () => {
             missing: [],
             // Not in the workspace, so nothing is claimed about it either way.
             skipped: ["github:acme/web"],
+            skippedReasons: [{ repo: "github:acme/web", reason: "not_in_workspace" }],
           },
           {
             group: "test",
             declaredIn: ["github:acme/api"],
             missing: ["gitlab:acme/api"],
             skipped: [],
+            skippedReasons: [],
           },
         ],
       }),
@@ -903,6 +907,36 @@ describe("run_scripts executor", () => {
     });
   });
 
+  it("tells the engine which repositories this run holds, so coverage can leave the rest out", async () => {
+    // Red when the block stops passing them: every catalog repository outside
+    // the workspace that lacks the group is then counted as uncovered.
+    await executeRunScripts(
+      scriptsNode(["test"]),
+      {},
+      makeCtx({
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "Acme/API",
+              slug: "acme__api",
+              localPath: "/vercel/sandbox",
+              defaultBranch: "main",
+              branchName: "ai-workflow/aiw-1",
+              selectedRationale: "ticket",
+              access: "write",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceRepositoryKeys: ["github:acme/api"] }),
+    );
+  });
+
   it("hands the raw stored configuration straight to the engine", async () => {
     await executeRunScripts(scriptsNode(["test"]), {}, makeCtx());
 
@@ -1148,6 +1182,7 @@ describe("repository scripts failure comment", () => {
               declaredIn: ["github:acme/web"],
               missing: ["github:acme/api"],
               skipped: [],
+              skippedReasons: [],
             },
           ],
         }),

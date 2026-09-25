@@ -34,6 +34,7 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
 
 const settingsGet = (await import("./settings.get.js")).default;
 const settingsPatch = (await import("./settings.patch.js")).default;
+const settingsReset = (await import("./settings/reset.post.js")).default;
 
 let db: Db;
 
@@ -52,6 +53,16 @@ function patch(body: unknown): Promise<Response> {
   return handlerFor(settingsPatch)(
     new Request("http://worker.test/", {
       method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function reset(body: unknown): Promise<Response> {
+  return handlerFor(settingsReset)(
+    new Request("http://worker.test/", {
+      method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }),
@@ -152,6 +163,46 @@ describe("GET /api/v1/settings", () => {
 
     const unknown = await get("?key=NOT_A_SETTING");
     expect(unknown.status).toBe(400);
+  });
+
+  it("names the person behind each change, not their user id", async () => {
+    // QA read "user A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW" in the history. The id
+    // stays for tools; the label is what a person reads.
+    await patch({ settings: { COLUMN_AI: "Agent" }, reason: "renamed the column" });
+    await db.insert(settingsVersions).values({
+      key: "COLUMN_AI",
+      previousValue: "Agent",
+      newValue: "AI",
+      actor: "migration",
+      reason: "seeded",
+    });
+
+    const history = await (await get("?key=COLUMN_AI")).json();
+    expect(
+      history.versions.map((version: { actor: string; actorLabel: string }) => [
+        version.actor,
+        version.actorLabel,
+      ]),
+    ).toEqual([
+      ["migration", "migration"],
+      ["user_admin", "Admin"],
+    ]);
+
+    const listing = await (await get()).json();
+    expect(entry(listing.settings, "COLUMN_AI").lastVersion).toMatchObject({
+      actor: "migration",
+      actorLabel: "migration",
+    });
+  });
+
+  it("says what answers for each key once its stored row is gone", async () => {
+    await patch({ settings: { MAX_CONCURRENT_AGENTS: 7 }, reason: "more" });
+    const listing = await (await get()).json();
+    expect(entry(listing.settings, "MAX_CONCURRENT_AGENTS")).toMatchObject({
+      value: 7,
+      source: "stored",
+      fallback: { value: 3, source: "default" },
+    });
   });
 });
 
@@ -296,5 +347,137 @@ describe("PATCH /api/v1/settings", () => {
     const res = await patch({ settings: { MAX_CONCURRENT_AGENTS: 5 } });
     expect(res.status).toBe(400);
     await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
+  });
+
+  it("refuses the second of two tabs with 409 instead of overwriting the first", async () => {
+    // Both tabs loaded DASHBOARD_ORG_NAME with no recorded change (version 0).
+    const tabA = await patch({
+      settings: { COLUMN_AI: "QA-A" },
+      reason: "tab A",
+      expectedVersions: { COLUMN_AI: 0 },
+    });
+    expect(tabA.status).toBe(200);
+
+    state.sessionUserId = "user_owner";
+    const tabB = await patch({
+      settings: { COLUMN_AI: "QA-B" },
+      reason: "tab B",
+      expectedVersions: { COLUMN_AI: 0 },
+    });
+    expect(tabB.status).toBe(409);
+    const body = await tabB.json();
+    expect(body.error).toBe("settings_version_conflict");
+    expect(body.conflicts).toHaveLength(1);
+    expect(body.conflicts[0]).toMatchObject({
+      key: "COLUMN_AI",
+      expectedVersion: 0,
+      setting: {
+        key: "COLUMN_AI",
+        value: "QA-A",
+        source: "stored",
+        lastVersion: { newValue: "QA-A", actor: "user_admin", actorLabel: "Admin" },
+      },
+    });
+    expect(body.conflicts[0].currentVersion).toBe(body.conflicts[0].setting.lastVersion.id);
+
+    // Nothing of tab B was written; tab A's value stands.
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "COLUMN_AI", value: "QA-A" }),
+    ]);
+    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(1);
+
+    // Tab B chooses to overwrite: it sends the version it has now seen.
+    const overwrite = await patch({
+      settings: { COLUMN_AI: "QA-B" },
+      reason: "tab B, after seeing A",
+      expectedVersions: { COLUMN_AI: body.conflicts[0].currentVersion },
+    });
+    expect(overwrite.status).toBe(200);
+    expect(entry((await overwrite.json()).settings, "COLUMN_AI").value).toBe("QA-B");
+  });
+
+  it("keeps today's last-write-wins for a request that carries no version", async () => {
+    await patch({ settings: { COLUMN_AI: "QA-A" }, reason: "tab A" });
+    const blind = await patch({ settings: { COLUMN_AI: "QA-B" }, reason: "old client" });
+    expect(blind.status).toBe(200);
+    expect(entry((await blind.json()).settings, "COLUMN_AI").value).toBe("QA-B");
+  });
+});
+
+describe("POST /api/v1/settings/reset", () => {
+  it("removes an owner's stored value, records it, and says what took over", async () => {
+    await patch({ settings: { MAX_CONCURRENT_AGENTS: 7 }, reason: "more" });
+    const stored = entry((await (await get()).json()).settings, "MAX_CONCURRENT_AGENTS");
+
+    state.sessionUserId = "user_owner";
+    const res = await reset({
+      key: "MAX_CONCURRENT_AGENTS",
+      reason: "back to the default",
+      expectedVersion: stored.lastVersion?.id,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      removed: true,
+      setting: {
+        key: "MAX_CONCURRENT_AGENTS",
+        value: 3,
+        source: "default",
+        lastVersion: {
+          previousValue: 7,
+          newValue: 3,
+          actor: "user_owner",
+          actorLabel: "Owner",
+          reason: "back to the default",
+        },
+      },
+    });
+    await expect(db.select().from(settings)).resolves.toHaveLength(0);
+  });
+
+  it("answers removed: false for a key with nothing stored, and records nothing", async () => {
+    state.sessionUserId = "user_owner";
+    const res = await reset({ key: "COLUMN_AI", reason: "tidy" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ removed: false, setting: { source: "default" } });
+    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
+  });
+
+  it("refuses to remove a value somebody changed after it was read", async () => {
+    await patch({ settings: { COLUMN_AI: "QA-A" }, reason: "first" });
+    const seen = entry((await (await get()).json()).settings, "COLUMN_AI").lastVersion!.id;
+    await patch({ settings: { COLUMN_AI: "QA-B" }, reason: "somebody else" });
+
+    state.sessionUserId = "user_owner";
+    const res = await reset({ key: "COLUMN_AI", reason: "tidy", expectedVersion: seen });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.conflicts[0]).toMatchObject({
+      key: "COLUMN_AI",
+      expectedVersion: seen,
+      setting: { value: "QA-B", source: "stored" },
+    });
+    expect(await db.select().from(settings)).toEqual([
+      expect.objectContaining({ key: "COLUMN_AI", value: "QA-B" }),
+    ]);
+  });
+
+  it("follows the owner-only rule MCP settings.reset has: an admin and a member get 403", async () => {
+    await patch({ settings: { COLUMN_AI: "QA-A" }, reason: "first" });
+    for (const userId of ["user_admin", "user_member"]) {
+      state.sessionUserId = userId;
+      const res = await reset({ key: "COLUMN_AI", reason: "tidy" });
+      expect(res.status).toBe(403);
+    }
+    await expect(db.select().from(settings)).resolves.toHaveLength(1);
+  });
+
+  it("refuses an unknown key, a missing reason, and a key the environment owns", async () => {
+    state.sessionUserId = "user_owner";
+    expect((await reset({ key: "NOT_A_SETTING", reason: "typo" })).status).toBe(400);
+    expect((await reset({ key: "COLUMN_AI" })).status).toBe(400);
+    const owned = await reset({ key: "PRE_PR_CHECKS_ALLOWED_ENV", reason: "tidy" });
+    expect(owned.status).toBe(400);
+    expect(owned.statusText).toContain("read from the deployment environment");
   });
 });

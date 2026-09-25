@@ -112,6 +112,14 @@ export interface CancelRunResult {
   released: boolean;
   alreadyTerminal?: boolean;
   tornDown?: boolean;
+  /**
+   * The sentence saying a person stopped this run by moving its ticket, set by
+   * the one call that recorded that stop, whatever else it could confirm. A
+   * caller announcing the stop elsewhere (the chat channel) uses exactly this,
+   * and announces it when it is set, even on an unconfirmed result: the next
+   * attempt finds the stop already recorded and carries none.
+   */
+  stopAnnouncement?: string;
 }
 
 /**
@@ -915,10 +923,17 @@ async function cancelOwnedSubject(
 
   let alreadyTerminal = false;
   let tornDown = false;
+  // Whether a cancellation is what ended the Workflow run: this call's, or an
+  // earlier attempt's that could not confirm its bookkeeping. Distinct from
+  // alreadyTerminal, which is also true on that retry: the run is terminal by
+  // the time the retry looks, but it did not finish on its own, and the retry
+  // is then the one that records the stop.
+  let stoppedByCancellation = false;
   if (closed.runId) {
     const workflowRun = getRun(closed.runId);
     try {
       await workflowRun.cancel();
+      stoppedByCancellation = true;
     } catch (err) {
       let status: string;
       try {
@@ -943,6 +958,7 @@ async function cancelOwnedSubject(
         return { cancelled: false, released: false };
       }
       alreadyTerminal = true;
+      stoppedByCancellation = status === "cancelled";
       logger.info(
         { subjectKey, runId: closed.runId, status },
         "cancel_run_already_terminal",
@@ -987,6 +1003,7 @@ async function cancelOwnedSubject(
   // it. Either way the row is consumed here, so a later attempt reads false and
   // the announcement below happens at most once per cancelled question.
   let retiredPublishedQuestion = tombstone.retiredPublished;
+  let stopAnnouncement: string | undefined;
   if (closed.runId) {
     const postDrain = await retirePostDrainContinuations(subjectKey, closed, closed.runId);
     if (!postDrain.retired) {
@@ -994,23 +1011,34 @@ async function cancelOwnedSubject(
     }
     retiredPublishedQuestion = retiredPublishedQuestion || postDrain.retiredPublished;
 
+    // Once per run, whichever attempt gets here first: the row moves to
+    // "blocked" once, and only the attempt that moved it goes on to say so.
     const stoppedHere = await settleCancelledRun(subjectKey, closed.runId, {
-      stoppedLiveRun: !alreadyTerminal,
+      stoppedByCancellation,
     });
+    if (stoppedHere && notice?.leftColumn) {
+      const { runStoppedSentence } = await import("../../engine/support/ticket-left-column.js");
+      stopAnnouncement = runStoppedSentence({
+        aiColumnName: notice.aiColumnName,
+        movedTo: notice.leftColumn.movedTo,
+        stoppedAt: new Date(),
+      });
+    }
 
     // Ahead of the ticket move and the claim release on purpose: both of those
     // can decline and leave the caller to retry, and a retry finds the question
     // already retired and would say nothing at all. The same holds for the
-    // stop comment: a retry finds the run terminal and the row settled.
+    // stop comment: a retry finds the row already settled.
     if (retiredPublishedQuestion) {
       await announceRetiredClarification(subjectKey, closed, closed.runId, notice);
-    } else if (stoppedHere) {
-      await announceLeftColumnStop(subjectKey, closed, closed.runId, notice);
+    } else if (stopAnnouncement) {
+      await announceLeftColumnStop(subjectKey, closed, closed.runId, notice, stopAnnouncement);
     }
   }
+  const announced = stopAnnouncement ? { stopAnnouncement } : {};
 
   if (beforeRelease && !(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
-    return { cancelled: false, released: false, tornDown };
+    return { cancelled: false, released: false, tornDown, ...announced };
   }
 
   const released = await runRegistry
@@ -1018,10 +1046,10 @@ async function cancelOwnedSubject(
     .catch(() => false);
   if (!released) {
     const refreshed = await runRegistry.get(subjectKey).catch(() => {});
-    if (refreshed !== null) return { cancelled: false, released: false, tornDown };
+    if (refreshed !== null) return { cancelled: false, released: false, tornDown, ...announced };
   }
   await notifyReleased(subjectKey, onReleased);
-  return { cancelled: true, released: true, alreadyTerminal, tornDown };
+  return { cancelled: true, released: true, alreadyTerminal, tornDown, ...announced };
 }
 
 /**
@@ -1059,9 +1087,11 @@ async function persistCancelReason(
  * does, and the cron never downgrades a frozen status: without this the row
  * shows awaiting input forever. That settle happens whoever ended the run.
  *
- * A run THIS call stopped mid-flight (`stoppedLiveRun`) also leaves "running"
- * for "blocked" here, with its completion time, and its attempts that were still
- * open are closed. Before, "blocked" was left to the next cron snapshot of the
+ * A run a cancellation stopped mid-flight (`stoppedByCancellation`: this call's
+ * or an earlier attempt's whose drain could not be confirmed) also leaves
+ * "running" for "blocked" here, with its completion time, and its attempts that
+ * were still open are closed. Both writes only touch what is still open, so
+ * whichever attempt gets here first does them and every later one is a no-op. Before, "blocked" was left to the next cron snapshot of the
  * Workflow world, so for minutes the row said "running" beside a recorded stop
  * reason, and the attempt that was executing never got a completion time
  * (production run wrun_01M375BB1PC0CG3F8KR0DGEWJ6, AWP-280). A run that ended on
@@ -1080,20 +1110,22 @@ async function persistCancelReason(
 async function settleCancelledRun(
   subjectKey: string,
   runId: string,
-  input: { stoppedLiveRun: boolean },
+  input: { stoppedByCancellation: boolean },
 ): Promise<boolean> {
   let settled = false;
   try {
     const { markConnectedRunBlockedOnCancel } =
       await import("../../db/repositories/runs/telemetry.js");
-    settled = await markConnectedRunBlockedOnCancel(runId, { fromRunning: input.stoppedLiveRun });
+    settled = await markConnectedRunBlockedOnCancel(runId, {
+      fromRunning: input.stoppedByCancellation,
+    });
   } catch (error) {
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },
       "cancel_run_awaiting_status_unconfirmed",
     );
   }
-  if (!input.stoppedLiveRun) return false;
+  if (!input.stoppedByCancellation) return false;
   try {
     const { closeConnectedOpenBlockAttempts } =
       await import("../../db/repositories/runs/run-observability.js");
@@ -1243,10 +1275,11 @@ async function announceLeftColumnStop(
   closed: ActiveRunEntry,
   runId: string,
   notice: ClarificationCancelNotice | undefined,
+  stopped: string,
 ): Promise<void> {
   const ticketKey = closed.ticketKey;
-  if (!notice?.leftColumn || !ticketKey) return;
-  const { issueTracker, aiColumnName, leftColumn } = notice;
+  if (!notice || !ticketKey) return;
+  const { issueTracker, aiColumnName } = notice;
   try {
     const { formatRunStoppedComment, runStoppedCommentMarker } =
       await import("../../engine/support/ticket-left-column.js");
@@ -1256,12 +1289,7 @@ async function announceLeftColumnStop(
     if (alreadyPosted) return;
     await issueTracker.postComment(
       ticketKey,
-      formatRunStoppedComment({
-        runId,
-        aiColumnName,
-        movedTo: leftColumn.movedTo,
-        stoppedAt: new Date(),
-      }),
+      formatRunStoppedComment({ runId, aiColumnName, stopped }),
     );
   } catch (error) {
     logger.warn(

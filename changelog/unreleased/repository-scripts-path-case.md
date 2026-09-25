@@ -1,2 +1,0 @@
-- Pre-PR checks and the Run scripts block now run a repository's script groups whatever letter case its catalog entry uses, since GitHub and GitLab treat `Acme/api` and `acme/api` as one repository.
-- When the pre-PR checks pass over a repository, the run summary names it and says why: the run did not change it, or it is not in the run's workspace.

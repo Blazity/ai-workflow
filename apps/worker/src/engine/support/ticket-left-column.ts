@@ -36,6 +36,26 @@ export function isLeftColumnReason(reason: string): boolean {
   return reason.startsWith(WEBHOOK_REASON_PREFIX) || reason.startsWith(POLL_LEFT_COLUMN_REASON);
 }
 
+/** The fixed half of the reason recorded when a person moves the ticket to the
+ *  review column before the run has published anything. The other half is the
+ *  tracker's name, from its own manifest. */
+const PREMATURE_REVIEW_REASON_TAIL = " AI Review transition before durable PR publication evidence";
+
+/**
+ * The reason a run is stopped with when its ticket reached the review column
+ * before any of its work was published. A person reads it on the ticket, so it
+ * names the tracker they moved it in. Written by the ticket webhook and the
+ * reconciler (services/tickets/ai-review-transition.ts), read by runs.diagnose.
+ */
+export function prematureReviewReason(trackerName: string): string {
+  return `${trackerName}${PREMATURE_REVIEW_REASON_TAIL}`;
+}
+
+/** True for a recorded reason that says the ticket went to review too early. */
+export function isPrematureReviewReason(reason: string): boolean {
+  return reason.includes(PREMATURE_REVIEW_REASON_TAIL);
+}
+
 /**
  * Line the stop comment carries verbatim, so a tracker that can search its own
  * comments (findCommentByMarker) recognises one this deployment already posted
@@ -54,15 +74,11 @@ function utcMinute(at: Date): string {
 }
 
 /**
- * The one comment a ticket gets when a person stopped its run by moving it.
- *
- * Short on purpose: the person who moved the ticket knows they did, and a
- * colleague reading the ticket later needs three facts: the run stopped, why,
- * and how to start again. It says the stop was not a failure because the only
- * other comment the run left said it had picked the ticket up.
+ * The sentence that says a person stopped the run by moving its ticket. One
+ * sentence for every surface that says so, the ticket comment below and the
+ * chat message, built once per stop so both carry the same minute.
  */
-export function formatRunStoppedComment(input: {
-  runId: string;
+export function runStoppedSentence(input: {
   aiColumnName: string;
   movedTo: string | null;
   stoppedAt: Date;
@@ -74,8 +90,25 @@ export function formatRunStoppedComment(input: {
     movedTo && movedTo.toLowerCase() !== input.aiColumnName.trim().toLowerCase()
       ? `moved from "${input.aiColumnName}" to "${movedTo}"`
       : `moved out of "${input.aiColumnName}"`;
+  return `The AI workflow stopped working on this ticket at ${utcMinute(input.stoppedAt)} because the ticket was ${where}. Nothing failed.`;
+}
+
+/**
+ * The one comment a ticket gets when a person stopped its run by moving it.
+ *
+ * Short on purpose: the person who moved the ticket knows they did, and a
+ * colleague reading the ticket later needs three facts: the run stopped, why,
+ * and how to start again. It says the stop was not a failure because the only
+ * other comment the run left said it had picked the ticket up.
+ */
+export function formatRunStoppedComment(input: {
+  runId: string;
+  aiColumnName: string;
+  /** runStoppedSentence, as the chat message carries it. */
+  stopped: string;
+}): string {
   return [
-    `The AI workflow stopped working on this ticket at ${utcMinute(input.stoppedAt)} because the ticket was ${where}. Nothing failed.`,
+    input.stopped,
     `To start again, move the ticket back to "${input.aiColumnName}"; a new run starts from the beginning.`,
     runStoppedCommentMarker(input.runId),
   ].join("\n\n");

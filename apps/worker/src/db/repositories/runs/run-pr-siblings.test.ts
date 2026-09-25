@@ -88,6 +88,43 @@ describe("findRunPrSiblings", () => {
     });
   });
 
+  it("finds the publication whatever case the repository path is asked in", async () => {
+    // The run recorded GitHub's spelling; a run dispatched from a pasted URL
+    // may hold another. Both name one repository, and "ownership unknown" for
+    // it stopped a fix agent from pushing to its own pull request.
+    await seed([githubPr("Acme/Web", 12), githubPr("Acme/API", 13)]);
+
+    await expect(
+      findRunPrSiblings({ db, provider: "github", repoPath: "acme/web", prNumber: 12 }),
+    ).resolves.toEqual({
+      status: "siblings",
+      runId: "run-siblings",
+      current: githubPr("Acme/Web", 12),
+      siblings: [githubPr("Acme/API", 13)],
+    });
+  });
+
+  it("does not take the same number in another repository for the publication", async () => {
+    // Pull request numbers repeat across repositories, so the newest run that
+    // published #12 anywhere is not an answer about acme/web#12.
+    await seed([githubPr("acme/web", 12)]);
+    await db.insert(workflowRuns).values({
+      runId: "run-other-repository",
+      workflowId: "workflow",
+      workflowName: "Workflow",
+      status: "success",
+      ticketKey: "AIW-2",
+      ticketTitle: "Other repository",
+      model: "claude",
+      prs: [githubPr("acme/api", 12)],
+      createdAt: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      findRunPrSiblings({ db, provider: "github", repoPath: "ACME/web", prNumber: 12 }),
+    ).resolves.toMatchObject({ status: "none", runId: "run-siblings" });
+  });
+
   it("returns unknown when the run is absent and when the query fails", async () => {
     await expect(
       findRunPrSiblings({

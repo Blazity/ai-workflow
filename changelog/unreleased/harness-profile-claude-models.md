@@ -1,1 +1,0 @@
-- A harness profile can pick a Claude model again: the Model list offers what the Claude CLI reports (default, opus[1m], sonnet, haiku), and publishing a profile on one of them is accepted. The built-in Claude profile no longer calls its model unavailable; it says the built-in profile sets it.

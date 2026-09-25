@@ -38,7 +38,6 @@ import {
 import { buildRepositoryMap, repositoryMapTrailSummary } from "../../../repository-map/map.js";
 import {
   loadRepositoryMapCatalog,
-  repositoryKey,
   selectedRepository,
   takeRelatedRepositories,
 } from "./related-repositories.js";
@@ -71,6 +70,7 @@ import {
   filterRunRepositories,
   mayRunTouchRepository,
   NO_ENABLED_REPOSITORIES_MESSAGE,
+  repositoryKey,
   repositoryNotEnabledMessage,
 } from "../../support/repository-access.js";
 

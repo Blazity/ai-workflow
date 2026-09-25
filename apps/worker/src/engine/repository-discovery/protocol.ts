@@ -3,10 +3,10 @@ import { z } from "zod";
 // Protocol values cross the pre-sandbox and engine boundary without service state.
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAddition } from "../../sandbox/context.js";
-import {
-  repositoryCatalogKey,
-  type RepositoryCatalogEntry,
-} from "./catalog.js";
+import type { RepositoryCatalogEntry } from "./catalog.js";
+// The engine-spelled repository identity, under the name these call sites
+// have always used for it; there is one definition, in repository-access.
+import { repositoryKey as repositoryCatalogKey } from "../support/repository-access.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
 import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 import { replyThatDecidesCandidates } from "../support/clarification-comment-format.js";

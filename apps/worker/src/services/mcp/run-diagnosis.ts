@@ -43,7 +43,10 @@ import {
   isRepositoryScriptsRefusal,
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
 } from "../../engine/blocks/support/repository-scripts-output.js";
-import { isLeftColumnReason } from "../../engine/support/ticket-left-column.js";
+import {
+  isLeftColumnReason,
+  isPrematureReviewReason,
+} from "../../engine/support/ticket-left-column.js";
 import { isRunCompletionPending } from "./contracts.js";
 
 
@@ -58,6 +61,7 @@ type RunDiagnosisCategory =
   | "no_workflow_matched"
   | "stopped_without_reason"
   | "ticket_left_trigger_column"
+  | "ticket_moved_to_review_early"
   | "provider_account"
   | "dependency_auth"
   | "dependency_unavailable"
@@ -159,6 +163,11 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   ticket_left_trigger_column: [
     "Stopped because the ticket left the trigger column: a person moved it, so nothing failed.",
     "To run it again, move the ticket back into the trigger column; a new run starts from the beginning.",
+  ],
+  // Overridden per match by reviewTooEarlyActions, which adds the moment.
+  ticket_moved_to_review_early: [
+    "Stopped because the ticket was moved to the review column before this run had published a pull request: a person moved it, so nothing failed.",
+    "To have the work done, move the ticket back into the trigger column; a new run starts from the beginning.",
   ],
   // Overridden per cause and account by providerAccountActions.
   provider_account: [
@@ -434,12 +443,30 @@ const PROVIDER_ACCOUNT_CAUSES: ReadonlySet<ProviderFailureCause> = new Set([
  * reason come from the tracker and are never copied.
  */
 function leftColumnActions(completedAt: string | null | undefined): readonly string[] {
-  const at = completedAt ? new Date(completedAt) : null;
-  if (!at || Number.isNaN(at.getTime())) return NEXT_ACTIONS.ticket_left_trigger_column;
+  const at = stopMoment(completedAt);
+  if (!at) return NEXT_ACTIONS.ticket_left_trigger_column;
   return [
-    `Stopped because the ticket left the trigger column at ${at.toISOString()}: a person moved it, so nothing failed.`,
+    `Stopped because the ticket left the trigger column at ${at}: a person moved it, so nothing failed.`,
     NEXT_ACTIONS.ticket_left_trigger_column[1] as string,
   ];
+}
+
+/** The same, for a ticket moved to the review column before anything was
+ *  published: the run was stopped rather than left to publish into a column a
+ *  person had already moved on from. */
+function reviewTooEarlyActions(completedAt: string | null | undefined): readonly string[] {
+  const at = stopMoment(completedAt);
+  if (!at) return NEXT_ACTIONS.ticket_moved_to_review_early;
+  return [
+    `Stopped because the ticket was moved to the review column at ${at}, before this run had published a pull request: a person moved it, so nothing failed.`,
+    NEXT_ACTIONS.ticket_moved_to_review_early[1] as string,
+  ];
+}
+
+/** The run's completion time re-rendered from a parsed Date, or null. */
+function stopMoment(completedAt: string | null | undefined): string | null {
+  const at = completedAt ? new Date(completedAt) : null;
+  return at && !Number.isNaN(at.getTime()) ? at.toISOString() : null;
 }
 
 // SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts),
@@ -637,6 +664,23 @@ const RULES: readonly Rule[] = [
         confidence: "low",
         evidenceRefs: evidenceFrom(input),
         nextActions: leftColumnActions(input.completedAt),
+      };
+    },
+  },
+  {
+    // Its own sentence, written only by the ticket webhook and the reconciler
+    // when a ticket reaches the review column while its run has published
+    // nothing (services/tickets/ai-review-transition.ts); the tracker's name in
+    // front of it is never copied into an action.
+    category: "ticket_moved_to_review_early",
+    match: (input) => {
+      if (input.status !== "blocked") return null;
+      const message = input.error?.message;
+      if (!message || !isPrematureReviewReason(message)) return null;
+      return {
+        confidence: "low",
+        evidenceRefs: evidenceFrom(input),
+        nextActions: reviewTooEarlyActions(input.completedAt),
       };
     },
   },

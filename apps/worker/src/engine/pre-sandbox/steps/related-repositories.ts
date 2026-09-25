@@ -7,8 +7,9 @@
  * changed together and tested together, and neither one is about selecting the
  * repositories a ticket names.
  *
- * It also holds the two identity helpers the selection and this file share, so
- * a repository is turned into a key and into a selection in exactly one place.
+ * It also holds the selection helper the selection and this file share, so a
+ * repository is turned into a selection in exactly one place. Its key is
+ * `repositoryKey` in `engine/support/repository-access.ts`, like everywhere else.
  */
 import {
   type RepositoryMetadata,
@@ -16,6 +17,7 @@ import {
 } from "../../../adapters/vcs/repository-directory.js";
 import type { PreSandboxRepositoryMap } from "../types.js";
 import { WORKSPACE_NARROWING_CEILING } from "../types.js";
+import { repositoryKey } from "../../support/repository-access.js";
 import type { RunWorkScopeRecorder } from "../../work-scope/context.js";
 import {
   relatedRepositoryKeys,
@@ -23,14 +25,6 @@ import {
   relationshipSentence,
   type RepositoryMapFacts,
 } from "../../../repository-map/map.js";
-
-/** `provider:path`, lowercased, the one spelling every store and every record
- *  in this run uses. */
-export function repositoryKey(
-  repo: Pick<RepositoryMetadata, "provider" | "repoPath">,
-): string {
-  return `${repo.provider}:${repo.repoPath.toLowerCase()}`;
-}
 
 /** One repository as the selection hands it on. Access is not on this shape:
  *  it belongs to the workspace input, and `prepare-workspace` sets it from

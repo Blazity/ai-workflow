@@ -704,6 +704,55 @@ test("coverage gaps render a Not entered line per group with skipped repositorie
   assert.doesNotMatch(html, /Not declared here/);
 });
 
+test("coverage gaps say why a repository was not entered when the run recorded it", () => {
+  // Red when the replay ignores skippedReasons: every repository then reads
+  // "was not part of this run", which sends an operator looking for a missing
+  // repository when the run simply stopped before reaching it.
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      {
+        group: "e2e",
+        declaredIn: ["github:acme/web"],
+        missing: [],
+        skipped: ["github:acme/api", "github:acme/cli", "github:acme/infra"],
+        skippedReasons: [
+          { repo: "github:acme/api", reason: "not_in_workspace" },
+          { repo: "github:acme/cli", reason: "not_reached" },
+          { repo: "github:acme/infra", reason: "not_in_workspace" },
+        ],
+      },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /e2e: github:acme\/api, github:acme\/infra \(not in this run&#x27;s workspace\)/);
+  assert.match(html, /e2e: github:acme\/cli \(not reached before the run stopped\)/);
+  assert.doesNotMatch(html, /was not part of this run/);
+});
+
+test("coverage gaps keep the old sentence for a reason the run did not record", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      {
+        group: "e2e",
+        declaredIn: [],
+        missing: [],
+        skipped: ["github:acme/api"],
+        skippedReasons: [{ repo: "github:acme/api", reason: "unrecorded" }],
+      },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /e2e: github:acme\/api \(repository was not part of this run\)/);
+});
+
 test("coverage gaps render nothing when groupCoverage is absent or fully covered", () => {
   const withoutField: JsonValue = { ok: true, allPassed: true, groupStatuses: [] };
   const withoutFieldHtml = renderToStaticMarkup(<>{renderScriptOutput(withoutField)}</>);

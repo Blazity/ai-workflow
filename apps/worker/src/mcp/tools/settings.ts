@@ -2,8 +2,8 @@
  * The Settings page, as tools.
  *
  * Four tools for the four things the page does: read every switch, read one
- * with its history, store one, and clear one so the registry default answers
- * for it again.
+ * with its history, store one, and clear one so the environment variable it
+ * names, or its registry default, answers for it again.
  *
  * The registry is the authority on what a key accepts and the store is the
  * authority on what a write records, exactly as on the HTTP side: nothing here
@@ -30,6 +30,7 @@ import {
 import {
   SETTINGS_EDIT_ROLE,
   SettingsValidationError,
+  SettingsVersionConflictError,
   isSettingEditableThroughMcp,
   readSettings,
   readSettingsHistoryPage,
@@ -56,6 +57,12 @@ import {
  * the key is provably unspent and a corrected call may reuse it.
  */
 function throwPublicSettingsError(error: unknown): never {
+  if (error instanceof SettingsVersionConflictError) {
+    // Not retryable as sent: repeating the call with the same stale version
+    // is refused again. The message says what won and how to overwrite it,
+    // which is a decision for the caller, not a retry.
+    throw new McpPublicError("CONFLICT", conflictMessage(error), false, undefined, true);
+  }
   if (error instanceof SettingsValidationError) {
     throw new McpPublicError(
       "VALIDATION_FAILED",
@@ -66,6 +73,16 @@ function throwPublicSettingsError(error: unknown): never {
     );
   }
   throw error;
+}
+
+/** What a stale write is told: per key, what is stored now and who stored it. */
+function conflictMessage(error: SettingsVersionConflictError): string {
+  const lines = error.conflicts.map((conflict) => {
+    const last = conflict.setting.lastVersion;
+    const who = last ? ` by ${last.actorLabel ?? last.actor} at ${last.createdAt}` : "";
+    return `${conflict.key} was changed${who} after you read it (version ${conflict.currentVersion}, you sent ${conflict.expectedVersion}); it now resolves to ${JSON.stringify(conflict.setting.value)} from ${conflict.setting.source}.`;
+  });
+  return `${lines.join(" ")} Nothing was written. Read it again with settings.get, and send expectedVersion ${error.conflicts[0]?.currentVersion ?? 0} if you still mean to change it.`;
 }
 
 /** One setting as this surface publishes it: the store's own view, plus the two
@@ -197,6 +214,10 @@ export function registerSettingsTools(
             patch: { [input.key]: input.value },
             actor: deps.actor.userId ?? deps.actor.subject,
             reason: input.reason,
+            expectedVersions:
+              input.expectedVersion === undefined
+                ? undefined
+                : { [input.key]: input.expectedVersion },
           });
           const entry = written.settings.find(
             (candidate) => candidate.key === input.key,
@@ -239,6 +260,7 @@ export function registerSettingsTools(
             key: input.key,
             actor: deps.actor.userId ?? deps.actor.subject,
             reason: input.reason,
+            expectedVersion: input.expectedVersion,
           });
           return { removed: outcome.removed, setting: viewOf(outcome.entry) };
         } catch (error) {

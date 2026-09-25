@@ -235,6 +235,16 @@ named, because the configuration lists every profiled repository in the
 catalog; under a gate that ran nothing, both are, since they are the only
 evidence of why nothing ran.
 
+A named selection (`run_scripts`, or `run_checks` with groups) reports the same
+facts in `groupCoverage`. A repository the run never entered goes to `skipped`,
+with its reason in `skippedReasons`: `not_in_workspace`, `unchanged`,
+`not_reached` (the walk stopped before it) or `unrecorded` (a launch journaled
+before the reason was kept). Only `missing` counts towards
+`uncoveredGroupCount`. A configured repository that declares none of the
+selected groups launches nothing, so the block hands the engine the run's own
+repository keys (`workspaceRepositoryKeys`) to tell a gap in the workspace from
+a catalog repository this run never had.
+
 **Do not edit the configuration while a run is in flight.** The configuration
 is versioned, and the publication boundary re-reads the *current* version and
 compares it against the one recorded when the gate was minted. Save an edit

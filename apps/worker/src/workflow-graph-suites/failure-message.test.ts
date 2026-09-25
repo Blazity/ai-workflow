@@ -32,7 +32,8 @@ describe("classifyProviderFailure", () => {
     expect(
       classifyProviderFailure("Your account has insufficient credits remaining"),
     ).toBe(billing);
-    expect(classifyProviderFailure("billing account is past due")).toBe(billing);
+    // Anthropic's 402 type, the one place a provider says billing on its own.
+    expect(classifyProviderFailure('API Error: 402 {"type":"error","error":{"type":"billing_error"}}')).toBe(billing);
   });
 
   it("maps rate-limit causes", () => {
@@ -708,17 +709,40 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
     );
   });
 
-  it("classifies exhausted provider credits out of the captured stdout tail", () => {
+  // Flipped on purpose. The stdout tail is the agent's own stream, and reading
+  // a cause out of it blamed the account for whatever the agent printed. The
+  // provider's refusal reaches this function as `providerError` now, out of the
+  // Codex error event (AIW-312) and the Claude error envelope, and the next
+  // tests prove that path; the stream is only quoted.
+  it("quotes the agent's stdout stream but never classifies a cause out of it", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 1.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stdoutTail: `some earlier chatter\n${EXHAUSTED_CREDITS}`,
+      },
+    });
+    expect(message).not.toBe(BILLING_MESSAGE);
+    expect(message.startsWith(AGENT_LEAD)).toBe(true);
+    // Quoted, clamped from both ends like any raw snippet.
+    expect(message).toContain("(stream disconnected before completion: You have no credits");
+  });
+
+  it("classifies exhausted provider credits out of the structured provider error", () => {
     expect(
       deriveFailureMessage({
         category: "provider",
-        detail: "The CLI exited with code 1.",
+        detail: "Codex emitted a provider error event.",
         genericMessage: providerGeneric,
         explicitMessage: AGENT_LEAD,
         evidence: {
-          failureKind: "cli_exit",
+          failureKind: "provider_error",
           exitCode: 1,
-          stdoutTail: `some earlier chatter\n${EXHAUSTED_CREDITS}`,
+          providerError: EXHAUSTED_CREDITS,
         },
       }),
     ).toBe(BILLING_MESSAGE);
@@ -1386,5 +1410,60 @@ describe("provider account failures name the provider and who fixes them", () =>
       account: null,
     });
     expect(curatedProviderFailureOf("The checks could not be started.")).toBeUndefined();
+  });
+});
+
+/**
+ * The agent's own words are not the provider's (follow-up to the named
+ * accounts). An agent working on a billing module prints "billing", and before
+ * this the curated table read that as the provider refusing the account: the
+ * ticket was told an admin had to top up Anthropic for a run that failed for an
+ * ordinary reason.
+ */
+describe("only the provider's own error channel can name an account failure", () => {
+  const providerGeneric = "An external service could not complete this block.";
+  const AGENT_LEAD = "The current agent phase could not be completed.";
+  /** A Claude stream-json assistant event, the shape the agent's stdout has. */
+  const AGENT_LOG =
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"Now fixing billing module: src/billing/invoice.ts"}]}}';
+
+  it("does not read an agent log line about a billing module as an empty balance", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 137.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: { provider: "claude", failureKind: "cli_exit", exitCode: 137, stdoutTail: AGENT_LOG },
+    });
+    expect(curatedProviderFailureOf(message)).toBeUndefined();
+    expect(message).not.toMatch(/credit|admin must/i);
+    expect(message.startsWith(AGENT_LEAD)).toBe(true);
+  });
+
+  it("does not read a repository called billing in a composed detail as an empty balance", () => {
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "github:acme/billing: canonical clone failed: fatal: the remote end hung up unexpectedly",
+      genericMessage: providerGeneric,
+    });
+    expect(curatedProviderFailureOf(message)).toBeUndefined();
+    expect(message).toContain("acme/billing");
+  });
+
+  it("still names the account when the refusal is in the CLI's own stderr", () => {
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The agent runtime could not be prepared.",
+        genericMessage: providerGeneric,
+        explicitMessage: "The agent runtime could not be prepared.",
+        evidence: {
+          provider: "codex",
+          failureKind: "setup_failed",
+          exitCode: 1,
+          stderrTail: "Error: unexpected status 401 Unauthorized: Incorrect API key provided",
+        },
+      }),
+    ).toMatch(/^OpenAI rejected the credential AI Workflow uses for it/);
   });
 });

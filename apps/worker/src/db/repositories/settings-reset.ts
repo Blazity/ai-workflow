@@ -20,6 +20,13 @@ import { settings, settingsVersions } from "../schema.js";
 
 type ExecuteRows<T> = { rows: T[] };
 
+/** What a guarded reset did. `staleVersion` is set, and nothing was removed,
+ *  when the key moved on since the caller read it. */
+export interface SettingResetRow {
+  removed: boolean;
+  staleVersion: number | null;
+}
+
 /**
  * Remove one stored setting and record the clearing.
  *
@@ -30,9 +37,16 @@ type ExecuteRows<T> = { rows: T[] };
  * "this setting is deliberately cleared", which is the one thing this operation
  * does NOT do: it hands the key back rather than pinning it to nothing.
  *
- * Returns false when the key had no stored row. Nothing is written then, and no
- * version row either: the environment or the default was already answering, so
- * there is no decision to record.
+ * `removed` is false when the key had no stored row. Nothing is written then,
+ * and no version row either: the environment or the default was already
+ * answering, so there is no decision to record.
+ *
+ * `expectedVersion` guards the delete in the same statement, as it guards a
+ * patch: when the key's newest version row is no longer the one the caller
+ * read (0 for none) and a row is still stored, somebody changed the value the
+ * caller was looking at, and removing it would throw away a decision they
+ * never saw. The row stays and `staleVersion` names the version it is at. A
+ * key nobody stores any more is not stale: the outcome asked for already holds.
  */
 export async function deleteSetting(
   db: Db,
@@ -41,16 +55,29 @@ export async function deleteSetting(
     resolvedValue: SettingValue;
     actor: string;
     reason: string;
+    expectedVersion?: number;
   },
-): Promise<boolean> {
+): Promise<SettingResetRow> {
   // The value rides as JSON text for the reason writeManySettings gives: a JSON
   // null through jsonb_to_recordset becomes SQL NULL and would be refused by the
   // not-null column, and a key whose resolved value is null is ordinary here.
   const resolved = JSON.stringify(input.resolvedValue ?? null);
+  const expected = input.expectedVersion ?? null;
   const result = (await db.execute(sql`
-    with removed as (
+    with latest as (
+      select coalesce(max(${settingsVersions.id}), 0) as id
+      from ${settingsVersions}
+      where ${settingsVersions.key} = ${input.key}
+    ), stale as (
+      select latest.id as current_version
+      from latest
+      where ${expected}::bigint is not null
+        and latest.id <> ${expected}::bigint
+        and exists (select 1 from ${settings} where ${settings.key} = ${input.key})
+    ), removed as (
       delete from ${settings}
       where ${settings.key} = ${input.key}
+        and not exists (select 1 from stale)
       returning key, value
     ), recorded as (
       insert into ${settingsVersions} (key, previous_value, new_value, actor, reason)
@@ -58,14 +85,23 @@ export async function deleteSetting(
       from removed
       returning id
     )
-    select id from recorded
-  `)) as ExecuteRows<{ id: number | string }>;
-  return result.rows.length > 0;
+    select
+      (select count(*) from recorded) as recorded,
+      (select current_version from stale) as "staleVersion"
+  `)) as ExecuteRows<{ recorded: number | string; staleVersion: number | string | null }>;
+  const row = result.rows[0];
+  return {
+    removed: Number(row?.recorded ?? 0) > 0,
+    staleVersion:
+      row?.staleVersion === null || row?.staleVersion === undefined
+        ? null
+        : Number(row.staleVersion),
+  };
 }
 
 /** Clear one stored setting on the deployment's own connection. */
 export function deleteConnectedSetting(
   input: Parameters<typeof deleteSetting>[1],
-): Promise<boolean> {
+): Promise<SettingResetRow> {
   return deleteSetting(getDb(), input);
 }
