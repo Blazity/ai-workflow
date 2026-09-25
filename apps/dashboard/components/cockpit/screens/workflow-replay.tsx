@@ -866,23 +866,35 @@ function LogValue({ value }: { value: JsonValue }): React.ReactNode {
     return <span className="text-neutral-500">{Array.isArray(value) ? "[]" : "{}"}</span>;
   }
   return (
-    // The key column may shrink below its longest key, and a key breaks
-    // anywhere, so a nested object on a phone wraps instead of scrolling.
-    <dl className="m-0 grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)] gap-x-3 gap-y-0.5">
-      {rows.map(([key, item]) => (
-        <React.Fragment key={key}>
-          <dt className="wrap-anywhere text-neutral-500">{key}</dt>
-          <dd
-            className={`m-0 min-w-0 ${
-              item !== null && typeof item === "object" ? "border-l border-neutral-800 pl-2" : ""
-            }`}
-          >
-            <LogValue value={item} />
-          </dd>
-        </React.Fragment>
-      ))}
+    // A scalar sits beside its key; an object or a list goes under its key at
+    // full width, so each level of nesting costs an indent, not a column. Side
+    // by side, three levels deep, a phone left a value three letters wide. The
+    // key column never takes more than 40 percent, and a key breaks anywhere.
+    <dl className="m-0 grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+      {rows.map(([key, item]) =>
+        isNestedLogValue(item) ? (
+          <React.Fragment key={key}>
+            <dt className="col-span-2 wrap-anywhere text-neutral-500">{key}</dt>
+            <dd className="col-span-2 m-0 min-w-0 border-l border-neutral-800 pl-3">
+              <LogValue value={item} />
+            </dd>
+          </React.Fragment>
+        ) : (
+          <React.Fragment key={key}>
+            <dt className="wrap-anywhere text-neutral-500">{key}</dt>
+            <dd className="m-0 min-w-0">
+              <LogValue value={item} />
+            </dd>
+          </React.Fragment>
+        ),
+      )}
     </dl>
   );
+}
+
+function isNestedLogValue(value: JsonValue): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return Array.isArray(value) ? value.length > 0 : Object.keys(value).length > 0;
 }
 
 /** Legible view of run_scripts / run_pre_pr_checks output: the aggregate
