@@ -13,6 +13,7 @@ import {
   type TicketComment,
   type TicketSummary,
 } from "@integrations/sdk";
+import { adfToText } from "./adf-text";
 import { jqlFragmentProblem } from "./jql";
 
 export interface JiraConfig {
@@ -108,6 +109,10 @@ const DISCOVERY_PAGE_SIZE = 50;
  *  "that is all of them": the read says so, and every reader of the answer
  *  window treats a bounded read as ignorance rather than absence. */
 const MAX_COMMENT_PAGES = 20;
+/** How many of an epic's child issues one ticket read asks for: as many as a
+ *  prompt lists related tickets (`MAX_RELATED_TICKETS_SHOWN` in core), so the
+ *  search never fetches what no reader shows. */
+const MAX_CHILD_ISSUES = 25;
 
 /** One Jira comment as the rest of this codebase reads it. Shared by the
  *  embedded envelope on the issue and the paged comment endpoint, so a comment
@@ -120,7 +125,7 @@ function toTicketComment(c: any): TicketComment {
     // person or an app on every comment, and dropping it here is what
     // left the readers above unable to tell them apart.
     accountType: c.author?.accountType,
-    body: extractAdfText(c.body),
+    body: adfToText(c.body),
     createdAt: c.created,
   };
 }
@@ -244,13 +249,14 @@ export class JiraAdapter implements IssueTrackerAdapter {
     options?: { commentsSince?: string },
   ): Promise<TicketContent> {
     const data = await this.request(
-      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project,attachment,parent,subtasks,issuelinks`,
+      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project,attachment,parent,subtasks,issuelinks,issuetype`,
     );
     const { raw, complete, reachedLatest } = await this.readComments(
       id,
       data.fields.comment,
       options?.commentsSince,
     );
+    const children = await this.childIssues(data);
     const comments = raw.map(toTicketComment);
     // The oldest comment we can vouch for, and only when the read ran to the
     // end of the list: from that instant onwards, nothing is missing.
@@ -260,7 +266,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       identifier: data.key,
       projectKey: data.fields.project?.key ?? extractProjectKey(data.key),
       title: data.fields.summary ?? "",
-      description: extractAdfText(data.fields.description),
+      description: adfToText(data.fields.description),
       acceptanceCriteria: extractAcceptanceCriteria(data.fields.description),
       comments,
       commentsComplete: complete,
@@ -280,8 +286,45 @@ export class JiraAdapter implements IssueTrackerAdapter {
           contentUrl: contentUrl || undefined,
         };
       }),
-      relatedTickets: relatedTicketsOf(data.fields),
+      relatedTickets: relatedTicketsOf(data.fields, children),
     };
+  }
+
+  /**
+   * An epic's child issues, which its own read does not carry: Jira lists
+   * `subtasks` on an issue, and the stories under an epic are issues whose
+   * `parent` is the epic. Planning an epic without them plans it blind to the
+   * breakdown the team already made.
+   *
+   * THE COST, AND WHO PAYS IT. One search, bounded, and only for an issue above
+   * the story level (`hierarchyLevel` 1 is the epic; a site with levels above
+   * it has the same shape). Every other ticket costs what it did: one request.
+   * This read is on the paths that re-read a ticket while its run lives (the
+   * reconciler, the watchdog, the answer poller), so an epic run pays the one
+   * search on each of those reads as well.
+   *
+   * WHAT IT CANNOT SAY. The first `MAX_CHILD_ISSUES` in rank order, the order
+   * the epic's own page lists them in, and nothing about how many more there
+   * are: this search returns no total. And it is the one part of the read that
+   * may fail without failing the read, because dispatch, cancellation and every
+   * reader of a person's answer go through here too, and an epic whose
+   * children cannot be searched (a site without a Rank field, a timeout) is
+   * still a ticket somebody can run. It then reads as it did before this
+   * existed: without its children.
+   */
+  private async childIssues(issue: any): Promise<any[]> {
+    const level = Number(issue?.fields?.issuetype?.hierarchyLevel);
+    if (!(level >= 1) || typeof issue?.key !== "string" || issue.key === "") return [];
+    const jql = `parent = "${jqlLiteral(issue.key)}" ORDER BY Rank ASC`;
+    try {
+      const data = await this.request(
+        `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=summary,status&maxResults=${MAX_CHILD_ISSUES}`,
+        { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
+      );
+      return Array.isArray(data?.issues) ? data.issues : [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -478,7 +521,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       );
       const comments = Array.isArray(data?.comments) ? data.comments : [];
       for (const comment of comments) {
-        const body = extractAdfText(comment?.body);
+        const body = adfToText(comment?.body);
         const hasMarker = body
           .split(/\r?\n/u)
           .some((line) => line.trim() === marker);
@@ -728,7 +771,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
         // Truncated here rather than by the caller: a search over a whole
         // project must not pull entire ticket bodies across the wire only for
         // them to be cut down afterwards.
-        excerpt: truncateExcerpt(extractAdfText(fields.description)),
+        excerpt: truncateExcerpt(adfToText(fields.description)),
         reporter: fields.reporter?.displayName ?? "",
         project: fields.project?.key ?? "",
         updatedAt: typeof fields.updated === "string" ? fields.updated : "",
@@ -821,36 +864,6 @@ function toAdfParagraphs(text: string) {
   return paragraphs.length > 0 ? paragraphs : [{ type: "paragraph" }];
 }
 
-/**
- * Jira's rich text as plain text.
- *
- * A BLOCKQUOTE KEEPS ITS MARKER, and it is the one node type this function
- * marks at all. Everything downstream that reads a person's words has to tell
- * what they wrote from what they quoted: the repository answer reader drops
- * quoted lines before it decides whether a reply says no
- * (`withoutQuotedText` in `engine/work-scope/answer.ts`), because every
- * sentence this system posts about a repository it left out is built around the
- * word "not". Flattened without the marker, a person clicking Jira's quote
- * button and typing "yes, add it" underneath handed us our own refusal as if it
- * were theirs, and the answer that could not be plainer was the one that never
- * worked. "> " is the marker every other channel writes, so one reader knows
- * them all.
- */
-function extractAdfText(adf: any): string {
-  if (!adf) return "";
-  if (typeof adf === "string") return adf;
-  if (adf.text) return adf.text;
-  if (adf.content) {
-    const text = adf.content.map(extractAdfText).join("\n");
-    if (adf.type !== "blockquote") return text;
-    return text
-      .split("\n")
-      .map((line: string) => `> ${line}`)
-      .join("\n");
-  }
-  return "";
-}
-
 /** Bound for a search hit's snippet. A retrieval hit exists to be judged for
  *  relevance, so the opening of the description is enough; whoever wants the
  *  whole ticket opens the link. */
@@ -880,7 +893,7 @@ const ACCEPTANCE_LABEL =
  *  description. A heading right after the label is the next section, so the
  *  label had nothing under it. */
 function extractAcceptanceCriteria(description: any): string {
-  const text = extractAdfText(description);
+  const text = adfToText(description);
   const label = ACCEPTANCE_LABEL.exec(text);
   if (!label) return "";
   const rest = text.slice(label.index + label[0].length).replace(/^\s+/, "");
@@ -891,9 +904,10 @@ function extractAcceptanceCriteria(description: any): string {
 
 /**
  * The tickets one issue read names, in the order the port promises: the
- * parent, then the subtasks as the team ranked them, then every link as Jira
- * listed it. An entry without a key is skipped, because a line naming a ticket
- * nobody can find is worse than no line.
+ * parent, then the subtasks as the team ranked them, then an epic's child
+ * issues (`childIssues`, less the subtasks already listed), then every link as
+ * Jira listed it. An entry without a key is skipped, because a line naming a
+ * ticket nobody can find is worse than no line.
  *
  * A link is one row seen from both ends, and Jira says which end this ticket
  * is by which side it fills in: the other issue under `outwardIssue` makes
@@ -901,22 +915,29 @@ function extractAcceptanceCriteria(description: any): string {
  * `inwardIssue` of the inward one ("this is blocked by that"). That is the
  * phrase Jira itself prints beside the link on this ticket's page.
  */
-function relatedTicketsOf(fields: any): RelatedTicket[] {
+function relatedTicketsOf(fields: any, children: readonly any[]): RelatedTicket[] {
   const related: RelatedTicket[] = [];
   const add = (issue: any, relation: unknown) => {
     const key = issue?.key;
     if (typeof key !== "string" || key === "") return;
+    // A subtask of an epic is also one of its children, so the search finds
+    // it again: one line per ticket and relation. A child this ticket also
+    // links to keeps both lines, because the link says something the child
+    // line does not ("blocks").
+    const phrase = typeof relation === "string" ? relation : "";
+    if (related.some((entry) => entry.key === key && entry.relation === phrase)) return;
     related.push({
       key,
       title: typeof issue.fields?.summary === "string" ? issue.fields.summary : "",
       status: typeof issue.fields?.status?.name === "string" ? issue.fields.status.name : "",
-      relation: typeof relation === "string" ? relation : "",
+      relation: phrase,
     });
   };
   if (fields?.parent) add(fields.parent, RELATED_TICKET_PARENT);
   for (const subtask of Array.isArray(fields?.subtasks) ? fields.subtasks : []) {
     add(subtask, RELATED_TICKET_CHILD);
   }
+  for (const child of children) add(child, RELATED_TICKET_CHILD);
   for (const link of Array.isArray(fields?.issuelinks) ? fields.issuelinks : []) {
     if (link?.outwardIssue) add(link.outwardIssue, link.type?.outward ?? link.type?.name);
     else if (link?.inwardIssue) add(link.inwardIssue, link.type?.inward ?? link.type?.name);

@@ -358,7 +358,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "tickets.get": {
     description:
-      "Fetch a ticket's fields, status, labels and (optionally) its comments. With `includeComments`, `commentsLimit` (default 20) keeps the NEWEST comments, listed in the order they were written, and `commentsTruncated` says older ones were left out; `commentCount` is the total. Every `createdAt` is ISO 8601 in UTC.",
+      "Fetch a ticket's fields, status, labels, related tickets and (optionally) its comments. `relatedTickets` lists the ticket's parent, the tickets under it (subtasks, and an epic's child issues) and its links, each with its key, title, status and `relation`, the words that complete \"this ticket ... <key>\" (\"is a child of\", \"is the parent of\", \"blocks\"); only their titles, never their descriptions. It is null when the tracker does not report relations, and an empty list when it says there are none. With `includeComments`, `commentsLimit` (default 20) keeps the NEWEST comments, listed in the order they were written, and `commentsTruncated` says older ones were left out; `commentCount` is the total. Every `createdAt` is ISO 8601 in UTC.",
     inputSchema: z
       .object({
         ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),

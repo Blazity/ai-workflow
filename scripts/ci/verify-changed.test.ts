@@ -264,6 +264,37 @@ test("editing an integration's manifest pins the connection shape; editing only 
   );
 });
 
+// Red when: a file that composes a prompt changes and the plan runs only that
+// file's own tests, so a committed golden prompt goes stale on this machine
+// and only CI notices (PR #538: sandbox/context.ts moved, golden.test.ts was
+// never planned).
+test("editing a prompt source plans the prompt golden and oracle tests", () => {
+  for (const path of [
+    "apps/worker/src/sandbox/context.ts",
+    "packages/prompts/prompt-parts.ts",
+    "apps/worker/src/engine/helpers/effective-prompt.ts",
+    "apps/worker/src/engine/repository-discovery/runner.ts",
+    "apps/worker/src/engine/blocks/generic-agent/execute.ts",
+    "apps/worker/src/test-support/prompt-oracle/__golden__/implementation.parts.txt",
+  ]) {
+    const planned = commands([path]);
+    for (const oracle of ["prompt-oracle/golden.test.ts", "prompt-oracle/oracle.test.ts"]) {
+      assert.equal(
+        planned.some((command) => command.includes(oracle)),
+        true,
+        `${path} -> ${planned.join(", ")}`,
+      );
+    }
+  }
+
+  const unrelated = commands(["apps/worker/src/sandbox/attachments.ts"]);
+  assert.equal(
+    unrelated.some((command) => command.includes("prompt-oracle/")),
+    false,
+    unrelated.join(", "),
+  );
+});
+
 test("a workflow graph package change plans the worker guards and the suites that import the package", () => {
   const planned = commands(["packages/workflow-graph/v2-bindings.ts"]).find(
     (command) => command.includes("vitest run"),

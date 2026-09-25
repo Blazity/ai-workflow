@@ -14,6 +14,7 @@ import type {
 } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { RunStartWorkScope } from "../steps/run-start-settings.js";
+import type { RelatedTicket } from "../../adapters/issue-tracker/types.js";
 import type { TicketTextReading } from "../work-scope/context.js";
 import type { RepositoryMapFacts } from "../../repository-map/map.js";
 
@@ -231,6 +232,7 @@ export const preSandboxTicketInputFields = [
   "acceptanceCriteria",
   "comments",
   "labels",
+  "relatedTickets",
 ] as const;
 
 export interface PreSandboxStepContext {
@@ -250,6 +252,10 @@ export interface PreSandboxStepContext {
       createdAt?: string;
     }>;
     labels?: string[];
+    /** The ticket's parent, subtasks and links, as the run read them. Absent
+     *  when the tracker does not report them, and on a run recorded before
+     *  this field reached the step. */
+    relatedTickets?: RelatedTicket[];
   };
   run: {
     branchName: string;

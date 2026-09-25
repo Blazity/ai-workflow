@@ -30,6 +30,7 @@ import {
   researchPlanContextParts,
   reviewContextParts,
   type FixContextInput,
+  type ImplementationContextInput,
   type PreSandboxPromptAddition,
   type ResearchPlanContextInput,
 } from "../../sandbox/context.js";
@@ -103,6 +104,25 @@ function withoutFalsePreSandboxLabel(
     cursor = at + unlabelled.length;
   }
   return result;
+}
+
+/**
+ * THE THIRD DECLARED CHANGE: an implementation agent with no plan gets the
+ * ticket's description. The base never sent it to implementation, because the
+ * plan was written from it; with an empty plan nothing was written from it,
+ * and the agent was left with the title alone. So the section the live text
+ * now carries, and only on those rows, is written into the base's text at the
+ * one place it goes (before the acceptance criteria), and every other byte of
+ * an implementation send stays pinned. Where a plan is present the description
+ * is still not sent: it is a zero-byte withheld part, which this text comparison
+ * cannot see and `sandbox/context.test.ts` holds.
+ */
+function withDescriptionWhereNoPlanStandsIn(text: string, input: ImplementationContextInput): string {
+  if (input.researchPlanMarkdown.trim() !== "") return text;
+  const anchor = "\n## Acceptance Criteria\n\n";
+  const at = text.indexOf(anchor);
+  if (at < 0) throw new Error("the oracle text has no Acceptance Criteria section to put the description before");
+  return `${text.slice(0, at)}\n## Description\n\n${input.ticket.description}\n${text.slice(at)}`;
 }
 
 const midRun = (additions: readonly PreSandboxPromptAddition[] | undefined) =>
@@ -322,11 +342,17 @@ describe("prompt oracle: the composers render the bytes they rendered at the bas
 
   it("implementation", () => {
     const oracle = (input: Parameters<typeof base.assembleImplementationContext>[0]) =>
-      withoutFalsePreSandboxLabel(
-        base.assembleImplementationContext(input),
-        midRun(input.preSandboxAdditions),
+      withDescriptionWhereNoPlanStandsIn(
+        withoutFalsePreSandboxLabel(
+          base.assembleImplementationContext(input),
+          midRun(input.preSandboxAdditions),
+        ),
+        input as ImplementationContextInput,
       );
     const rows = implementationRows();
+    // Rows with no plan and rows with one, or the rewrite above pins nothing.
+    expect(rows.some((row) => row.input.researchPlanMarkdown.trim() === "")).toBe(true);
+    expect(rows.some((row) => row.input.researchPlanMarkdown.trim() !== "")).toBe(true);
     expect(mismatchesOf(rows, oracle, assembleImplementationContext)).toEqual([]);
     expect(
       mismatchesOf(rows, oracle, (input) => joinPromptParts(implementationContextParts(input))),
@@ -401,7 +427,12 @@ function partProblems(parts: readonly EffectivePromptPart[]): string[] {
     }
     if (entry.withheld) {
       if (entry.content !== "") problems.push(`withheld "${entry.id}" carries text`);
-      if (entry.origin.kind !== "platform") problems.push(`withheld "${entry.id}" is not a platform rule`);
+      // Our own rule held back, or a field of the ticket another part stands in
+      // for (the description, where the plan was written from it). Never text
+      // from anywhere else: nothing else is ours to hold back.
+      if (entry.origin.kind !== "platform" && entry.origin.kind !== "ticket") {
+        problems.push(`withheld "${entry.id}" is neither a platform rule nor a ticket field`);
+      }
     } else if (entry.cutBeforeSend === "whole") {
       if (entry.content !== "") problems.push(`"${entry.id}" is cut whole and carries text`);
     } else if (entry.content.trim().length === 0) {

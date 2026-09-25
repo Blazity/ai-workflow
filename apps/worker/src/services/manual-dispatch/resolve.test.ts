@@ -877,7 +877,7 @@ describe("manual dispatch against a definition repository pin", () => {
       ).resolves.toMatchObject({ status: "none", runId: "run-published" });
     });
 
-    it("asks for workflow ownership, and reserves the pull request, under the provider's spelling", async () => {
+    it("asks for workflow ownership under the provider's spelling, and reserves the pull request under its one key", async () => {
       mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
         deployed("workflow_owned", {}),
       );
@@ -891,7 +891,9 @@ describe("manual dispatch against a definition repository pin", () => {
           dispatchInput: { kind: "pull_request", url: pasted },
           repositoryCatalog,
         }),
-      ).resolves.toMatchObject({ subjectKey: "pr:github:Acme/API#42" });
+      // The key the provider's webhook claims for the same pull request, so a
+      // manual run and an automatic one cannot both hold it.
+      ).resolves.toMatchObject({ subjectKey: "pr:github:acme/api#42" });
       expect(mocks.findWorkflowOwnedPullRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ repoPath: "Acme/API", prNumber: 42 }),

@@ -4,6 +4,7 @@
 export {
   IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
+  RELATED_TICKET_CHILD,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type RelatedTicket,

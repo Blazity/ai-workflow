@@ -6,7 +6,7 @@
  * trackers issue is truncated rather than sent to the database, and a blank one
  * names no ticket, which is the empty state and not an error.
  */
-import type { Run, RunStatus, TicketRunsResponse } from "@shared/contracts";
+import { canonicalTicketKey, type Run, type RunStatus, type TicketRunsResponse } from "@shared/contracts";
 import {
   connectedDashboardRunQueries,
   type DashboardRunRow,
@@ -74,8 +74,10 @@ function mapTicketRun(row: DashboardRunRow, now: Date, ticketLinks: TicketLinks)
 }
 
 /** The ticket key a raw path segment names, empty when it names none. */
+/** The ticket key a dashboard path carries, in the spelling runs record it
+ *  under (`canonicalTicketKey`), so `/tickets/awp-274` finds AWP-274's runs. */
 export function ticketKeyFromPathSegment(raw: string | undefined): string {
-  return raw ? decodeURIComponent(raw).trim().slice(0, MAX_TICKET_KEY_LENGTH) : "";
+  return raw ? canonicalTicketKey(decodeURIComponent(raw)).slice(0, MAX_TICKET_KEY_LENGTH) : "";
 }
 
 export async function listTicketRuns(ticketKey: string): Promise<TicketRunsPayload> {

@@ -12,6 +12,7 @@ import type {
   ResearchRepository,
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
+import type { RelatedTicket } from "../../../adapters/issue-tracker/types.js";
 import type { PreviousBranchGone } from "../../../sandbox/context.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import { WORKSPACE_NARROWING_CEILING } from "../../pre-sandbox/types.js";
@@ -94,6 +95,8 @@ interface PreSandboxTicketContext {
       createdAt?: string;
     }>;
     labels: string[];
+    /** Absent when the tracker does not report them. */
+    relatedTickets?: RelatedTicket[];
   };
   run: { branchName: string };
   repositoryScope?: WorkflowRepositoryScope;
@@ -1212,6 +1215,9 @@ export async function ensureWorkspace(
           // has one reader, and it rides `clarification` below.
           comments: ctx.ticket.comments,
           labels: ctx.ticket.labels,
+          // The subtask titles are often the one place a parent says which
+          // repository each part changes (`ticketTextScan`).
+          ...(ctx.ticket.relatedTickets ? { relatedTickets: ctx.ticket.relatedTickets } : {}),
         },
         run: { branchName: ctx.branchName },
         repositoryAccess: ctx.repositories,

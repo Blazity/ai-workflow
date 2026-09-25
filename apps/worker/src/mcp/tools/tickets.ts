@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canonicalTicketKey } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
@@ -33,6 +34,11 @@ type TicketGetData = {
   // anyway. id/filename/mimeType/size is enough for the agent to know what
   // exists.
   attachments: Array<{ id: string; filename: string; mimeType: string; size: number }>;
+  // The parent, the subtasks (an epic's child issues too) and the links, as
+  // the run's own read of the ticket holds them and the planning prompt shows
+  // them. Null when the tracker does not report them, which is not the same as
+  // an empty list: that one means the tracker said there are none.
+  relatedTickets: Array<{ key: string; title: string; status: string; relation: string }> | null;
 };
 
 type ListRunsData = {
@@ -103,6 +109,13 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
               mimeType: a.mimeType,
               size: a.size,
             })),
+            relatedTickets:
+              ticket.relatedTickets?.map((related) => ({
+                key: related.key,
+                title: related.title,
+                status: related.status,
+                relation: related.relation,
+              })) ?? null,
           };
         },
       });
@@ -131,7 +144,12 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           // would make a sliced-after-the-fact page carry a runCount wider
           // than what's actually returned. Reading workflow_runs directly
           // keeps the LIMIT in the query and this tool's page honest.
-          const rows = await deps.services.listTicketRunPage(input.ticketKey, limit);
+          // Runs record the key in its one spelling; a key typed in another
+          // case listed no runs for a ticket tickets.get could read.
+          const rows = await deps.services.listTicketRunPage(
+            canonicalTicketKey(input.ticketKey),
+            limit,
+          );
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;
