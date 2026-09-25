@@ -12,6 +12,7 @@ import type {
   ResearchRepository,
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
+import type { RelatedTicket } from "../../../adapters/issue-tracker/types.js";
 import type { PreviousBranchGone } from "../../../sandbox/context.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import { WORKSPACE_NARROWING_CEILING } from "../../pre-sandbox/types.js";
@@ -94,6 +95,8 @@ interface PreSandboxTicketContext {
       createdAt?: string;
     }>;
     labels: string[];
+    /** Absent when the tracker does not report them. */
+    relatedTickets?: RelatedTicket[];
   };
   run: { branchName: string };
   repositoryScope?: WorkflowRepositoryScope;
@@ -311,32 +314,50 @@ async function blockApprovedRepositoryScopeStep(
 }
 blockApprovedRepositoryScopeStep.maxRetries = 0;
 
+/** One repository whose earlier workflow branch was found deleted. */
+interface FreshStart {
+  repository: Pick<SelectedRepository, "provider" | "repoPath" | "defaultBranch">;
+  gone: PreviousBranchGone;
+}
+
+/**
+ * The line that says this ticket was already told about this deleted branch.
+ * Keyed on the repository, the branch and the pull request it carried: a
+ * planning run and the implementation run after its approval find the same
+ * branch gone and must not say it twice, while a later pull request on a
+ * branch of the same name that went the same way is news again. The ticket
+ * is the key's other half, because the lookup reads only its comments.
+ */
+function freshStartKey({ repository, gone }: FreshStart): string {
+  return `Fresh start key: ${repository.provider}:${repository.repoPath} ${gone.branchName} pr=${gone.pr?.id ?? "none"}`;
+}
+
 /**
  * The sentence the ticket gets when an earlier run's branch was deleted: which
- * branch, in which repository, and where this run starts instead.
+ * branch, in which repository, and where this run starts instead. Each key sits
+ * on a line of its own, the shape an exact line lookup finds.
  */
-function freshStartComment(
-  starts: ReadonlyArray<{
-    repository: Pick<SelectedRepository, "provider" | "repoPath" | "defaultBranch">;
-    gone: PreviousBranchGone;
-  }>,
-): string {
+function freshStartComment(starts: readonly FreshStart[]): string {
   const lines = starts.map(({ repository, gone }) => {
     const pr = gone.pr ? ` Pull request #${gone.pr.id} (${gone.pr.url}) is not reused.` : "";
     return `- ${repository.repoPath}: branch ${gone.branchName} no longer exists, so this run starts from ${repository.defaultBranch}.${pr}`;
   });
   return [
-    "Starting fresh: the branch from an earlier attempt on this ticket was deleted.",
-    ...lines,
-  ].join("\n");
+    ["Starting fresh: the branch from an earlier attempt on this ticket was deleted.", ...lines].join("\n"),
+    starts.map(freshStartKey).join("\n"),
+  ].join("\n\n");
 }
 
 /** Best effort: a tracker that refuses the comment must not stop a run that
  *  can do its work, so the failure is logged and swallowed. No retries, so a
- *  slow tracker cannot post the same notice twice. */
+ *  slow tracker cannot post the same notice twice. A repository the ticket was
+ *  already told about is left out, and when that is all of them nothing is
+ *  posted. A ticket whose comments cannot be read is told anyway: a repeated
+ *  notice costs a line, a missing one leaves a person wondering where their
+ *  pull request went. */
 async function blockAnnounceFreshStartStep(
   ticketId: string,
-  body: string,
+  starts: readonly FreshStart[],
   owner: import("../../../db/repositories/active-runs.js").ActiveRunOwner,
 ): Promise<void> {
   "use step";
@@ -349,10 +370,38 @@ async function blockAnnounceFreshStartStep(
     const { issueTrackerIfConnected } = await import(
       "../../support/connected-issue-tracker.js"
     );
+    const { hasAnalysisComment: hasMarkerLine } = await import(
+      "../../support/run-analysis-report.js"
+    );
     const tracker = issueTrackerIfConnected(await createAdapters());
     if (!tracker) return;
+    let ticket: unknown;
+    const alreadyTold = async (key: string): Promise<boolean> => {
+      try {
+        if (tracker.findCommentByMarker) {
+          return (await tracker.findCommentByMarker(ticketId, key)) != null;
+        }
+        ticket ??= await tracker.fetchTicket(ticketId);
+        return hasMarkerLine(ticket, key);
+      } catch (err) {
+        if (isRunControlError(err)) throw err;
+        logger.warn(
+          { ticketId, key, err: err instanceof Error ? err.message : String(err) },
+          "fresh_start_comment_lookup_failed",
+        );
+        return false;
+      }
+    };
+    const untold: FreshStart[] = [];
+    for (const start of starts) {
+      if (!(await alreadyTold(freshStartKey(start)))) untold.push(start);
+    }
+    if (untold.length === 0) {
+      logger.info({ ticketId }, "fresh_start_comment_skipped_duplicate");
+      return;
+    }
     await assertConnectedActiveRunOwner(owner);
-    await tracker.postComment(ticketId, body);
+    await tracker.postComment(ticketId, freshStartComment(untold));
   } catch (err) {
     if (isRunControlError(err)) throw err;
     logger.warn(
@@ -1166,6 +1215,9 @@ export async function ensureWorkspace(
           // has one reader, and it rides `clarification` below.
           comments: ctx.ticket.comments,
           labels: ctx.ticket.labels,
+          // The subtask titles are often the one place a parent says which
+          // repository each part changes (`ticketTextScan`).
+          ...(ctx.ticket.relatedTickets ? { relatedTickets: ctx.ticket.relatedTickets } : {}),
         },
         run: { branchName: ctx.branchName },
         repositoryAccess: ctx.repositories,
@@ -1381,7 +1433,14 @@ export async function ensureWorkspace(
     if (freshStarts.length > 0) {
       await blockAnnounceFreshStartStep(
         ctx.ticket.identifier,
-        freshStartComment(freshStarts),
+        freshStarts.map(({ repository, gone }) => ({
+          repository: {
+            provider: repository.provider,
+            repoPath: repository.repoPath,
+            defaultBranch: repository.defaultBranch,
+          },
+          gone,
+        })),
         {
           subjectKey: ctx.entry.subjectKey,
           ownerToken: ctx.entry.ownerToken,

@@ -593,6 +593,69 @@ test("the browser's Back from an unsaved draft asks, and a no puts the screen's 
   );
 });
 
+// Red when: the shell records the entry to put back only when it renders, and
+// nothing re-renders it when a screen moves its own address in place (a
+// workflow switch in the editor, a repository tab). A declined Back then put
+// back the address from before the move, so a reload opened the wrong workflow.
+test("a Back declined after the address moved in place puts back the address on screen now", (t) => {
+  beginTest(t);
+  resetUnsavedSettings();
+  t.after(() => resetUnsavedSettings());
+  locationStub.href = "http://localhost/editor?definition=52";
+  history.pushed.length = 0;
+  const router = { refresh() {}, push() {}, replace() {}, back() {}, forward() {}, prefetch() {} };
+  const session = {
+    organizationName: "Org",
+    actorLabel: "me",
+    role: "owner",
+    canManageUsers: true,
+    canEditChecks: true,
+    canEditWorkflows: true,
+    canDispatchWorkflows: true,
+  };
+  // One element for the whole test, so only a change the shell itself reads
+  // can make it render again.
+  const shell = (
+    <CockpitShell session={session as never}>
+      <UnsavedDraftScreen />
+    </CockpitShell>
+  );
+  let moveAddress!: (search: string) => void;
+  function AddressBar() {
+    const [search, setSearch] = React.useState("definition=52");
+    moveAddress = setSearch;
+    return (
+      <SearchParamsContext.Provider value={new URLSearchParams(search) as never}>
+        {shell}
+      </SearchParamsContext.Provider>
+    );
+  }
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={router as never}>
+        <PathnameContext.Provider value="/editor">
+          <AddressBar />
+        </PathnameContext.Provider>
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+
+  locationStub.href = "http://localhost/editor?definition=14";
+  act(() => moveAddress("definition=14"));
+  makeDirty(renderer.root);
+
+  confirmAnswer = false;
+  const back = pressBrowserBack();
+  assert.equal(back.reachedRouter, false);
+  assert.deepEqual(
+    history.pushed.map((entry) => entry.url),
+    ["http://localhost/editor?definition=14"],
+    "the address on screen when Back was pressed is the one put back",
+  );
+});
+
 test("the browser's Back from a clean screen is the router's, and nobody is asked", (t) => {
   locationStub.href = "http://localhost/repositories";
   history.pushed.length = 0;

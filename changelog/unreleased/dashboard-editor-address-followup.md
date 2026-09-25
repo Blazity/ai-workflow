@@ -1,0 +1,2 @@
+- The editor puts the open workflow in the address bar at once, and a declined Back keeps the workflow on screen, so a reload or a copied link opens the same one.
+- On a phone, nested values in the Logs tab go under their key instead of squeezing into narrow columns.

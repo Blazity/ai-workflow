@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   env: {
@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   resolveChecksProvisioningStep: vi.fn(),
   runRepositorySetup: vi.fn(),
   postComment: vi.fn(),
+  findCommentByMarker: vi.fn(),
+  fetchTicket: vi.fn(),
+  trackerHasMarkerLookup: true,
   assertConnectedActiveRunOwner: vi.fn(),
 }));
 
@@ -99,7 +102,16 @@ vi.mock("../../../db/repositories/runs.js", () => ({
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: { registerSandbox: mocks.registerSandbox },
-    issueTrackerResolution: { ok: true, adapter: { postComment: mocks.postComment } },
+    issueTrackerResolution: {
+      ok: true,
+      adapter: {
+        postComment: mocks.postComment,
+        fetchTicket: mocks.fetchTicket,
+        ...(mocks.trackerHasMarkerLookup
+          ? { findCommentByMarker: mocks.findCommentByMarker }
+          : {}),
+      },
+    },
   }),
 }));
 vi.mock("../../../db/repositories/active-runs.js", () => ({
@@ -433,6 +445,7 @@ describe("prepare_workspace execute", () => {
     expect(body).toContain("ai-workflow/awp-271 no longer exists");
     expect(body).toContain("starts from main");
     expect(body).toContain("Pull request #18");
+    expect(body.split("\n")).toContain("Fresh start key: github:acme/api ai-workflow/awp-271 pr=18");
     if (result.kind !== "next") throw new Error("expected next");
     expect(result.output).toMatchObject({
       freshStarts: [
@@ -443,6 +456,91 @@ describe("prepare_workspace execute", () => {
           previousPullRequest: 18,
         },
       ],
+    });
+  });
+
+  describe("the fresh start notice, once per ticket and deleted branch", () => {
+    /** The ticket as the tracker holds it: every comment posted so far. */
+    let ticketComments: string[];
+
+    beforeEach(() => {
+      ticketComments = [];
+      mocks.trackerHasMarkerLookup = true;
+      mocks.postComment.mockImplementation(async (_ticket: string, body: string) => {
+        ticketComments.push(body);
+        return null;
+      });
+      // What the Jira adapter does: an exact line match over every comment.
+      mocks.findCommentByMarker.mockImplementation(async (_ticket: string, marker: string) =>
+        ticketComments.some((body) => body.split("\n").some((line) => line.trim() === marker))
+          ? "https://jira/browse/AWT-1?focusedCommentId=1"
+          : null,
+      );
+      mocks.fetchTicket.mockImplementation(async () => ({
+        comments: ticketComments.map((body) => ({ body })),
+      }));
+    });
+
+    afterEach(() => {
+      mocks.trackerHasMarkerLookup = true;
+    });
+
+    function branchGoneRun(prId: number | null) {
+      mocks.runPreSandboxPhase.mockResolvedValue({
+        status: "continue",
+        promptAdditions: { research: [], implementation: [], review: [] },
+        selectedRepositories: [repo],
+      });
+      mocks.blockFetchPrContextsStep.mockResolvedValue([
+        {
+          repository: repo,
+          prComments: [],
+          checkResults: [],
+          hasConflicts: false,
+          previousBranchGone: {
+            branchName: "ai-workflow/awp-271",
+            ...(prId === null
+              ? {}
+              : { pr: { id: prId, url: `https://github.com/acme/api/pull/${prId}` } }),
+          },
+        },
+      ]);
+      return ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {});
+    }
+
+    // Definition 14: the planning run finds the branch gone, then the
+    // implementation run after plan approval finds the same branch gone again.
+    it("tells the person once across the planning and the implementation run", async () => {
+      expect((await branchGoneRun(18)).kind).toBe("next");
+      expect((await branchGoneRun(18)).kind).toBe("next");
+
+      expect(ticketComments).toHaveLength(1);
+      expect(ticketComments[0]).toContain("ai-workflow/awp-271 no longer exists");
+    });
+
+    it("gives the same once-only answer on a tracker that can only read the ticket", async () => {
+      mocks.trackerHasMarkerLookup = false;
+
+      await branchGoneRun(18);
+      await branchGoneRun(18);
+
+      expect(ticketComments).toHaveLength(1);
+    });
+
+    it("tells the person again when a later pull request on that branch went the same way", async () => {
+      await branchGoneRun(18);
+      await branchGoneRun(19);
+
+      expect(ticketComments).toHaveLength(2);
+      expect(ticketComments[1]).toContain("Pull request #19");
+    });
+
+    it("still tells the person when the tracker cannot say what the ticket carries", async () => {
+      mocks.findCommentByMarker.mockRejectedValue(new Error("Jira 503"));
+
+      await branchGoneRun(18);
+
+      expect(ticketComments).toHaveLength(1);
     });
   });
 
@@ -781,6 +879,26 @@ describe("prepare_workspace execute", () => {
       resolves: "repository_selection",
     });
     expect(JSON.stringify(input.ticket.comments)).not.toContain("Use github:acme/api");
+  });
+
+  // The subtask titles are often the one place a parent names the repository
+  // each part changes, and the path scan reads only what this step hands it.
+  it("hands the selection the tickets the run read around this one", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const relatedTickets = [
+      { key: "AWT-2", title: "Refuse expired codes in acme/api", status: "To Do", relation: "is the parent of" },
+    ];
+    const ctx = makeCtx({ sandboxId: null });
+    ctx.ticket = { ...ctx.ticket, relatedTickets };
+
+    await (execute as any)(makeNode("prepare_workspace"), {}, ctx, {});
+
+    expect(mocks.runPreSandboxPhase.mock.calls[0]![0].ticket.relatedTickets).toEqual(relatedTickets);
   });
 
   it("keeps an answer the record declined to attribute out of the selection scan and the routing memory", async () => {
