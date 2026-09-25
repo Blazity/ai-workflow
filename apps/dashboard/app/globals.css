@@ -131,7 +131,6 @@
 
   /* ── ANIMATIONS (utility class generated as e.g. animate-ck-pulse) ── */
   --animate-ck-pulse: ck-pulse 1.4s ease-in-out infinite;
-  --animate-ck-slide: ck-slide var(--motion-slow) var(--ease-standard);
   --animate-ck-slide-up: ck-slide-up var(--motion-slow) var(--ease-standard);
   --animate-ck-shimmer: ck-shimmer 1.6s ease-in-out infinite;
   --animate-ck-march: none;
@@ -226,14 +225,6 @@ body {
 @keyframes ck-march-dash {
   to {
     stroke-dashoffset: -16;
-  }
-}
-@keyframes ck-slide {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
   }
 }
 @keyframes ck-slide-up {

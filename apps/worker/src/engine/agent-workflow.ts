@@ -4958,18 +4958,14 @@ async function agentWorkflowBody(
                 agentProtocol: safeReplayAgentProtocolMetadata(error.diagnostic),
               },
             });
-            if (stdoutTail) {
-              void observation?.emit({
-                kind: "log",
-                value: { stream: "stdout", tail: stdoutTail },
-              });
-            }
-            if (stderrTail) {
-              void observation?.emit({
-                kind: "log",
-                value: { stream: "stderr", tail: stderrTail },
-              });
-            }
+            v2RunObservation?.recordFailureTails(
+              {
+                nodeId: errorState.nodeId,
+                attempt: errorState.attempt,
+                activationScopeId,
+              },
+              { stdoutTail, stderrTail },
+            );
           }
           await logWorkflowExecutionErrorStep(
             safeWorkflowExecutionLogEvent({

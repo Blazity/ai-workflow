@@ -7,6 +7,7 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
+import { runKpiCutoff, runKpisFromRows } from "../../engine/overview-aggregates.js";
 import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 import {
   connectedDashboardRunQueries,
@@ -146,11 +147,6 @@ function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
-function deltaPct(current: number, previous: number): number {
-  if (previous === 0) return current > 0 ? 100 : 0;
-  return Math.round(((current - previous) / previous) * 1000) / 10;
-}
-
 type SparkSpec = { start: number; end: number; n: number };
 function sparkSpec(window: TimeWindow, now: Date, times: number[]): SparkSpec {
   const end = now.getTime();
@@ -172,12 +168,6 @@ function countBuckets(times: number[], spec: SparkSpec): number[] {
   return buckets;
 }
 
-function p95Buckets(items: Array<{ t: number; dur: number }>, spec: SparkSpec): number[] {
-  const buckets: number[][] = Array.from({ length: spec.n }, () => []);
-  for (const item of items) buckets[bucketIndex(item.t, spec)].push(item.dur);
-  return buckets.map((values) => percentile(values, 95));
-}
-
 export async function runKpis(
   options: { db: Db; window: TimeWindow; now: Date },
 ): Promise<Omit<KpisResponse, "generatedAt">> {
@@ -192,38 +182,34 @@ async function runKpisWithQueries(
   queries: Queries,
   options: { window: TimeWindow; now: Date },
 ): Promise<Omit<KpisResponse, "generatedAt">> {
-  const { cutoff, prevCutoff } = bounds(options.window, options.now);
-  const rows = await queries.listKpis(prevCutoff ?? cutoff);
-  const cutMs = cutoff?.getTime() ?? -Infinity;
-  const prevMs = prevCutoff?.getTime() ?? -Infinity;
-  const enriched = rows.map((row) => ({
-    t: (row.startedAt ?? row.firstSeenAt).getTime(),
-    status: row.status,
-    dur: row.durationSec,
-    cost: row.costUsd ?? 0,
-  }));
-  const current = enriched.filter((row) => row.t >= cutMs);
-  const hasPrevious = cutoff !== null && prevCutoff !== null;
-  const previous = hasPrevious
-    ? enriched.filter((row) => row.t >= prevMs && row.t < cutMs)
-    : [];
-  const done = (set: typeof enriched) => set
-    .filter((row) => row.status === "success" && row.dur !== null)
-    .map((row) => ({ t: row.t, dur: row.dur as number }));
-  const currentDone = done(current);
-  const previousDone = done(previous);
-  const currentP95 = percentile(currentDone.map((row) => row.dur), 95);
-  const currentFailed = current.filter((row) => row.status === "failed");
-  const previousFailed = previous.filter((row) => row.status === "failed");
-  const currentCost = sum(current.map((row) => row.cost));
-  const previousCost = sum(previous.map((row) => row.cost));
-  const spec = sparkSpec(options.window, options.now, current.map((row) => row.t));
-  return {
-    runs24h: { value: current.length, deltaPct: hasPrevious ? deltaPct(current.length, previous.length) : 0, spark: countBuckets(current.map((row) => row.t), spec) },
-    p95: { valueSec: currentP95, deltaSec: hasPrevious ? currentP95 - percentile(previousDone.map((row) => row.dur), 95) : 0, spark: p95Buckets(currentDone, spec) },
-    errors24h: { value: currentFailed.length, deltaPct: hasPrevious ? deltaPct(currentFailed.length, previousFailed.length) : 0, spark: countBuckets(currentFailed.map((row) => row.t), spec) },
-    cost24h: { value: currentCost, deltaPct: hasPrevious ? deltaPct(currentCost, previousCost) : 0 },
-  };
+  const rows = await queries.listKpis(runKpiCutoff(options.window, options.now));
+  return runKpisFromRows(rows, options.window, options.now);
+}
+
+/** The gateway a harness reaches its models through. */
+const HARNESS_GATEWAYS: Readonly<Record<string, string>> = {
+  claude: "anthropic",
+  codex: "openai",
+};
+
+/**
+ * The gateways a workflow's runs in the window were launched on, from the
+ * harness manifests they recorded ("anthropic + openai" when both), or empty
+ * when no run says. A workflow row covers every stored definition and each of
+ * those picks its own harness per block, so no single configured default
+ * describes it: naming the built-in default showed "openai" beside runs that
+ * executed on Claude.
+ */
+function observedGateway(providersPerRun: readonly unknown[]): string {
+  const gateways = new Set<string>();
+  for (const providers of providersPerRun) {
+    if (!Array.isArray(providers)) continue;
+    for (const provider of providers) {
+      const gateway = typeof provider === "string" ? HARNESS_GATEWAYS[provider] : undefined;
+      if (gateway) gateways.add(gateway);
+    }
+  }
+  return [...gateways].sort().join(" + ");
 }
 
 export interface WorkflowAggOptions {
@@ -250,12 +236,19 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
   const latestById = new Map(latestRows.map((row) => [row.workflowId, row]));
   const rows: WorkflowRow[] = options.registry.map((workflow) => {
     const selected = windowRows.filter((row) => row.workflowId === workflow.id);
-    const durations = selected.map((row) => row.durationSec).filter((value): value is number => value !== null);
+    const gateway = observedGateway(selected.map((row) => row.harnessProviders));
+    // Latency of successful runs, as the Overview's p95 tile reads it: a run
+    // that failed at its first block would make the workflow look fast.
+    const durations = selected
+      .filter((row) => coerceStatus(row.status) === "success")
+      .map((row) => row.durationSec)
+      .filter((value): value is number => value !== null);
     const failed = selected.filter((row) => coerceStatus(row.status) === "failed").length;
     const times = selected.map((row) => (row.startedAt ?? row.firstSeenAt).getTime());
     const latest = latestById.get(workflow.id);
     return {
       ...workflow,
+      gateway,
       runs24h: selected.length,
       p50: durations.length > 0 ? percentile(durations, 50) : null,
       p95: durations.length > 0 ? percentile(durations, 95) : null,

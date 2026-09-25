@@ -9,9 +9,11 @@ export {
   ApprovalStoreError,
   approveApproval,
   listDashboardApprovals,
+  readDashboardApproval,
   rejectApproval,
 } from "./approval-decisions.js";
 export type {
+  ApprovalDecider,
   ApprovalDecisionOutcome,
 } from "./approval-decisions.js";
 export {

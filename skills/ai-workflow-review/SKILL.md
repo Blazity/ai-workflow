@@ -31,8 +31,9 @@ A finding you cannot place in this table is a `Medium`.
 
 ## Comment discipline
 
-Emit at most 10 comments, of which at most 3 may be `Blocker` or `High`. Anchor
-every comment to a file and line. Only the diff's additions are the author's
+Emit at most 10 comments, the most severe first when you have more. Give every
+finding the level the table above assigns it. Anchor every comment to a file and
+line. Only the diff's additions are the author's
 responsibility: a pre-existing violation may be cited as "do not copy this
 pattern", never filed as a defect of this change. Reporting no findings is a
 valid and expected outcome.
@@ -45,7 +46,9 @@ transitive import that pulls one in compiles locally, passes vitest and passes a
 local nitro build, then fails the Vercel build alone.
 
 `[High]` Detect: an import of a Node built-in, or of a module that wraps one,
-added at the top level of a file under `apps/worker/src/workflows/`. The fix is
+added at the top level of a module that workflow scope loads (a file with a
+`"use workflow"` function, such as `apps/worker/src/engine/agent-workflow.ts`,
+or a module it imports), rather than inside a `"use step"` function. The fix is
 to move the call inside the step that needs it.
 
 ## 2. The Neon HTTP driver has no transactions
@@ -98,7 +101,7 @@ that only the dashboard needs belongs in a field derived at read time.
 
 ## 6. Built-in prompts are frozen in a migration
 
-Editing `packages/contracts/default-prompts.ts` alone changes nothing for a
+Editing `packages/prompts/default-prompts.ts` alone changes nothing for a
 deployed run: the prompt bodies live in a migration seed, and a drift gate fails
 when the two disagree.
 
@@ -130,5 +133,5 @@ justifies it.
 `[Nit]` No em dashes or en dashes in code, comments, UI copy or commit messages.
 A comma, colon, period or parenthesis instead.
 
-`[Nit]` Commits are a single conventional line, no body and no footer, with the
-ticket key in the subject.
+`[Nit]` Commits are a single conventional line, `type(scope): message`, with no
+body. Trailers the tooling adds, such as `Co-Authored-By`, are fine.

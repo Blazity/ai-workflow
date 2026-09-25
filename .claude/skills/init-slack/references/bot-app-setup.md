@@ -1,6 +1,6 @@
 # Slack bot app setup
 
-If your workspace already has an AI Workflow app, skip this — get the existing token and channel from your Slack admin.
+If your workspace already has an AI Workflow app, skip this: get the existing token and channel from your Slack admin.
 
 ## Create the app
 
@@ -15,8 +15,8 @@ In the app settings sidebar:
 
 1. **OAuth & Permissions** → **Scopes** → **Bot Token Scopes** → **Add an OAuth Scope**.
 2. Add these scopes:
-   - `chat:write` — required. Lets the bot post messages.
-   - `commands` — required. Lets Slack deliver `/ai-workflow` slash command invocations to the bot.
+   - `chat:write`: required. Lets the bot post messages.
+   - `commands`: required. Lets Slack deliver `/ai-workflow` slash command invocations to the bot.
    - `channels:history`: only if a workflow's research (Investigate) block searches Slack messages. Invite the bot to every channel it should read; without the scope those channels are skipped as `missing_scope`.
    - `chat:write.public`: optional. Lets the bot post in public channels it isn't a member of. Skip if you'll always invite the bot.
 
@@ -56,10 +56,10 @@ curl -X POST https://slack.com/api/chat.postMessage \
 Should return `{"ok":true,...}` and a message appears in the channel.
 
 Common errors:
-- `not_in_channel` — invite the bot.
-- `channel_not_found` — wrong ID format (used `#name` instead of `C…`).
-- `invalid_auth` — wrong token.
-- `missing_scope` — `chat:write` not added.
+- `not_in_channel`: invite the bot.
+- `channel_not_found`: wrong ID format (used `#name` instead of `C…`).
+- `invalid_auth`: wrong token.
+- `missing_scope`: `chat:write` not added.
 
 ## Rotation
 

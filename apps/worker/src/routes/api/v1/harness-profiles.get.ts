@@ -6,7 +6,7 @@ import {
   setResponseHeader,
   type H3Event,
 } from "h3";
-import type { HarnessProfilesResponse } from "@shared/contracts";
+import { HARNESS_PROFILE_ID, type HarnessProfilesResponse } from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
@@ -23,7 +23,7 @@ export function parseHarnessProfileId(event: H3Event): string {
     typeof id !== "string" ||
     id.length === 0 ||
     id.length > 128 ||
-    !/^[A-Za-z0-9_-]+$/.test(id)
+    !HARNESS_PROFILE_ID.test(id)
   ) {
     throw createError({ statusCode: 404, statusMessage: "Profile not found" });
   }

@@ -990,5 +990,18 @@ export const FIRST_SLICE_TOOLS = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
+  // Appended for the same reason and in the same place: two dashboard actions
+  // that had no tool. Archiving a workflow (the editor's Delete) with the way
+  // back, and the Approvals screen's list, read, approve and reject.
+  "workflows.archive",
+  "workflows.unarchive",
+  "approvals.list",
+  "approvals.get",
+  "approvals.approve",
+  "approvals.reject",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

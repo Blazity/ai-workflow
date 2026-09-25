@@ -194,7 +194,7 @@ async function auditResult(
     if (policyFor(context.toolName).mutation !== "read") {
       throw new McpPublicError(
         "INTERNAL_ERROR",
-        "The operation may already have been applied; retry with the same idempotency key or confirm the state with runs.get",
+        "The operation may already have been applied; retry with the same idempotency key, or read the current state with the matching read tool",
         true,
       );
     }

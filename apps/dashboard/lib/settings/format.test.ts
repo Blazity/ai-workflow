@@ -73,10 +73,14 @@ test("sourceLabel for default returns Default", () => {
   assert.equal(sourceLabel("default"), "Default");
 });
 
-test("sourceHint for stored says a stored value shadows the variable", () => {
+// Red when: every stored value is said to come from this dashboard. A stored
+// row may have no change recorded here (production: JOB_TIMEOUT_MS read
+// "Stored from this dashboard" beside "History (never changed here)"), and an
+// MCP client stores values too.
+test("sourceHint for stored says a stored value shadows the variable, not who stored it", () => {
   assert.equal(
     sourceHint("stored"),
-    "Stored from this dashboard. A stored value shadows the environment variable until it is removed.",
+    "Stored in this deployment's settings. A stored value shadows the environment variable until it is removed.",
   );
 });
 

@@ -8,7 +8,7 @@
   repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
 
 [block: Block role and task]
-  authored:1                     6973  block_prompt  "Block prompt text"
+  authored:1                     7099  block_prompt  "Block prompt text"
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"
@@ -43,5 +43,5 @@
   pre-sandbox:1                   180  pre_sandbox  "Pre-sandbox: Repositories left out"
   no-change-retry                 178  research_note  "The previous pass wrongly concluded no change"
   no-change-retry-guidance        178  platform  "The review feedback is the task"
-  repository-access-protocol     1645  platform  "Repository Access Protocol"
+  repository-access-protocol     1682  platform  "Repository Access Protocol"
   resolution-check                  0  platform  "Resolution Check" WITHHELD (pr_feedback_present)

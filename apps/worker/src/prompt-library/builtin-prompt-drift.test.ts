@@ -21,10 +21,14 @@ const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)
   .filter((file) => file.endsWith(".sql"))
   .sort();
-const resyncSql = readFileSync(
-  `${migrationsDir}0052_builtin_prompt_resync.sql`,
-  "utf8",
-);
+// The newest resync is the one that has to match the constants: every prompt
+// change ships a new one (`pnpm run db:prompt-resync`), and an older one clears
+// only the drift of its own day.
+const latestResync = [...migrationFiles]
+  .reverse()
+  .find((file) => file.endsWith("_builtin_prompt_resync.sql"));
+if (!latestResync) throw new Error("no builtin_prompt_resync migration found");
+const resyncSql = readFileSync(`${migrationsDir}${latestResync}`, "utf8");
 
 interface TestDatabase {
   client: PGlite;
@@ -282,7 +286,7 @@ describe("findBuiltInPromptDrift", () => {
     expect(report.skipped).toEqual([]);
     // Two platform pins drift: implement@2 (stale since 0021) and research-plan@1,
     // which drifts for the first time because this is the first edit to that prompt
-    // since the 0021 seed. Both are corrected by the 0052 resync.
+    // since the 0021 seed. Both are corrected by the latest resync.
     expect(report.drift).toHaveLength(2);
     expect(report.drift.find((pin) => pin.slug === "implement")).toMatchObject({
       slug: "implement",
@@ -325,7 +329,7 @@ describe("findBuiltInPromptDrift", () => {
     expect(report.unfixableDrift).toEqual([]);
   });
 
-  it("is cleared by the 0052 resync, which leaves every customer version alone", async () => {
+  it("is cleared by the latest resync, which leaves every customer version alone", async () => {
     const { client, db } = await productionShape();
     const customerBefore = [
       await readVersion(client, "review", 2),

@@ -194,6 +194,28 @@ describe("an admin connecting an integration for the first time", () => {
   });
 });
 
+describe("a deployment configured through its environment", () => {
+  // Red when: a non-secret value read from the environment is hidden like a
+  // secret. Production: Jira's Site URL and Project key showed as dots, so no
+  // screen said which site and project this deployment watches.
+  it("says what its non-secret fields read, and never what a secret holds", async () => {
+    process.env.DEMO_BASE_URL = "https://demo.example/site";
+    process.env.DEMO_API_TOKEN = GOOD_TOKEN;
+    const [listed] = (await listIntegrations()).integrations;
+    const url = listed?.fields.find((field) => field.key === "baseUrl");
+    const token = listed?.fields.find((field) => field.key === "apiToken");
+    expect(url?.envValue).toBe("https://demo.example/site");
+    expect(token?.envSet).toBe(true);
+    expect(token).not.toHaveProperty("envValue");
+    expect(JSON.stringify(listed)).not.toContain(GOOD_TOKEN);
+  });
+
+  it("carries no value for a variable that is not set", async () => {
+    const [listed] = (await listIntegrations()).integrations;
+    expect(listed?.fields.find((field) => field.key === "baseUrl")).not.toHaveProperty("envValue");
+  });
+});
+
 describe("a field stored values must carry", () => {
   // GitHub's and GitLab's webhook secret: optional on the environment, where
   // deployments run without it, and required here, since stored values

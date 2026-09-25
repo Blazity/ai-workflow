@@ -16,14 +16,14 @@ paths:
 
 # Issue tracker, VCS and messaging adapters
 
-Messaging is a capability an integration serves since S9 (ADR-010). Core holds
+Messaging is a capability an integration serves (ADR-010). Core holds
 only the port re-export (`adapters/messaging/types.ts`), the sender that
 resolves the active provider per call (`engine/support/messaging.ts`) and the
 `thread_parents` row that says which conversation a ticket owns
 (`engine/support/messaging-conversation.ts`). The provider code lives in
 `integrations/slack/**` and has its own tests.
 
-Issue tracking is the same shape since S12. Core holds the port re-export
+Issue tracking has the same shape. Core holds the port re-export
 (`adapters/issue-tracker/types.ts`) and the resolution
 (`engine/support/issue-tracker-runtime.ts`), and names no tracker. The Jira
 client, its webhook and its health checks live in `integrations/jira/**` with

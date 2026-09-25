@@ -411,7 +411,7 @@ export function OverviewScreen({
             {[
               { l: `Runs · ${wShort}`, v: heroRuns ? heroRuns.value.toLocaleString("en-US") : "N/A" },
               { l: `Cost · ${wShort}`, v: heroCost ? "$" + heroCost.value.toFixed(0) : "N/A" },
-              { l: "p95 latency", v: heroP95 ? heroP95.valueSec + "s" : "N/A" },
+              { l: "p95 · successful runs", v: heroP95 ? heroP95.valueSec + "s" : "N/A" },
               { l: `Errors · ${wShort}`, v: heroErrors ? heroErrors.value.toString() : "N/A" },
             ].map((k) => (
               <div key={k.l}>
@@ -443,11 +443,13 @@ export function OverviewScreen({
           disabled={!heroRuns}
         />
         <CkKPI
-          label="p95 latency"
+          label="p95 · successful runs"
           value={heroP95 ? heroP95.valueSec + "s" : ""}
           delta={
-            heroP95 && deltaSuffix
-              ? `${heroP95.deltaSec >= 0 ? "↗" : "↘"} ${Math.abs(heroP95.deltaSec).toFixed(1)}s ${deltaSuffix}`
+            // A delta of 0 is also what the worker sends when the previous
+            // window had no successful run to compare with: no arrow either way.
+            heroP95 && deltaSuffix && heroP95.deltaSec !== 0
+              ? `${heroP95.deltaSec > 0 ? "↗" : "↘"} ${Math.abs(heroP95.deltaSec).toFixed(1)}s ${deltaSuffix}`
               : ""
           }
           deltaTone={heroP95 && heroP95.deltaSec <= 0 ? "good" : "bad"}
@@ -618,7 +620,7 @@ export function OverviewScreen({
                 Workflow · latest ticket
               </th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Runs {wShort}</th>
-              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">p95</th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200" title="p95 of successful runs">p95</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Err</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Cost</th>
               <th className="px-4 py-2.5 text-right font-medium border-b border-neutral-200">{wShort} trend</th>
@@ -637,7 +639,9 @@ export function OverviewScreen({
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-neutral-900">{w.name}</span>
                         {w.primary && <CkChip tone="mariner">primary</CkChip>}
-                        <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
+                        {w.gateway && (
+                          <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
+                        )}
                       </div>
                       {latest ? (
                         <div className="flex items-center gap-2 text-xs text-neutral-700 flex-wrap">

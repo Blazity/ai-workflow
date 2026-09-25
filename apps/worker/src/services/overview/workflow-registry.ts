@@ -1,16 +1,17 @@
 import type { SettingsSnapshot, WorkflowMeta } from "@shared/contracts";
-import { defaultBuiltinHarnessProfile } from "@shared/harness";
 
 /**
  * Workflows the worker actually runs. Names and blurbs are static; the
- * registry holds only identity fields — the API layer widens each entry to a
+ * registry holds only identity fields: the API layer widens each entry to a
  * full `WorkflowRow` by attaching `null` metric fields.
+ *
+ * The gateway is empty here on purpose: which provider a workflow runs on is a
+ * fact about its runs (each stored definition picks a harness per block), so
+ * the aggregate fills it from what the runs recorded, and a registry read
+ * without runs claims none.
  */
 export function getWorkflowRegistry(_settings: SettingsSnapshot): WorkflowMeta[] {
-  const gateway =
-    defaultBuiltinHarnessProfile().harness.provider === "codex"
-      ? "openai"
-      : "anthropic";
+  const gateway = "";
   return [
     {
       id: "wf_agent",

@@ -24,9 +24,9 @@ import {
   type CockpitIntegration,
 } from "@/lib/cockpit/navigation";
 import { useIntegrationChangeRefresh } from "@/lib/integrations/change-signal";
+import { integrationsFingerprint } from "@/lib/integrations/fingerprint";
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
-import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
 import {
   DISCARD_UNSAVED_PROMPT,
   hasUnsavedSettings,
@@ -49,8 +49,8 @@ function withoutKey(
 }
 
 /**
- * Persistent cockpit chrome (sidebar, topbar, activity drawer) plus the shared
- * context. Lives in the route-group layout so the sidebar, drawer and the
+ * Persistent cockpit chrome (sidebar, topbar, mobile sheets) plus the shared
+ * context. Lives in the route-group layout so the sidebar and the
  * selected-run state survive navigation between the per-screen routes, while
  * each route's `children` are rendered server-side where possible.
  */
@@ -58,6 +58,7 @@ export function CockpitShell({
   children,
   session,
   integrations = [],
+  integrationsVersion = null,
 }: {
   children: React.ReactNode;
   session: DashboardSession;
@@ -67,6 +68,13 @@ export function CockpitShell({
    * integration whose area was opened from the Integrations list.
    */
   integrations?: readonly CockpitIntegration[];
+  /**
+   * The fingerprint of the integrations the layout read
+   * (`integrationsFingerprint`), so coming back to this tab can tell a real
+   * change from a return. Null when the layout could not read them: then there
+   * is nothing to compare with, and a return says nothing.
+   */
+  integrationsVersion?: string | null;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -82,17 +90,10 @@ export function CockpitShell({
   const [persona] = useState("swe");
   const [range] = useState("24h");
   const [env] = useState("prod");
-  const [activityOpen, setActivityOpen] = useState<boolean>(
-    !!t.activityDrawerOpen,
-  );
   const [moreOpen, setMoreOpen] = useState(false);
   const [runRefreshKeys, setRunRefreshKeys] = useState<
     Readonly<Record<string, RunRefreshCadence>>
   >({});
-
-  useEffect(() => {
-    setActivityOpen(!!t.activityDrawerOpen);
-  }, [t.activityDrawerOpen]);
 
   // Every navigation inside the cockpit is a router.push, which the browser's
   // own beforeunload guard never sees: a screen holding unsaved edits would be
@@ -173,7 +174,9 @@ export function CockpitShell({
   // one at the moment the signal arrives, not the one at the last render.
   //
   // A refused refresh leaves a sidebar that is quietly wrong, which is worse
-  // than one that flickers, so the topbar says so. The connection screen tells
+  // than one that flickers, so the topbar says so, but only about a change
+  // that happened: the signal from another tab, or a return to this one after
+  // which the worker reports other integrations than the layout rendered. The connection screen tells
   // its own user the same thing about its own form; this is the sentence for
   // everybody else, and it clears itself when a navigation renders the layout
   // from the server again.
@@ -183,6 +186,10 @@ export function CockpitShell({
       return !hasUnsavedSettings();
     },
     onSuppressed: () => setIntegrationsChangedElsewhere(true),
+    changedSince:
+      integrationsVersion === null
+        ? undefined
+        : (current) => integrationsFingerprint(current.integrations) !== integrationsVersion,
   });
   useEffect(() => setIntegrationsChangedElsewhere(false), [pathname]);
   const staleNavNotice = integrationsChangedElsewhere ? (
@@ -331,11 +338,6 @@ export function CockpitShell({
             />
           </div>
         </main>
-
-        {/* Activity drawer, desktop only (removed on mobile by decision) */}
-        <div className="hidden lg:block">
-          <CkActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
-        </div>
 
         {/* Mobile "More" menu */}
         <div className="lg:hidden">

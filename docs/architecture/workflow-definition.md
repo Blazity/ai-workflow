@@ -374,13 +374,18 @@ row carries `draftRevision`, `deployedVersion` and `archivedAt`; every save
 appends a version row, and the head version is the draft. Dispatch reads the
 deployed version only, and refuses a definition that is disabled, archived, or
 has no deployed version. An archived definition is invisible to authoring: the
-MCP read returns `NOT_FOUND` for it, matching the dashboard route.
+MCP read returns `NOT_FOUND` for it, matching the dashboard route. Archiving is
+the editor's Delete and keeps every version; only a disabled definition, and
+never the last live one, can be archived. `unarchiveWorkflowDefinition` takes
+one back as it was, disabled, and refuses while a live definition holds its
+name (names are unique among live definitions only).
 
 ## 13. Authoring over MCP
 
 `apps/worker/src/mcp/tools/workflow-authoring.ts` registers
 `workflows.create`, `workflows.save_draft`, `workflows.publish`,
-`workflows.get_graph` and `workflows.set_enabled`; `tools/discovery.ts`
+`workflows.get_graph` and `workflows.set_enabled`; `tools/workflow-archive.ts`
+registers `workflows.archive` and `workflows.unarchive`; `tools/discovery.ts`
 registers `workflows.list`, `tools/workflows.ts` registers
 `workflows.dispatch_preflight` and `workflows.dispatch`, and
 `tools/briefings.ts` registers `workflows.node_briefing`. The published names

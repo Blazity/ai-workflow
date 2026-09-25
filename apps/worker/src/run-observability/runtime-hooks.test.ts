@@ -225,6 +225,57 @@ describe("v2 run observation hooks", () => {
     expect(target.observe).not.toHaveBeenCalled();
   });
 
+  // Red when: an agent failure's diagnostic tails are logged on top of the
+  // output the agent invocation already logged. Production: the Logs tab
+  // showed the same stdout event twice, with the same uuid, because both were
+  // stored.
+  it("logs an agent failure's output once when the invocation already logged it", async () => {
+    const target = sink();
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["agent", "generic_agent"]]),
+      sink: target,
+    });
+    const identity = { nodeId: "agent", attempt: 1, activationScopeId: "root" };
+    const stdout = '{"type":"result","uuid":"u-1","is_error":true}';
+
+    await hooks.onNodeStart?.({ ...identity, startedAt: STARTED_AT });
+    await hooks.observationHooksFor?.(identity)?.emit({
+      kind: "log",
+      value: { stream: "stdout", tail: stdout },
+    });
+    hooks.recordFailureTails(identity, { stdoutTail: stdout, stderrTail: "provider said no" });
+    await hooks.finalize("test_finished");
+
+    const logs = target.observe.mock.calls
+      .map(([, observation]) => observation as { kind: string; value: unknown })
+      .filter((observation) => observation.kind === "log");
+    expect(logs).toEqual([
+      { kind: "log", value: { stream: "stdout", tail: stdout } },
+      // stderr was not logged by the invocation, so the failure's tail is the record of it.
+      { kind: "log", value: { stream: "stderr", tail: "provider said no" } },
+    ]);
+  });
+
+  it("logs a failure's tails when nothing logged the output before it", async () => {
+    // A failure before the agent reported anything (a runtime that could not
+    // be prepared, an install that failed) has only its diagnostic to go on.
+    const target = sink();
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["workspace", "prepare_workspace"]]),
+      sink: target,
+    });
+    const identity = { nodeId: "workspace", attempt: 1, activationScopeId: "root" };
+
+    await hooks.onNodeStart?.({ ...identity, startedAt: STARTED_AT });
+    hooks.recordFailureTails(identity, { stdoutTail: "npm ERR! 404" });
+    await hooks.finalize("test_finished");
+
+    const logs = target.observe.mock.calls
+      .map(([, observation]) => observation as { kind: string; value: unknown })
+      .filter((observation) => observation.kind === "log");
+    expect(logs).toEqual([{ kind: "log", value: { stream: "stdout", tail: "npm ERR! 404" } }]);
+  });
+
   it("trips the capture breaker rather than the run when a flush fails", async () => {
     const target = sink();
     target.flush.mockRejectedValue(new Error("replay capture is down"));

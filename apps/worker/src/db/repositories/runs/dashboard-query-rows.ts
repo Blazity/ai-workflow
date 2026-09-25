@@ -95,6 +95,11 @@ export function listWorkflowAggregateRows(db: Db, cutoff: Date | null) {
     costUsd: workflowRuns.costUsd,
     startedAt: workflowRuns.startedAt,
     firstSeenAt: workflowRuns.firstSeenAt,
+    // The harness each of the run's agent blocks was launched with ("claude",
+    // "codex"), read out of the manifests in the database rather than loading
+    // every manifest: a window can hold thousands of runs. Null for a run that
+    // recorded none.
+    harnessProviders: sql<unknown>`jsonb_path_query_array(${workflowRuns.harnessManifests}, '$[*].manifest.harness.provider')`,
   }).from(workflowRuns)
     .where(cutoff ? sql`${effectiveTime()} >= ${cutoff.toISOString()}::timestamptz` : undefined);
 }

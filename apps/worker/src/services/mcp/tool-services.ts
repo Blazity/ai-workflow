@@ -19,6 +19,12 @@ import {
 } from "../../db/repositories/prompts.js";
 import { requirePromptLibraryEditRole, savePromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
 import {
+  listHarnessProfilesForOrganization,
+  publishHarnessProfileDraft,
+  readHarnessProfileDetail,
+  refreshHarnessProfileSkill,
+} from "../harness/index.js";
+import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
   getRunReplay,
@@ -29,9 +35,11 @@ import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-stor
 import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
 import { getWorkflowDefinition } from "../../db/repositories/definitions.js";
 import {
+  archiveWorkflowDefinition,
   createWorkflowDefinition,
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
+  unarchiveWorkflowDefinition,
   updateWorkflowDefinition,
 } from "../workflow-definitions/index.js";
 import {
@@ -143,6 +151,27 @@ export interface McpToolServices extends McpGateServices {
     input: Parameters<typeof savePromptVersionWithPolicy>[1],
   ): ReturnType<typeof savePromptVersionWithPolicy>;
 
+  // --- harness profiles -------------------------------------------------
+  // The dashboard's own profile paths, one call each. They bind their own
+  // connection and check the actor's role themselves, so a tool reaching a
+  // profile through here is held to exactly what the profile routes hold a
+  // person to.
+  /** The organization's live profiles, archived ones left out. */
+  listHarnessProfiles(
+    organizationId: string,
+  ): ReturnType<typeof listHarnessProfilesForOrganization>;
+  /** One profile with its published version and the workflows that pin it,
+   *  or null when it names nothing this organization can see. */
+  readHarnessProfileDetail(
+    input: Parameters<typeof readHarnessProfileDetail>[0],
+  ): ReturnType<typeof readHarnessProfileDetail>;
+  refreshHarnessProfileSkill(
+    input: Parameters<typeof refreshHarnessProfileSkill>[0],
+  ): ReturnType<typeof refreshHarnessProfileSkill>;
+  publishHarnessProfileDraft(
+    input: Parameters<typeof publishHarnessProfileDraft>[0],
+  ): ReturnType<typeof publishHarnessProfileDraft>;
+
   // --- run reads ---------------------------------------------------------
   /** `failureCode` is the machine-readable half of a failed run's reason, read
    *  straight off the durable column (ADR-010, S4): the prose is copy and a
@@ -207,6 +236,14 @@ export interface McpToolServices extends McpGateServices {
   updateWorkflowDefinition(
     input: Parameters<typeof updateWorkflowDefinition>[1],
   ): ReturnType<typeof updateWorkflowDefinition>;
+  /** The editor's Delete, which archives: the store refuses an enabled
+   *  definition and the last live one. */
+  archiveWorkflowDefinition(
+    input: Parameters<typeof archiveWorkflowDefinition>[1],
+  ): ReturnType<typeof archiveWorkflowDefinition>;
+  unarchiveWorkflowDefinition(
+    input: Parameters<typeof unarchiveWorkflowDefinition>[1],
+  ): ReturnType<typeof unarchiveWorkflowDefinition>;
   getWorkflowDefinition(
     definitionId: number,
   ): ReturnType<typeof getWorkflowDefinition>;
@@ -288,6 +325,13 @@ export function createMcpToolServices(
       requirePromptLibraryEditRole(input.actor.role as import("@shared/contracts").DashboardRole);
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
+    // The profile services bind their own connection (getDb), so these do not
+    // take `db`; a test that points getDb at its database reaches the same one.
+    listHarnessProfiles: (organizationId) =>
+      listHarnessProfilesForOrganization({ organizationId, includeArchived: false }),
+    readHarnessProfileDetail,
+    refreshHarnessProfileSkill,
+    publishHarnessProfileDraft,
 
     fetchRunDetail: (runId, ticketLinks, secrets) =>
       fetchRunDetailFromDb({
@@ -311,6 +355,8 @@ export function createMcpToolServices(
     saveWorkflowDefinitionDraft: (input) => saveWorkflowDefinitionDraft(db, input),
     deployWorkflowDefinition: (input) => deployWorkflowDefinition(db, input),
     updateWorkflowDefinition: (input) => updateWorkflowDefinition(db, input),
+    archiveWorkflowDefinition: (input) => archiveWorkflowDefinition(db, input),
+    unarchiveWorkflowDefinition: (input) => unarchiveWorkflowDefinition(db, input),
     getWorkflowDefinition: (definitionId) => getWorkflowDefinition(db, definitionId),
     getWorkflowDefinitionVersion: (definitionId, version) =>
       readWorkflowDefinitionVersion(db, definitionId, version),

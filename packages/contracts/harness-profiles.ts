@@ -229,6 +229,12 @@ export function buildHarnessProfileDraftV2(
   };
 }
 
+/** A harness profile id as the profile routes and MCP tools accept it. */
+export const HARNESS_PROFILE_ID = /^[A-Za-z0-9_-]+$/;
+
+/** The key a profile pins a skill by: the artifact's sha256, in hex. */
+export const HARNESS_SKILL_ARTIFACT_HASH = /^[a-f0-9]{64}$/;
+
 export interface HarnessProfileDto {
   id: string;
   organizationId: string | null;

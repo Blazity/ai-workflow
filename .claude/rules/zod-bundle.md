@@ -4,6 +4,7 @@ paths:
   - "apps/worker/src/harness-profiles/**"
   - "apps/worker/src/infra/runtime-env.ts"
   - "apps/worker/src/mcp/**"
+  - "apps/worker/src/memory/**"
   - "apps/worker/src/post-pr-gate/**"
   - "apps/worker/src/sandbox/**"
   - "apps/worker/src/services/prompts/**"
