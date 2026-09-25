@@ -16,6 +16,7 @@ import {
   asDetail,
   compareReplayAttemptActivity,
   countReplayRetries,
+  emptyReplayTabLabel,
   initialReplayNodeId,
   isLiveReplayAttempt,
   isScriptBlockType,
@@ -505,6 +506,15 @@ test("an absent attempt detail is an empty state while transport failures alert"
   assert.match(html, /No sanitized output was captured for this attempt\./);
   assert.doesNotMatch(html, /Attempt detail is unavailable/);
   assert.doesNotMatch(html, /role="alert"/);
+});
+
+// Red when: the tab name is dropped into one sentence for all of them, which
+// read "No sanitized logs was captured".
+test("an empty tab says what was not captured in a sentence that agrees with it", () => {
+  assert.equal(emptyReplayTabLabel("logs"), "No sanitized logs were captured for this attempt.");
+  assert.equal(emptyReplayTabLabel("output"), "No sanitized output was captured for this attempt.");
+  assert.equal(emptyReplayTabLabel("input"), "No sanitized input was captured for this attempt.");
+  assert.equal(emptyReplayTabLabel("metadata"), "No sanitized metadata was captured for this attempt.");
 });
 
 test("a failed attempt states its outcome and diagnostic id in the header", () => {

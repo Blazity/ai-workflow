@@ -8,6 +8,7 @@ import type {
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { Button } from "@/components/ui";
 import { deployRefusal } from "@/lib/workflow-editor/deploy-refusal";
+import { issueTextForPeople } from "@/lib/workflow-editor/issue-text";
 
 /** An issue or a notice: what the validator said, about a block or the workflow. */
 type Finding = WorkflowDefinitionValidationIssue | WorkflowDefinitionValidationNotice;
@@ -68,14 +69,35 @@ const TONE = {
 
 type Tone = keyof typeof TONE;
 
+/** A finding read out on its own, with nothing beside it to name its block. */
+function spokenFinding(
+  finding: Finding | undefined,
+  nodeNames: Readonly<Record<string, string>>,
+): string {
+  if (!finding) return "";
+  const text = issueTextForPeople(finding.message, finding.nodeId, nodeNames);
+  return finding.nodeId === null ? text : `${nodeNames[finding.nodeId] ?? finding.nodeId}: ${text}`;
+}
+
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function FindingDetail({ finding, tone }: { finding: Finding; tone: Tone }) {
+/** One finding, its blocks named the way the canvas names them. Without
+ *  `nodeNames` (a block's own inspector) only the block it is about is
+ *  recognised, which is the one that inspector is showing. */
+function FindingDetail({
+  finding,
+  tone,
+  nodeNames = {},
+}: {
+  finding: Finding;
+  tone: Tone;
+  nodeNames?: Readonly<Record<string, string>>;
+}) {
   return (
     <>
-      <span className="block">{finding.message}</span>
+      <span className="block">{issueTextForPeople(finding.message, finding.nodeId, nodeNames)}</span>
       {finding.path && (
         <span className={`mt-0.5 block font-mono text-[9px] ${TONE[tone].path}`}>{finding.path}</span>
       )}
@@ -167,7 +189,7 @@ function FindingsPopover({
               <ul className={`m-0 space-y-1.5 p-0 font-body text-[12px] leading-[1.4] ${colours.text}`}>
                 {grouped.workflow.map((finding, index) => (
                   <li key={`${finding.code}-${index}`}>
-                    <FindingDetail finding={finding} tone={tone} />
+                    <FindingDetail finding={finding} tone={tone} nodeNames={nodeNames} />
                   </li>
                 ))}
               </ul>
@@ -193,7 +215,7 @@ function FindingsPopover({
               <span className={`block space-y-1.5 font-body text-[12px] leading-[1.4] ${colours.text}`}>
                 {nodeFindings.map((finding, index) => (
                   <span key={`${finding.code}-${index}`} className="block">
-                    <FindingDetail finding={finding} tone={tone} />
+                    <FindingDetail finding={finding} tone={tone} nodeNames={nodeNames} />
                   </span>
                 ))}
               </span>
@@ -241,7 +263,7 @@ export function ValidationSummary({
         dialogLabel="Workflow validation notices"
         title="Worth fixing, not blocking"
         subtitle="These do not stop saving or deploying. Select a block to see them beside its configuration."
-        announcement={{ text: `${plural(notices.length, "workflow validation notice")}. ${notices[0]?.message ?? ""}`, urgent: false }}
+        announcement={{ text: `${plural(notices.length, "workflow validation notice")}. ${spokenFinding(notices[0], nodeNames)}`, urgent: false }}
         nodeNames={nodeNames}
         onSelectNode={onSelectNode}
       />
@@ -261,7 +283,7 @@ export function ValidationSummary({
         title="Fix validation errors"
         subtitle="Select a block to see its errors beside its configuration."
         announcement={{
-          text: `${plural(issueCount, "workflow validation issue")}. ${validation.issues[0]?.message ?? ""}`,
+          text: `${plural(issueCount, "workflow validation issue")}. ${spokenFinding(validation.issues[0], nodeNames)}`,
           urgent: true,
         }}
         nodeNames={nodeNames}
