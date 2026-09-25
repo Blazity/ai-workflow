@@ -8,9 +8,10 @@
  * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
  * state.
  *
- * Four value imports, on purpose (the first import is type-only and is
- * erased). One is the stop sentences of engine/support/ticket-left-column.ts,
- * pure text whose reader belongs next to its writer for the reason given below.
+ * Five value imports, on purpose (the first import is type-only and is
+ * erased). Two are stop sentences, engine/support/ticket-left-column.ts and
+ * engine/support/pull-request-moved-on.ts, pure text and codes whose reader
+ * belongs next to its writer for the reason given below.
  * One is isRunCompletionPending from this
  * cluster's own contracts module, which is a pure predicate over three fields
  * and side-effect free: `completion_fields_pending` has to answer exactly what
@@ -47,6 +48,11 @@ import {
   isLeftColumnReason,
   isPrematureReviewReason,
 } from "../../engine/support/ticket-left-column.js";
+import {
+  pullRequestMovedOnKind,
+  SUPERSEDED_BY_NEWER_COMMIT,
+  type PullRequestMovedOn,
+} from "../../engine/support/pull-request-moved-on.js";
 import { isRunCompletionPending } from "./contracts.js";
 
 
@@ -62,6 +68,7 @@ type RunDiagnosisCategory =
   | "stopped_without_reason"
   | "ticket_left_trigger_column"
   | "ticket_moved_to_review_early"
+  | "pull_request_moved_on"
   | "provider_account"
   | "dependency_auth"
   | "dependency_unavailable"
@@ -168,6 +175,12 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   ticket_moved_to_review_early: [
     "Stopped because the ticket was moved to the review column before this run had published a pull request: a person moved it, so nothing failed.",
     "To have the work done, move the ticket back into the trigger column; a new run starts from the beginning.",
+  ],
+  // Overridden per case by PULL_REQUEST_MOVED_ON_ACTIONS; this is the answer
+  // for the dispatcher's own stop of a superseded run, which records no code.
+  pull_request_moved_on: [
+    "Stopped because the pull request got a newer commit while this run was working on an older one: nothing failed.",
+    "Nothing to retry: the newer commit is handled by its own run when the workflow starts on pull request updates.",
   ],
   // Overridden per cause and account by providerAccountActions.
   provider_account: [
@@ -535,6 +548,19 @@ const INTEGRATION_UNAVAILABLE_ACTIONS: Record<IntegrationUnavailableReason, stri
   ],
 };
 
+/** What to tell a reader about a pull request run that stopped because its
+ *  pull request moved on, per way it moved. Code-owned like every phrase here. */
+const PULL_REQUEST_MOVED_ON_ACTIONS: Record<PullRequestMovedOn["kind"], string[]> = {
+  new_commit: [
+    "Stopped because the pull request got a newer commit before this run finished with the one it was started for: nothing failed.",
+    "Nothing to retry: the newer commit is handled by its own run when the workflow starts on pull request updates.",
+  ],
+  closed: [
+    "Stopped because the pull request was closed or merged before this run finished: nothing failed.",
+    "Nothing to retry: reopening the pull request starts a new run when the workflow triggers on it.",
+  ],
+};
+
 /**
  * The reason inside an `integration_unavailable.*` code, or nothing.
  *
@@ -590,6 +616,21 @@ const RULES: readonly Rule[] = [
         // The code itself, which is a stable reference and not run text.
         evidenceRefs: [input.failureCode as string, ...evidenceFrom(input)],
         nextActions: INTEGRATION_UNAVAILABLE_ACTIONS[reason],
+      };
+    },
+  },
+  {
+    // The other cause a run records as a value. High confidence for the same
+    // reason as the rule above, and ahead of every prose rule because the
+    // moved-on sentence would otherwise read as nothing in particular.
+    category: "pull_request_moved_on",
+    match: (input) => {
+      const kind = pullRequestMovedOnKind(input.failureCode ?? null);
+      if (!kind) return null;
+      return {
+        confidence: "high",
+        evidenceRefs: [input.failureCode as string, ...evidenceFrom(input)],
+        nextActions: PULL_REQUEST_MOVED_ON_ACTIONS[kind],
       };
     },
   },
@@ -682,6 +723,19 @@ const RULES: readonly Rule[] = [
         evidenceRefs: evidenceFrom(input),
         nextActions: reviewTooEarlyActions(input.completedAt),
       };
+    },
+  },
+  {
+    // The trigger dispatcher stops a pull request's previous run when a newer
+    // commit arrives and records this sentence with no code. Ahead of
+    // "cancelled" because it is the more specific answer; low confidence
+    // because it is read off the wording.
+    category: "pull_request_moved_on",
+    match: (input) => {
+      if (input.status !== "blocked") return null;
+      const message = input.error?.message;
+      if (!message || !message.startsWith(SUPERSEDED_BY_NEWER_COMMIT)) return null;
+      return { confidence: "low", evidenceRefs: evidenceFrom(input) };
     },
   },
   {

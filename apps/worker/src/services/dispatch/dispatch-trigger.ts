@@ -50,6 +50,7 @@ import { isRepositoryDispatchable } from "./repo-allowlist.js";
 import { isLegacyTrustedCheckDelivery } from "./trigger-events.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
+import { SUPERSEDED_BY_NEWER_COMMIT } from "../../engine/support/pull-request-moved-on.js";
 import { cancelSubjectRun } from "../run-lifecycle/index.js";
 import {
   enforceTriggerRateLimit,
@@ -441,7 +442,7 @@ async function supersedePreviousPrRun(
   const closeInput = {
     runId: active.runId,
     intent: "superseded" as const,
-    details: "Superseded by a newer pull request commit.",
+    details: SUPERSEDED_BY_NEWER_COMMIT,
   };
   if (deps.db) await closeRunPrChecks({ ...closeInput, db: deps.db });
   else await closeConnectedRunPrChecks(closeInput);
@@ -450,7 +451,7 @@ async function supersedePreviousPrRun(
     { ownerToken: active.ownerToken, runId: active.runId },
     deps.runRegistry,
     undefined,
-    "Superseded by a newer pull request commit.",
+    SUPERSEDED_BY_NEWER_COMMIT,
   );
   if (cancelled) return null;
   return {

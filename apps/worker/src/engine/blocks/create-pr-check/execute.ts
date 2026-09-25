@@ -1,6 +1,10 @@
 import type { WorkflowPrCheckReference } from "@shared/contracts";
 import type { IntegrationConnectionPin } from "@shared/contracts";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import {
+  isPullRequestMovedOnResult,
+  pullRequestMovedOnError,
+} from "../../support/pull-request-moved-on.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import {
   executionError,
@@ -64,8 +68,9 @@ export const execute: BlockExecuteFn = async (
       category: "binding",
     });
   }
+  let created: Awaited<ReturnType<typeof createPrCheckStep>>;
   try {
-    const check: WorkflowPrCheckReference = await createPrCheckStep({
+    created = await createPrCheckStep({
       owner: {
         subjectKey: ctx.entry.subjectKey,
         ownerToken: ctx.entry.ownerToken,
@@ -78,7 +83,6 @@ export const execute: BlockExecuteFn = async (
       name,
       integrationPins: ctx.integrationPins,
     });
-    return { kind: "next", output: { status: "ok", check } };
   } catch (error) {
     if (isRunControlError(error)) throw error;
     const diagnosticId = await recordCreatePrCheckFailure(
@@ -89,4 +93,16 @@ export const execute: BlockExecuteFn = async (
       { category: "provider", phase: "create-pr-check" },
     );
   }
+  // The pull request got a newer commit or was closed before its check existed.
+  // Nothing broke, so this ends the run as moved on and never as a provider
+  // failure (production run wrun_01M3B9X8SHGCE0KQK4YJ0F71VW).
+  if (isPullRequestMovedOnResult(created)) {
+    return pullRequestMovedOnError(created.movedOn, {
+      pr: ctx.entry.pr,
+      definitionNodes: ctx.definitionNodes,
+      phase: "create-pr-check",
+    });
+  }
+  const check: WorkflowPrCheckReference = created;
+  return { kind: "next", output: { status: "ok", check } };
 };

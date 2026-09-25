@@ -1,5 +1,9 @@
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
+  isPullRequestMovedOnResult,
+  pullRequestMovedOnError,
+} from "../../support/pull-request-moved-on.js";
+import {
   normalizeReviewResultsInput,
 } from "../../helpers/review-results.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
@@ -101,8 +105,9 @@ export const execute: BlockExecuteFn = async (
       { category: "binding" },
     );
   }
+  let result: Awaited<ReturnType<typeof postPrReviewStep>>;
   try {
-    const result = await postPrReviewStep({
+    result = await postPrReviewStep({
       owner: {
         subjectKey: ctx.entry.subjectKey,
         ownerToken: ctx.entry.ownerToken,
@@ -115,7 +120,6 @@ export const execute: BlockExecuteFn = async (
       reviewResults: normalized.value,
       integrationPins: ctx.integrationPins,
     });
-    return { kind: "next", output: { status: "ok", ...result } };
   } catch (error) {
     if (isRunControlError(error)) throw error;
     return executionError(
@@ -123,4 +127,14 @@ export const execute: BlockExecuteFn = async (
       { category: "provider", phase: "post-pr-review" },
     );
   }
+  // Nothing was published for a head the pull request has left; the next round
+  // owns the summary, and this run ends as moved on rather than failed.
+  if (isPullRequestMovedOnResult(result)) {
+    return pullRequestMovedOnError(result.movedOn, {
+      pr: ctx.entry.pr,
+      definitionNodes: ctx.definitionNodes,
+      phase: "post-pr-review",
+    });
+  }
+  return { kind: "next", output: { status: "ok", ...result } };
 };
