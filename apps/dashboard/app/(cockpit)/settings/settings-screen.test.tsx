@@ -4,7 +4,12 @@ import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { settingDefinition } from "@integrations/registry";
-import type { RepositoryCatalogState, SettingsEntryView } from "@shared/contracts";
+import {
+  canEditSettings,
+  canResetSettings,
+  type RepositoryCatalogState,
+  type SettingsEntryView,
+} from "@shared/contracts";
 
 import { groupSettings } from "@/lib/settings/groups";
 import { hasUnsavedSettings, resetUnsavedSettings } from "@/lib/settings/unsaved";
@@ -478,14 +483,28 @@ test("an owner removes a stored value after being told what takes over", async (
   );
 });
 
-test("an admin is told who can remove a stored value instead of being offered a refused button", (t) => {
+test("an admin is offered removal of a stored value, and a member is offered nothing", (t) => {
+  // The props settings-data.tsx derives from the session role, so this follows
+  // the shared rule rather than a flag the test picked.
   const stored = entry("MAX_CONCURRENT_AGENTS", 7, { source: "stored" });
-  const root = render(t, { settings: [stored], canReset: false });
-  assert.equal(
-    root.findAll((node) => node.type === "button" && text(node).includes("Remove stored value")).length,
-    0,
-  );
-  assert.match(text(root), /Only an owner can remove a stored value/);
+  const removeButtons = (root: ReactTestInstance) =>
+    root.findAll((node) => node.type === "button" && text(node).includes("Remove stored value"));
+
+  const admin = render(t, {
+    settings: [stored],
+    canEdit: canEditSettings("admin"),
+    canReset: canResetSettings("admin"),
+  });
+  assert.ok(removeButtons(admin).length > 0, "an admin was not offered removal");
+  assert.doesNotMatch(text(admin), /Only an owner/);
+
+  const member = render(t, {
+    settings: [stored],
+    canEdit: canEditSettings("member"),
+    canReset: canResetSettings("member"),
+  });
+  assert.equal(removeButtons(member).length, 0, "a member was offered a removal the worker refuses");
+  assert.doesNotMatch(text(member), /Only an owner/);
 });
 
 test("a removal refused because the value changed says nothing was removed and shows the new value", async (t) => {
@@ -536,7 +555,7 @@ test("a removal refused because the value changed says nothing was removed and s
   );
 });
 
-test("a panel that does not decide about removal offers neither the button nor the hint", (t) => {
+test("a panel that does not decide about removal offers no removal", (t) => {
   // The Memory panel mounts the group form without saying who may remove.
   resetUnsavedSettings();
   const stored = entry("MAX_CONCURRENT_AGENTS", 7, { source: "stored" });
@@ -554,5 +573,5 @@ test("a panel that does not decide about removal offers neither the button nor t
     act(() => renderer.unmount());
     resetUnsavedSettings();
   });
-  assert.doesNotMatch(text(renderer.root), /Remove stored value|Only an owner can remove/);
+  assert.doesNotMatch(text(renderer.root), /Remove stored value/);
 });

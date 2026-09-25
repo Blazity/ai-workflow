@@ -27,7 +27,7 @@ export default defineEventHandler(
       if (!canResetSettings(actor.role)) {
         throw createError({
           statusCode: 403,
-          statusMessage: "Only an owner can remove a stored setting.",
+          statusMessage: "Only an owner or an admin can remove a stored setting.",
         });
       }
       const parsed = parseRequestBody(

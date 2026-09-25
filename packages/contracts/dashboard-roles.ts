@@ -76,17 +76,20 @@ export function canEditSettings(role: DashboardRole): boolean {
 
 /**
  * Removing a stored setting hands the key back to whatever the environment or
- * the registry default answers with. Owner only: the rule MCP
- * `settings.reset` has enforced since it shipped (SETTINGS_RESET_POLICY in the
- * worker's MCP policy), kept for the HTTP route rather than widened on the way.
- * Whether an admin should be admitted is an open decision.
+ * the registry default answers with. Whoever may store a value may also remove
+ * it (the product owner's decision of 2026-09-23), on the dashboard and through
+ * MCP `settings.reset` alike: the worker's MCP policy lists the same roles, and
+ * a test there holds the two equal.
  */
 export function canResetSettings(role: DashboardRole): boolean {
-  return role === "owner";
+  return canEditSettings(role);
 }
 
 /** Adding, editing, disabling or activating repositories decides what the
- *  agent may touch at all, so it follows the same rule. */
+ *  agent may touch at all, so it follows the same rule, on the dashboard and
+ *  through MCP alike: activation included since 2026-09-23. The worker's MCP
+ *  policy lists the same roles for every catalog write, and a test there holds
+ *  them equal. */
 export function canManageRepositoryCatalog(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }

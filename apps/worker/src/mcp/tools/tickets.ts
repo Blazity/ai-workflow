@@ -33,6 +33,11 @@ type TicketGetData = {
   // anyway. id/filename/mimeType/size is enough for the agent to know what
   // exists.
   attachments: Array<{ id: string; filename: string; mimeType: string; size: number }>;
+  // The parent, the subtasks (an epic's child issues too) and the links, as
+  // the run's own read of the ticket holds them and the planning prompt shows
+  // them. Null when the tracker does not report them, which is not the same as
+  // an empty list: that one means the tracker said there are none.
+  relatedTickets: Array<{ key: string; title: string; status: string; relation: string }> | null;
 };
 
 type ListRunsData = {
@@ -99,6 +104,13 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
               mimeType: a.mimeType,
               size: a.size,
             })),
+            relatedTickets:
+              ticket.relatedTickets?.map((related) => ({
+                key: related.key,
+                title: related.title,
+                status: related.status,
+                relation: related.relation,
+              })) ?? null,
           };
         },
       });

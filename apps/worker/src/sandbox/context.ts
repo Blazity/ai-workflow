@@ -398,6 +398,7 @@ export function implementationContextParts(input: ImplementationContextInput): E
     concatPromptParts([
       ticketHeaderPart("Requirements", ticket),
       attachmentsParts,
+      implementationDescriptionPart(ticket, researchPlanMarkdown),
       acceptanceCriteriaPart(ticket),
       renderRelatedTicketsParts(ticket, { before: "\n", after: "" }),
       clarificationsParts,
@@ -472,6 +473,43 @@ export function reviewContextParts(input: ReviewContextInput): EffectivePromptPa
 
 export function assembleReviewContext(input: ReviewContextInput): string {
   return joinPromptParts(reviewContextParts(input));
+}
+
+/**
+ * The ticket's description, as the implementation agent gets it: through the
+ * plan.
+ *
+ * DELIBERATE, AND SAID SO. Since the three-phase flow (2026-04-06), the agent
+ * that writes the code works from the plan, and the plan was written from this
+ * description; after a plan approval it is the plan a person approved, and a
+ * description sent beside it would be an older statement of the same work that
+ * can disagree with what they approved. So it is not sent, and the part records
+ * that as a withheld part with its reason, so a person reading the briefing
+ * sees an omission somebody chose rather than a description that went missing.
+ *
+ * WITH NO PLAN THERE IS NOTHING TO STAND IN FOR IT. A workflow may run an
+ * implementation agent straight from its trigger, with no plan bound, and then
+ * the description is the only statement of the work: it is sent, as the same
+ * snapshot the research prompt sends.
+ */
+function implementationDescriptionPart(ticket: TicketData, researchPlanMarkdown: string): EffectivePromptPart {
+  if (researchPlanMarkdown.trim() === "") {
+    return part("description", "Ticket description", ticketOrigin(ticket), `
+## Description
+
+${ticket.description}
+`);
+  }
+  return {
+    id: "description",
+    title: "Ticket description",
+    content: "",
+    origin: ticketOrigin(ticket),
+    withheld: {
+      reason: "represented_by_plan",
+      text: "The implementation agent works from the plan, which was written from the ticket's description, so the description is not sent a second time.",
+    },
+  };
 }
 
 function acceptanceCriteriaPart(ticket: TicketData): EffectivePromptPart {

@@ -615,14 +615,21 @@ export function WorkflowEditorScreen({
   // whichever the address named on arrival. `initialDetail` is what the server
   // rendered for the current address; when it is another workflow (a switch in
   // the picker, or a bare /editor from the sidebar while this one is open), the
-  // address is replaced. router.replace rather than the browser's own
-  // replaceState: the router then holds a render of this workflow for this
-  // history entry, so Back into it from another screen reopens the same one.
+  // address is replaced, twice over. The browser's own replaceState puts it in
+  // the address bar at once: router.replace changes the address only when the
+  // server has rendered the page again, which took five seconds on production,
+  // long enough to copy or reload the old link. router.replace then gives the
+  // router a render of this workflow for this history entry, so Back into it
+  // from another screen reopens this one and not the one it was opened with.
   // The screen keeps its state across that render; nothing here follows it.
   const renderedDefinitionId = initialDetail.meta.id;
   useEffect(() => {
     if (renderedDefinitionId === selectedId) return;
-    router.replace(`/editor?definition=${selectedId}`, { scroll: false });
+    const href = `/editor?definition=${selectedId}`;
+    if (typeof window !== "undefined" && typeof window.history?.replaceState === "function") {
+      window.history.replaceState(null, "", href);
+    }
+    router.replace(href, { scroll: false });
   }, [renderedDefinitionId, router, selectedId]);
 
   useEffect(() => {

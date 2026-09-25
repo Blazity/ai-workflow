@@ -455,7 +455,7 @@ async function writeAttachments(
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
-  // Ensure target directory exists — writeFiles does not guarantee mkdir -p semantics.
+  // Ensure target directory exists: writeFiles does not guarantee mkdir -p semantics.
   await sandbox.runCommand("mkdir", ["-p", "/tmp/attachments"]);
 
   await sandbox.writeFiles(

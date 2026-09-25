@@ -277,8 +277,20 @@ const WORKFLOW_SET_ENABLED_POLICY = WORKFLOW_PUBLISH_POLICY;
  * every tool below is out of reach of a client-credentials token by
  * construction, not only by the role lists. And admin/owner is already the
  * predicate the HTTP routes enforce (`canManageRepositoryCatalog`,
- * `canEditSettings`), so the transport agrees with the dashboard instead of
- * deciding for itself.
+ * `canEditSettings`, `canResetSettings`), so the transport agrees with the
+ * dashboard instead of deciding for itself; tests in tools/repositories.test.ts
+ * and tools/settings.test.ts hold each predicate and its role list equal.
+ *
+ * That includes ending the bridge and clearing a stored setting, which were
+ * owner only here until the product owner decided on 2026-09-23 that they
+ * follow the dashboard, knowing an agent holding an admin's token can then
+ * activate with nobody reading a dialog. Activation is irreversible in practice
+ * (no surface turns it back off, and on a catalog nobody has curated it stops
+ * dispatch selecting every repository at once), so on this surface what slows
+ * it down is not the role list: the call must carry the digest
+ * repositories.activate_preview returned for the population as it stands, a
+ * catalog with nothing enabled is refused outright, and the tool description
+ * says it cannot be undone.
  */
 const CATALOG_CONFIG_POLICY = {
   scope: "repositories:write",
@@ -344,37 +356,6 @@ const CATALOG_SUGGEST_POLICY = {
     destructiveHint: false,
     openWorldHint: true,
   },
-} as const satisfies McpToolPolicy;
-
-/**
- * Ending the bridge: owner only, and no other tool on this surface is.
- *
- * The HTTP route admits an admin, and this deliberately does not. Activation is
- * the one irreversible-in-practice decision here -- from the moment it lands,
- * dispatch stops selecting every repository the catalog does not enable, which
- * on a catalog nobody has curated is every repository at once -- and through
- * MCP there is no dialog, no rendered population and no second click to slow it
- * down. So the transport asks for the one role that owns the deployment.
- *
- * Person-backed by the same mechanism runs.answer_clarification uses, and by
- * the same reasoning: the role list refuses "service", and withoutAuthoringScopes
- * has already taken repositories:write away from a token with no `sub`, so a
- * client-credentials token fails twice over.
- */
-const CATALOG_ACTIVATE_POLICY = {
-  ...CATALOG_CONFIG_POLICY,
-  roles: ["owner"],
-} as const satisfies McpToolPolicy;
-
-// Clearing a stored value is owner-only for the reason activation is: it does
-// not set a value, it hands the key back to whatever the environment or the
-// registry default answers with, and the run-facing effect is the same as any
-// other settings change. The HTTP route (routes/api/v1/settings/reset.post.ts)
-// applies the same rule through `canResetSettings`, and a test holds the two
-// equal; widening either is one decision for both.
-const SETTINGS_RESET_POLICY = {
-  ...SETTINGS_CONFIG_POLICY,
-  roles: ["owner"],
 } as const satisfies McpToolPolicy;
 
 /**
@@ -505,14 +486,14 @@ const TOOL_POLICY = {
   "repositories.upsert": CATALOG_CONFIG_POLICY,
   "repositories.set_enabled": CATALOG_CONFIG_POLICY,
   "repositories.activate_preview": DEPLOYMENT_PREVIEW_POLICY,
-  "repositories.activate": CATALOG_ACTIVATE_POLICY,
+  "repositories.activate": CATALOG_CONFIG_POLICY,
   "repositories.import_preview": DEPLOYMENT_PREVIEW_POLICY,
   "repositories.import": CATALOG_IMPORT_POLICY,
   "repositories.suggest": CATALOG_SUGGEST_POLICY,
   "settings.list": READ_POLICY,
   "settings.get": READ_POLICY,
   "settings.set": SETTINGS_CONFIG_POLICY,
-  "settings.reset": SETTINGS_RESET_POLICY,
+  "settings.reset": SETTINGS_CONFIG_POLICY,
   // A plain read, for the reason runs.get_clarification is one: seeing WHICH
   // repositories a ticket's work is recorded against, and who decided that, is
   // what a read-only client needs to report a stuck run to a person. Gating it

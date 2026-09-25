@@ -109,12 +109,12 @@ describe("settingsResetRequestSchema", () => {
 });
 
 describe("canResetSettings", () => {
-  // The rule MCP settings.reset already enforced before the HTTP route existed.
-  // Widening it is a decision for the owner of the deployment, not a side
-  // effect of adding a button.
-  it("admits the owner only", () => {
+  // Decided by the product owner on 2026-09-23: whoever may store a value may
+  // also remove it, on the dashboard and through MCP alike. A member reads the
+  // settings and changes none of them.
+  it("admits an owner and an admin, and refuses a member", () => {
     expect(canResetSettings("owner")).toBe(true);
-    expect(canResetSettings("admin")).toBe(false);
+    expect(canResetSettings("admin")).toBe(true);
     expect(canResetSettings("member")).toBe(false);
   });
 });
