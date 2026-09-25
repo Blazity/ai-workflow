@@ -1,5 +1,4 @@
 import {
-  MEMORY_ITEMS_MAX,
   memoryTextHash,
   type MemoryKind,
   type MemoryRecalledEntry,
@@ -31,21 +30,24 @@ import {
  * Each case opens a store holding nothing (`harness.open`), writes through
  * the port, reads it back right away and compares. So the store under test
  * finishes a write before it answers: an adapter over an engine that queues
- * writes runs this against a fake of that engine that does not.
+ * writes runs this against a fake of that engine that does not, and gives
+ * `openQueueing` and `settle` for the one case that proves what it answers
+ * while the engine's queue holds a write (`apply_pending`).
  *
  * It returns every case that failed, with the first thing wrong in it, rather
  * than stopping at the first case; a case that threw or answered something
  * that is not an answer fails with that. The cases:
  *
  * - `recall_complete`: the complete set for the subjects and kinds asked, with
- *   or without a query, past `MEMORY_ITEMS_MAX`, and nothing else.
+ *   or without a query, past one page or one search of any engine
+ *   (`COMPLETENESS_VOLUME`), and nothing else.
  * - `recall_ranking`: ranked only with a query, a blank one being none;
  *   scores only in a ranked answer, finite, falling, and every unscored entry
  *   after the scored ones.
  * - `recall_stored_order`: an unranked recall lists each subject and kind in
  *   the order `held` does.
  * - `held_complete`: everything of one subject and kind, past
- *   `MEMORY_ITEMS_MAX`, unranked, and nothing else.
+ *   `COMPLETENESS_VOLUME`, unranked, and nothing else.
  * - `held_order`: oldest first, by the apply that added an entry.
  * - `held_version`: a version that changes on every write, a stale
  *   `ifVersion` answered `contended` with nothing applied; or, for a store
@@ -55,7 +57,17 @@ import {
  *   entry `added` anew or `already_held` by that entry's id.
  * - `apply_update`: `updated` with the id the entry has afterwards and the
  *   old id gone when it changed, origin kept, the later run stamped; an
- *   unknown id `missing`.
+ *   unknown id `missing`; a new text another entry holds either updated
+ *   beside it or refused as `rejected` with that entry's `heldId`, never
+ *   folded into it.
+ * - `apply_pending`: with the engine queueing (`openQueueing`), an add answers
+ *   `pending` or an id held lists, an update answers `pending` with the old
+ *   id gone or an id held lists, and after `settle` the new text is held once
+ *   with its origin kept. Skipped for a harness that gives neither.
+ * - `apply_order`: removals, then updates, then additions within one apply,
+ *   so a text a removal or an update frees is written again in the same call.
+ * - `apply_concurrent`: two applies adding to one subject and kind at once
+ *   both land whole.
  * - `apply_remove`: every reason, `retired` and `reverted` included, removed
  *   and repeated in the outcome; an unknown id `missing`.
  * - `origins_round_trip`: `learned`, `derived`, `imported` and `human` come
@@ -74,8 +86,9 @@ import {
  *   trust, status, pin, placement or routing), each of its type.
  * - `refusals_typed`: an empty subject and a notebook are refused as
  *   `rejected`; an engine out of reach answers `unavailable` on every
- *   member; every refusal anywhere carries a store's code, a sentence, and a
- *   valid reason and status when present.
+ *   member; every refusal anywhere, and every failed item, carries a store's
+ *   code, a sentence, and a valid reason (only with `unavailable`) and status
+ *   when present.
  * - `consolidation_declared`: traits are well formed; a store the harness can
  *   make consolidate declares it; a store that declares it does not holds
  *   near-duplicates and contradictions exactly as written; a consolidating
@@ -93,6 +106,9 @@ export type MemoryStoreConformanceCase =
   | "held_version"
   | "apply_add"
   | "apply_update"
+  | "apply_pending"
+  | "apply_order"
+  | "apply_concurrent"
   | "apply_remove"
   | "origins_round_trip"
   | "forget_by_text_hash"
@@ -126,6 +142,16 @@ export interface MemoryStoreConformanceHarness {
    * `protect` does and what `replacedBy` names.
    */
   consolidate?(store: MemoryStore): Promise<void>;
+  /**
+   * For a store over an engine that queues writes (Mem0 answering an add
+   * with an event and no memory id yet): the same store holding nothing, its
+   * engine holding every write that creates an entry in its queue until
+   * `settle`. Given with `settle`, so the suite can prove the store answers
+   * `pending` for what is queued instead of an id nobody holds.
+   */
+  openQueueing?(): MemoryStore | Promise<MemoryStore>;
+  /** Make the queueing engine process its queue now, so every queued write lands. */
+  settle?(store: MemoryStore): Promise<void>;
 }
 
 type CaseRun = (harness: MemoryStoreConformanceHarness) => Promise<void>;
@@ -163,6 +189,17 @@ function portFacts(count: number): string[] {
   return Array.from({ length: count }, (_, index) => portFact(index + 1));
 }
 
+/**
+ * How many entries the completeness cases write to one subject and kind: more
+ * than one page of Mem0's list (`page_size` at most 200), so a store that
+ * reads one page, or searches with a `top_k` of 200 or less, is caught. The
+ * suite's own number, not core's cap: the port promises completeness whatever
+ * core keeps. It stays well under Mem0's 1000 adds a minute so the suite can
+ * run against the live engine, which leaves one search at Mem0's largest
+ * `top_k` (1000) past what this volume proves.
+ */
+const COMPLETENESS_VOLUME = 205;
+
 const LESSONS = [
   "Run the migrations before the seed script, or the seed fails on a missing table.",
   "A flaky login test was a race with the session cookie; wait for the cookie, not a timer.",
@@ -191,25 +228,33 @@ async function ask<T>(member: Member, call: () => Promise<MemoryStoreAnswer<T>>)
 }
 
 const STORE_FAILURES: readonly MemoryStoreFailure[] = ["unavailable", "contended", "rejected"];
+const ITEM_FAILURES: readonly MemoryStoreFailure[] = ["unavailable", "rejected"];
 const FAILURE_REASONS: readonly MemoryStoreFailureReason[] = ["key_rejected", "quota", "rate_limited", "timeout", "unreachable"];
 
-/** What is wrong with a refusal's shape, or null for a success or a well-formed refusal. */
-function refusalProblem(answer: MemoryStoreAnswer<unknown>): string | null {
-  if (answer.ok) return null;
-  const { code, detail, reason, status } = answer as { code: unknown; detail: unknown; reason?: unknown; status?: unknown };
-  if (!STORE_FAILURES.includes(code as MemoryStoreFailure)) {
-    return `a store refuses with one of ${STORE_FAILURES.join(", ")}; core's own codes and any other word are not a store's to answer.`;
+/** What is wrong with a refusal's or a failed item's code, sentence, reason and status, or null. */
+function failureProblem(failure: object, codes: readonly MemoryStoreFailure[]): string | null {
+  const { code, detail, reason, status } = failure as { code: unknown; detail: unknown; reason?: unknown; status?: unknown };
+  if (!codes.includes(code as MemoryStoreFailure)) {
+    return `a store answers a failure here with one of ${codes.join(", ")}; core's own codes and any other word are not a store's to answer.`;
   }
   if (typeof detail !== "string" || detail.trim().length === 0) {
-    return "a refusal carries a sentence in detail saying what failed; core puts it where a person reads it.";
+    return "a failure carries a sentence in detail saying what failed; core puts it where a person reads it.";
   }
   if (reason !== undefined && !FAILURE_REASONS.includes(reason as MemoryStoreFailureReason)) {
     return `reason, when present, is one of ${FAILURE_REASONS.join(", ")}.`;
+  }
+  if (reason !== undefined && code !== "unavailable") {
+    return `the reason ${quote(reason)} came with ${quote(code)}. Every reason is the engine's state, which asking again later can get past, so it goes with unavailable; a ${quote(code)} answer carries none.`;
   }
   if (status !== undefined && !(Number.isInteger(status) && (status as number) >= 100 && (status as number) <= 599)) {
     return "status, when present, is the HTTP status the engine answered with.";
   }
   return null;
+}
+
+/** What is wrong with a refusal's shape, or null for a success or a well-formed refusal. */
+function refusalProblem(answer: MemoryStoreAnswer<unknown>): string | null {
+  return answer.ok ? null : failureProblem(answer, STORE_FAILURES);
 }
 
 /** The answer of a call that has to succeed. */
@@ -303,8 +348,7 @@ const COMPLETE_RECALL =
 
 const recallComplete: CaseRun = async (harness) => {
   const store = await harness.open();
-  const factCount = MEMORY_ITEMS_MAX.facts + 5;
-  const facts = await seed(store, REPO, "facts", portFacts(factCount));
+  const facts = await seed(store, REPO, "facts", portFacts(COMPLETENESS_VOLUME));
   const lessons = await seed(store, REPO, "lessons", LESSONS);
   const web = await seed(store, REPO_WEB, "facts", [portFact(80), portFact(81)]);
   await seed(store, ORG, "facts", ["Every repository of the organisation deploys from its main branch."]);
@@ -402,8 +446,7 @@ const recallStoredOrder: CaseRun = async (harness) => {
 
 const heldComplete: CaseRun = async (harness) => {
   const store = await harness.open();
-  const factCount = MEMORY_ITEMS_MAX.facts + 5;
-  const facts = await seed(store, REPO, "facts", portFacts(factCount));
+  const facts = await seed(store, REPO, "facts", portFacts(COMPLETENESS_VOLUME));
   const lessons = await seed(store, REPO, "lessons", LESSONS);
   await seed(store, REPO_WEB, "facts", [portFact(80)]);
   const rule =
@@ -490,6 +533,10 @@ function outcomesOf(
   if (repeated.length > 0) fail(`${what} answered more than one outcome for ${some(repeated)}. ${rule}`);
   const invented = given.filter((item) => !items.includes(item));
   if (invented.length > 0) fail(`${what} answered outcomes for items it was not given (${some(invented)}). ${rule}`);
+  for (const outcome of outcomes) {
+    const problem = outcome.result === "failed" ? failureProblem(outcome, ITEM_FAILURES) : null;
+    if (problem !== null) fail(`${what} answered ${quote(outcome)} for ${outcome.op} ${outcome.index}: ${problem}`);
+  }
   return (op, index) => outcomes.find((outcome) => outcome.op === op && outcome.index === index) as MemoryStoreApplied["outcomes"][number];
 }
 
@@ -588,7 +635,7 @@ const applyUpdate: CaseRun = async (harness) => {
     const what = `An update of ${quote(change.id)} to ${quote(change.text)}`;
     const outcome = outcomesOf(request, await apply(store, request, what), what)("update", 0);
     if (outcome.result !== "updated" || outcome.previousId !== change.id || typeof outcome.id !== "string" || outcome.id.length === 0) {
-      fail(`${what} answered ${quote(outcome)}. An update of a held entry answers updated, with previousId the id it was given and id the one the entry has now.`);
+      fail(`${what} answered ${quote(outcome)}. An update of a held entry answers updated, with previousId the id it was given and id the one the entry has now; pending is only for an engine whose queue still holds the new text, and the suite's store finishes each write.`);
     }
     const stored = (await held(store, { subject: REPO, kind: "facts" })).entries;
     const entry = entryWithId(stored, outcome.id);
@@ -615,6 +662,157 @@ const applyUpdate: CaseRun = async (harness) => {
   }
   const after = (await held(store, { subject: REPO, kind: "facts" })).entries.map((entry) => `${entry.id} ${entry.text}`);
   if (quote(after) !== quote(before)) fail(`${what} changed what the store holds. A missing item changes nothing.`);
+
+  // The Postgres fact takes a second spelling of the port fact's text.
+  const current = (await held(store, { subject: REPO, kind: "facts" })).entries;
+  const portEntry = current.find((entry) => entry.text === changes[0]?.text);
+  const moving = current.find((entry) => entry.text === changes[1]?.text);
+  if (!portEntry || !moving) fail(`Held of ${REPO} facts lost an updated entry: it has ${quote(current.map((entry) => entry.text))}.`);
+  const spelling = "the api listens on port 8080";
+  const collide = applying(REPO, "facts", { update: [{ id: moving.id, text: spelling }] });
+  const whatCollide = `An update of ${quote(moving.id)} to ${quote(spelling)}, a second spelling of the text ${quote(portEntry.id)} holds`;
+  const collided = outcomesOf(collide, await apply(store, collide, whatCollide), whatCollide)("update", 0);
+  const afterCollide = (await held(store, { subject: REPO, kind: "facts" })).entries;
+  const collideRule =
+    "A store that can hold both texts updates the entry beside the other; one whose ids follow the text changes nothing and answers failed, rejected, with heldId the entry that holds the text. Neither folds one entry into the other: core decides which to keep.";
+  if (collided.result === "failed") {
+    const unchanged = quote(afterCollide.map((entry) => `${entry.id} ${entry.text}`)) === quote(current.map((entry) => `${entry.id} ${entry.text}`));
+    if (collided.code !== "rejected" || collided.heldId !== portEntry.id || !unchanged) {
+      fail(`${whatCollide} answered ${quote(collided)} and left held with ${quote(afterCollide.map((entry) => entry.text))}. ${collideRule}`);
+    }
+  } else if (collided.result === "updated") {
+    const both = afterCollide.length === 2 && entryWithId(afterCollide, portEntry.id)?.text === portEntry.text;
+    if (collided.id === portEntry.id || !both || entryWithId(afterCollide, collided.id)?.text !== spelling) {
+      fail(`${whatCollide} answered ${quote(collided)} and left held with ${quote(afterCollide.map((entry) => `${entry.id} ${entry.text}`))}. ${collideRule}`);
+    }
+  } else {
+    fail(`${whatCollide} answered ${quote(collided)}. ${collideRule}`);
+  }
+};
+
+const QUEUED_RULE =
+  "An engine that queued a write has given no id yet, so the store answers pending, never an id it made up or took from the engine's event: core records the id and later looks for it.";
+
+const applyPending: CaseRun = async (harness) => {
+  if (!harness.openQueueing && !harness.settle) return;
+  if (!harness.openQueueing || !harness.settle) {
+    fail("The harness gives only one of openQueueing and settle. A store whose engine queues writes gives both; one whose engine never does gives neither.");
+  }
+  const store = await harness.openQueueing();
+  const facts = async () => (await held(store, { subject: REPO, kind: "facts" })).entries;
+  const original = "The API listens on port 3000.";
+  const revised = "The API listens on port 8080.";
+
+  const adding = applying(REPO, "facts", { runId: RUN, add: [{ text: original, origin: "learned" }] });
+  const whatAdd = "An add the engine queues";
+  const added = outcomesOf(adding, await apply(store, adding, whatAdd), whatAdd)("add", 0);
+  if (added.result === "added") {
+    if (entryWithId(await facts(), added.id)?.text !== original) {
+      fail(`${whatAdd} answered ${quote(added)}, and held has no entry ${quote(added.id)} holding ${quote(original)}. ${QUEUED_RULE}`);
+    }
+  } else if (added.result !== "pending") {
+    fail(`${whatAdd} answered ${quote(added)}. It answers pending while the engine's queue holds it, or added with the id held lists. ${QUEUED_RULE}`);
+  }
+  await harness.settle(store);
+  const landed = (await facts()).filter((entry) => entry.text === original);
+  const [entry] = landed;
+  if (landed.length !== 1 || !entry) fail(`Once the engine processed its queue, held has ${landed.length} entries holding ${quote(original)}, where the add lands once.`);
+
+  const updating = applying(REPO, "facts", { runId: LATER_RUN, ticketKey: LATER_TICKET, update: [{ id: entry.id, text: revised }] });
+  const whatUpdate = `An update of ${quote(entry.id)} whose new text the engine queues`;
+  const updated = outcomesOf(updating, await apply(store, updating, whatUpdate), whatUpdate)("update", 0);
+  const now = await facts();
+  if (updated.result === "pending") {
+    if (updated.op !== "update" || updated.previousId !== entry.id || entryWithId(now, entry.id)) {
+      fail(`${whatUpdate} answered ${quote(updated)}, and held ${entryWithId(now, entry.id) ? "still has" : "no longer has"} ${quote(entry.id)}. A pending update names the id it was given as previousId, and that id is gone: the new text is queued and the old entry deleted.`);
+    }
+  } else if (updated.result === "updated") {
+    if (updated.previousId !== entry.id || entryWithId(now, updated.id)?.text !== revised) {
+      fail(`${whatUpdate} answered ${quote(updated)}, and held has no entry ${quote(updated.id)} holding ${quote(revised)}. ${QUEUED_RULE}`);
+    }
+  } else {
+    fail(`${whatUpdate} answered ${quote(updated)}. It answers pending while the engine's queue holds the new text, or updated with the id held lists. ${QUEUED_RULE}`);
+  }
+  await harness.settle(store);
+  const after = await facts();
+  if (quote(after.map((stored) => stored.text)) !== quote([revised])) {
+    fail(`Once the engine processed its queue after ${whatUpdate}, held has ${quote(after.map((stored) => stored.text))}, where only ${quote(revised)} is left: an update replaces the entry's text and leaves no second copy.`);
+  }
+  const [result] = after;
+  if (result?.origin !== "learned" || result.runId !== LATER_RUN || result.ticketKey !== LATER_TICKET) {
+    fail(`${whatUpdate} left the entry as ${quote(result)}. A replacing update keeps the origin (learned) and stamps the later run and ticket, as an update in place does.`);
+  }
+};
+
+const ORDER_RULE =
+  "Apply takes removals first, then updates, then additions, whatever order the request lists them in, so a text a removal or an update frees can be written again in the same call.";
+
+const applyOrder: CaseRun = async (harness) => {
+  const store = await harness.open();
+  const facts = async () => (await held(store, { subject: REPO, kind: "facts" })).entries;
+  const show = (entries: readonly MemoryStoreEntry[]) => quote(entries.map((entry) => entry.text));
+
+  // A removal frees a text for an addition.
+  const [pnpm] = await seed(store, REPO, "facts", ["Use pnpm for installs."]);
+  const spelling = "use pnpm for installs";
+  const first = applying(REPO, "facts", { remove: [{ id: pnpm as string, reason: "refuted" }], add: [{ text: spelling, origin: "human" }] });
+  const whatFirst = "An apply removing a fact and adding a second spelling of it";
+  const firstOutcome = outcomesOf(first, await apply(store, first, whatFirst), whatFirst);
+  const added = firstOutcome("add", 0);
+  let entries = await facts();
+  if (firstOutcome("remove", 0).result !== "removed" || added.result !== "added" || entries.length !== 1 || entries[0]?.id !== added.id || entries[0]?.text !== spelling) {
+    fail(`${whatFirst} answered ${quote(added)} for the addition, and held has ${show(entries)}, where only ${quote(spelling)} is left, under the id the addition answered. ${ORDER_RULE}`);
+  }
+
+  // A removal frees a text for an update.
+  const tuesday = "Deploys go out on Tuesdays.";
+  const [gone, moving] = await seed(store, REPO, "facts", [tuesday, "Deploys go out on Fridays."]);
+  const second = applying(REPO, "facts", { remove: [{ id: gone as string, reason: "refuted" }], update: [{ id: moving as string, text: tuesday }] });
+  const whatSecond = "An apply removing one fact and updating another to the removed one's text";
+  const secondOutcome = outcomesOf(second, await apply(store, second, whatSecond), whatSecond);
+  const updated = secondOutcome("update", 0);
+  entries = await facts();
+  if (secondOutcome("remove", 0).result !== "removed" || updated.result !== "updated" || entryWithId(entries, updated.id)?.text !== tuesday || quote(entries.map((entry) => entry.text).sort()) !== quote([spelling, tuesday].sort())) {
+    fail(`${whatSecond} answered ${quote(updated)} for the update, and held has ${show(entries)}, where ${quote(spelling)} and ${quote(tuesday)} are left, the second under the id the update answered. ${ORDER_RULE}`);
+  }
+
+  // An update frees a text for an addition.
+  const port = "The API listens on port 3000.";
+  const [old] = await seed(store, REPO, "facts", [port]);
+  const third = applying(REPO, "facts", { update: [{ id: old as string, text: "The API listens on port 8080." }], add: [{ text: port, origin: "learned" }] });
+  const whatThird = "An apply updating a fact to a new text and adding the old text again";
+  const thirdOutcome = outcomesOf(third, await apply(store, third, whatThird), whatThird);
+  const readded = thirdOutcome("add", 0);
+  entries = await facts();
+  if (thirdOutcome("update", 0).result !== "updated" || readded.result !== "added" || entryWithId(entries, readded.id)?.text !== port || !entries.some((entry) => entry.text === "The API listens on port 8080.") || entries.length !== 4) {
+    fail(`${whatThird} answered ${quote(readded)} for the addition, and held has ${show(entries)}, where both port texts are held beside the two earlier facts. ${ORDER_RULE}`);
+  }
+};
+
+const applyConcurrent: CaseRun = async (harness) => {
+  const store = await harness.open();
+  const requests = [
+    ["The API listens on port 3000.", "The API uses Postgres 16 for storage."],
+    ["Deploys go out on Tuesdays.", "Releases are tagged by a bot."],
+  ].map((texts, run) =>
+    applying(REPO, "facts", { runId: `conformance-run-${run + 1}`, add: texts.map((text) => ({ text, origin: "learned" as const })) }),
+  );
+  const what = "Two applies adding different facts to one subject and kind at once";
+  const answers = await Promise.all(requests.map((request) => apply(store, request, what)));
+  const stored = (await held(store, { subject: REPO, kind: "facts" })).entries;
+  const rule =
+    "Two applies to one subject and kind may run at once, and neither loses the other's writes: whatever either adds is held afterwards. A store that reads what it holds, waits and writes it back whole serialises its applies.";
+  requests.forEach((request, run) => {
+    const outcome = outcomesOf(request, answers[run] as MemoryStoreApplied, what);
+    request.add.forEach((addition, index) => {
+      const answered = outcome("add", index);
+      const entry = answered.result === "added" ? entryWithId(stored, answered.id) : undefined;
+      if (entry?.text !== addition.text) {
+        fail(`${what} answered ${quote(answered)} for ${quote(addition.text)}, and held has ${quote(stored.map((kept) => kept.text))}. ${rule}`);
+      }
+    });
+  });
+  if (stored.length !== 4) fail(`${what} left held with ${quote(stored.map((kept) => kept.text))}, where the four facts both added are held. ${rule}`);
 };
 
 const REMOVAL_REASONS = ["refuted", "cap", "forgotten", "retired", "reverted"] as const;
@@ -985,6 +1183,9 @@ const CASES: readonly (readonly [MemoryStoreConformanceCase, CaseRun])[] = [
   ["held_version", heldVersion],
   ["apply_add", applyAdd],
   ["apply_update", applyUpdate],
+  ["apply_pending", applyPending],
+  ["apply_order", applyOrder],
+  ["apply_concurrent", applyConcurrent],
   ["apply_remove", applyRemove],
   ["origins_round_trip", originsRoundTrip],
   ["forget_by_text_hash", forgetByTextHash],

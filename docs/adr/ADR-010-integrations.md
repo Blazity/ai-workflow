@@ -2956,8 +2956,19 @@ the port binds a store to, each stated on the type and each a case of
 - `apply` answers one outcome per item, never a count, and each outcome
   carries the id the entry has afterwards: an update may change it (a store
   whose ids follow the text, or one that replaces an entry its engine will not
-  edit), and core chains the two ids in its record. The answer as a whole is a
+  edit), and core chains the two ids in its record. An engine that queues
+  writes has no id yet, so an add or a replacing update answers `pending` and
+  core finds the text on a later `held`; a replacing store adds first and
+  deletes second, and answers `failed` with `unavailable` when it cannot say
+  both halves landed. A consolidating store that merges an add into an entry
+  it holds answers `added` with the id its engine gave. A store whose ids
+  follow the text refuses an update to a text another entry holds (`rejected`,
+  with `heldId`) instead of folding the two. The answer as a whole is a
   refusal only when nothing was applied.
+- Within one apply, removals go first, then updates, then additions, so a text
+  one frees can be written again in the same call. Two applies to one subject
+  and kind may run at once and neither loses the other's writes; a caller that
+  needs no writer between its read and its write passes `ifVersion`.
 - A store declares whether it consolidates on its own (Mem0's Supersede and
   Merge do; the built-in store never does) and whether `protect` keeps an entry
   out of that. A store that says it does not consolidate holds exactly what
@@ -2972,9 +2983,13 @@ the port binds a store to, each stated on the type and each a case of
 - Refusals use `MemoryFailure`'s store codes (`unavailable`, `contended`,
   `rejected`), with an optional typed `reason` (`key_rejected`, `quota`,
   `rate_limited`, `timeout`, `unreachable`) and HTTP `status`, so a run card
-  and a store status can say why without parsing a sentence.
+  and a store status can say why without parsing a sentence. Every reason goes
+  with `unavailable`: each is the engine's state, and asking again later gets
+  past it (plan cases E3 and E4).
 - An entry carries its text, origin (`learned`, `derived`, `imported`,
-  `human`), last writer and, from a consolidating store, `replacedBy`; never
+  `human`, the last meaning a person wrote or restored it, while an edit or a
+  confirmation is core's trust record), last writer and, from a consolidating
+  store, `replacedBy`; never
   trust, status, pins, placement or routing, which are core's record. Kinds
   stay `facts` and `lessons`: notebooks leave the port, because core keeps
   every notebook in its built-in store whichever store serves facts.

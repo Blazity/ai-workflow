@@ -4,8 +4,9 @@
  *
  * - `ids`: `stable` keeps an entry's id through an update and can hold two
  *   entries with the same normalised text (Mem0 does); `from_text` derives
- *   the id from the normalised text, so an update changes it and a second
- *   spelling of a held entry is `already_held` (the built-in store does).
+ *   the id from the normalised text, so an update changes it, a second
+ *   spelling of a held entry is `already_held`, and an update to a text
+ *   another entry holds is refused (the built-in store does).
  * - `ranks`: with a query, orders by the share of the query's words an entry
  *   contains and leaves an entry sharing none unscored, after the rest.
  * - `versions`: `held` answers a version and `apply` honours `ifVersion`.
@@ -14,6 +15,11 @@
  *   Supersede): among entries of one subject and kind with the same
  *   normalised text, every one but the newest is marked `replacedBy` the
  *   newest, and a protected entry is left alone when the shape protects.
+ * - `queues`: the engine queues every write that creates an entry until
+ *   `settleNow`, as Mem0 does when it answers an add with an event and no
+ *   memory id. An addition answers `pending`; an update replaces the entry
+ *   (Mem0's legacy immutable entries), queueing the new text and deleting the
+ *   old entry, and answers `pending`. Meant with `stable` ids.
  * - `unreachable`: every member answers `unavailable`.
  *
  * Test support: nothing in production imports it.
@@ -37,12 +43,15 @@ export interface ReferenceMemoryStoreOptions {
   readonly ranks?: boolean;
   readonly versions?: boolean;
   readonly traits?: MemoryStoreTraits;
+  readonly queues?: boolean;
   readonly unreachable?: boolean;
 }
 
 export interface ReferenceMemoryStore extends MemoryStore {
   /** The consolidating engine's own pass; nothing for a shape that does not consolidate. */
   consolidateNow(): void;
+  /** The queueing engine processes its queue: every queued text is stored, oldest first; nothing for a shape that does not queue. */
+  settleNow(): void;
 }
 
 interface Stored {
@@ -73,6 +82,7 @@ function words(text: string): Set<string> {
 export function referenceMemoryStore(options: ReferenceMemoryStoreOptions = {}): ReferenceMemoryStore {
   const traits: MemoryStoreTraits = options.traits ?? { consolidates: false };
   const shelves = new Map<string, Stored[]>();
+  const queued: { subject: string; kind: MemoryKind; entry: Omit<Stored, "id" | "updatedAt"> }[] = [];
   const versions = new Map<string, number>();
   let serial = 0;
   let clock = Date.parse("2026-09-25T08:00:00.000Z");
@@ -200,16 +210,35 @@ export function referenceMemoryStore(options: ReferenceMemoryStoreOptions = {}):
           outcomes.push({ op: "update", index, result: "missing", id: update.id });
           return;
         }
+        if (options.queues === true) {
+          // A replacement: the new text first, then the old entry goes.
+          queued.push({
+            subject: request.subject,
+            kind: request.kind,
+            entry: { text: update.text, origin: target.origin, protect: update.protect === true, ...stamp },
+          });
+          entries.splice(entries.indexOf(target), 1);
+          changed = true;
+          outcomes.push({ op: "update", index, result: "pending", previousId: update.id });
+          return;
+        }
         const id = options.ids === "from_text" ? newId(update.text) : target.id;
-        // Ids that follow the text: the new text may be another entry's, and
-        // then that entry takes it and this one goes.
+        // Ids that follow the text: the new text may be another entry's.
         const other = entries.find((stored) => stored.id === id && stored !== target);
-        const written = other ?? target;
-        if (other) entries.splice(entries.indexOf(target), 1);
-        Object.assign(written, {
+        if (other) {
+          outcomes.push({
+            op: "update",
+            index,
+            result: "failed",
+            code: "rejected",
+            detail: `The new text is already held under ${other.id}, so the reference store changed nothing.`,
+            heldId: other.id,
+          });
+          return;
+        }
+        Object.assign(target, {
           id,
           text: update.text,
-          origin: target.origin,
           updatedAt: now(),
           protect: update.protect === true,
           runId: undefined,
@@ -222,6 +251,15 @@ export function referenceMemoryStore(options: ReferenceMemoryStoreOptions = {}):
       });
 
       request.add.forEach((addition, index) => {
+        if (options.queues === true) {
+          queued.push({
+            subject: request.subject,
+            kind: request.kind,
+            entry: { text: addition.text, origin: addition.origin, protect: addition.protect === true, ...stamp },
+          });
+          outcomes.push({ op: "add", index, result: "pending" });
+          return;
+        }
         const id = newId(addition.text);
         if (entries.some((stored) => stored.id === id)) {
           outcomes.push({ op: "add", index, result: "already_held", id });
@@ -291,6 +329,13 @@ export function referenceMemoryStore(options: ReferenceMemoryStoreOptions = {}):
           if (!newest) continue;
           for (const older of group.slice(0, -1)) older.replacedBy = newest.id;
         }
+      }
+    },
+
+    settleNow() {
+      for (const { subject, kind, entry } of queued.splice(0)) {
+        shelf(subject, kind).push({ ...entry, id: newId(entry.text), updatedAt: now() });
+        bump(subject, kind);
       }
     },
   };

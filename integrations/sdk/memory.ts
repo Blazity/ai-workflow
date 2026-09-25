@@ -624,10 +624,13 @@ export type MemoryKind = "facts" | "lessons";
  * - `derived`: code read it out of the subject itself (a repository's
  *   manifest), so nothing re-creates it once it is lost.
  * - `imported`: copied from another store, or moved in from an older place.
- * - `human`: a person wrote, edited, confirmed or restored it.
+ * - `human`: a person wrote or restored it (an addition).
  *
- * Trust, pins and status are core's and live in core's own record; the origin
- * is the one fact about provenance that travels with the entry.
+ * A person editing or confirming an entry is not an origin: an update keeps
+ * the entry's origin and a confirmation writes nothing to the store, so both
+ * live in core's trust record. Trust, pins and status are core's and live in
+ * core's own record; the origin is the one fact about provenance that travels
+ * with the entry.
  */
 export type MemoryEntryOrigin = "learned" | "derived" | "imported" | "human";
 
@@ -658,7 +661,8 @@ export interface MemoryStoreEntry {
    * The text as last written, VERBATIM: never reworded, trimmed, re-cased or
    * joined to another entry. Core sends one line with no surrounding
    * whitespace and has already taken every known secret out of it; how long
-   * it may be is core's rule.
+   * it may be is core's rule. The one exception is a store that consolidates
+   * (`MemoryStoreTraits`), whose engine may rewrite it on its own.
    */
   readonly text: string;
   readonly origin: MemoryEntryOrigin;
@@ -704,10 +708,16 @@ export type MemoryStoreFailure = Extract<MemoryFailure, "unavailable" | "contend
  * leaves it out and says it in `detail`.
  *
  * - `key_rejected`: the engine refused the credential (401, or 403 on the key).
- * - `quota`: the engine's plan or quota is spent.
+ * - `quota`: the engine's plan or quota is spent (Mem0's own SDK reads 413 so).
  * - `rate_limited`: the engine asked to slow down (429).
  * - `timeout`: no answer within the time the call had.
  * - `unreachable`: no connection to the engine at all.
+ *
+ * EVERY REASON GOES WITH `unavailable`, on a refusal and on a failed item
+ * alike: each is the engine's state, not the request's fault, and asking again
+ * once a person replaces the key, the quota renews, the limit passes or the
+ * engine comes back succeeds. A `rejected` or `contended` answer carries no
+ * reason.
  */
 export type MemoryStoreFailureReason = "key_rejected" | "quota" | "rate_limited" | "timeout" | "unreachable";
 
@@ -716,6 +726,7 @@ export interface MemoryStoreRefusal {
   readonly code: MemoryStoreFailure;
   /** One sentence a person reads: what failed and, where it helps, what to do. Never empty. */
   readonly detail: string;
+  /** Only with `unavailable` (see `MemoryStoreFailureReason`). */
   readonly reason?: MemoryStoreFailureReason;
   /** The HTTP status the engine answered with, when one did. */
   readonly status?: number;
@@ -820,6 +831,26 @@ export interface MemoryStoreAddition {
   readonly protect?: true;
 }
 
+/**
+ * Replace one entry's text.
+ *
+ * A store whose engine will not edit an entry in place (Mem0's legacy
+ * immutable entries) REPLACES it: it adds the new text first and deletes the
+ * old entry second, so a failure between the two leaves the old text held
+ * rather than neither. It answers `updated` when both halves finished,
+ * `pending` when the delete finished and the engine queued the add, and
+ * `failed` with `unavailable` whenever it cannot say both halves landed (the
+ * delete failed, or it cannot tell which half did); core reads `held` before
+ * it tries again and finds whichever half landed.
+ *
+ * A store whose ids follow the text cannot give the new text an id another
+ * entry already has. When the new text is already held under another id
+ * (their normalised texts are equal), it changes nothing and answers `failed`
+ * with `rejected` and `heldId`, the id of the entry holding that text; core
+ * decides which of the two to keep. It never folds one entry into the other
+ * on its own. A store that can hold two entries with the same normalised text
+ * updates as asked.
+ */
 export interface MemoryStoreUpdate {
   /** An id `held` or an earlier outcome returned for this subject and kind. */
   readonly id: string;
@@ -878,8 +909,14 @@ export interface MemoryStoreItemFailure {
   readonly result: "failed";
   readonly code: Extract<MemoryStoreFailure, "unavailable" | "rejected">;
   readonly detail: string;
+  /** Only with `unavailable` (see `MemoryStoreFailureReason`). */
   readonly reason?: MemoryStoreFailureReason;
   readonly status?: number;
+  /**
+   * Only on an update refused as `rejected` because its new text is already
+   * held under another id (`MemoryStoreUpdate`): that entry's id.
+   */
+  readonly heldId?: string;
 }
 
 /**
@@ -887,7 +924,16 @@ export interface MemoryStoreItemFailure {
  * own list) say which item.
  */
 export type MemoryStoreApplyOutcome =
-  /** Stored; `id` is its id. */
+  /**
+   * Stored; `id` is its id, one `held` lists right away.
+   *
+   * A store that consolidates may merge the addition into an entry it
+   * already holds during the write (Mem0 turning an add into an update of a
+   * similar memory). It still answers `added`, with the id its engine gave,
+   * which may be an entry already held, and the text under that id may differ
+   * from the text sent; core reconciles through `held`. It never answers an
+   * id its engine did not give.
+   */
   | { readonly op: "add"; readonly index: number; readonly result: "added"; readonly id: string }
   /**
    * Not written, because this store already holds an entry with the same
@@ -913,6 +959,14 @@ export type MemoryStoreApplyOutcome =
       readonly previousId: string;
       readonly id: string;
     }
+  /**
+   * Replaced by a store whose engine queues writes (`MemoryStoreUpdate`): the
+   * old entry is deleted, so `previousId` is gone, and the new text is
+   * accepted but not stored yet, so no new id exists. Core finds the entry on
+   * a later `held` by its text, as for a pending add. Never the answer of a
+   * store whose write has finished.
+   */
+  | { readonly op: "update"; readonly index: number; readonly result: "pending"; readonly previousId: string }
   /** Removed, for the reason core gave, which the outcome repeats. */
   | {
       readonly op: "remove";
@@ -1002,8 +1056,18 @@ export interface MemoryStore {
   held(request: MemoryStoreHeldRequest): Promise<MemoryStoreAnswer<MemoryStoreHeld>>;
   /**
    * One call per subject and kind. Removals first, then updates, then
-   * additions, so a text a removal frees can be written again in the same
-   * call.
+   * additions, so a text a removal or an update frees can be written again in
+   * the same call. A store whose ids follow the text that took them in
+   * another order would answer `already_held` for an entry it is about to
+   * delete, or refuse an update to a text it is about to free.
+   *
+   * Two applies to one subject and kind may run at once (two runs finishing
+   * together). Neither loses the other's writes: whatever either adds is held
+   * afterwards, unless an item of the other removes it. The items of the two
+   * may interleave, and which lands first is not promised; a caller that
+   * needs no other writer between its `held` and its apply passes
+   * `ifVersion`. A store that reads what it holds, waits and writes it back
+   * whole serialises its applies, or it loses one.
    *
    * The answer as a whole is a refusal only when NOTHING was applied: the
    * version moved, the subject or kind is not one the store can address, the

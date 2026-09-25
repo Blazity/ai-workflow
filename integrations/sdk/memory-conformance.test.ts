@@ -21,6 +21,8 @@ import {
   memoryTextHash,
   normalizeMemoryText,
   type MemoryStore,
+  type MemoryStoreApplyOutcome,
+  type MemoryStoreApplyRequest,
   type MemoryStoreConformanceCase,
   type MemoryStoreConformanceHarness,
   type MemoryStoreConformanceIssue,
@@ -37,12 +39,14 @@ function sha256Hex(text: string): string {
 
 /**
  * A harness over the reference store in one shape, optionally broken by
- * `wrap`. Cases run one after another, so the store the last `open` made is
- * the one `consolidate` acts on.
+ * `wrap`, and with `queueing` also over the same shape with its engine
+ * queueing writes. Cases run one after another, so the store the last `open`
+ * or `openQueueing` made is the one `consolidate` and `settle` act on.
  */
 function harness(
   options: ReferenceMemoryStoreOptions,
   wrap: (store: ReferenceMemoryStore) => MemoryStore = (store) => store,
+  queueing = false,
 ): MemoryStoreConformanceHarness {
   let current: ReferenceMemoryStore | undefined;
   const consolidating = options.traits?.consolidates === true;
@@ -56,6 +60,17 @@ function harness(
       ? {
           consolidate: async () => {
             current?.consolidateNow();
+          },
+        }
+      : {}),
+    ...(queueing
+      ? {
+          openQueueing: () => {
+            current = referenceMemoryStore({ ...options, queues: true });
+            return wrap(current);
+          },
+          settle: async () => {
+            current?.settleNow();
           },
         }
       : {}),
@@ -87,15 +102,20 @@ function describeIssues(issues: readonly MemoryStoreConformanceIssue[]): string 
 }
 
 /** Each shape a real store takes. Every one passes with no issue. */
-const SHAPES: readonly { readonly name: string; readonly options: ReferenceMemoryStoreOptions }[] = [
+const SHAPES: readonly {
+  readonly name: string;
+  readonly options: ReferenceMemoryStoreOptions;
+  readonly queueing?: boolean;
+}[] = [
   { name: "stable ids, stored order, no versions (a plain store)", options: {} },
   {
     name: "ids from the text, versions (the built-in store's shape)",
     options: { ids: "from_text", versions: true },
   },
   {
-    name: "ranks, consolidates and protects (Mem0's shape with immutable entries)",
+    name: "ranks, consolidates, protects and queues (Mem0's shape with immutable entries)",
     options: { ranks: true, traits: { consolidates: true, protects: true } },
+    queueing: true,
   },
   {
     name: "consolidates and cannot protect",
@@ -105,7 +125,7 @@ const SHAPES: readonly { readonly name: string; readonly options: ReferenceMemor
 
 for (const shape of SHAPES) {
   test(`the reference store passes: ${shape.name}`, async () => {
-    const issues = await checkMemoryStoreConformance(harness(shape.options));
+    const issues = await checkMemoryStoreConformance(harness(shape.options, undefined, shape.queueing));
     assert.deepEqual(issues, [], `conformance reported:\n${describeIssues(issues)}`);
   });
 }
@@ -114,7 +134,34 @@ interface Mistake {
   readonly mistake: string;
   readonly catches: MemoryStoreConformanceCase;
   readonly options?: ReferenceMemoryStoreOptions;
+  /** The harness also offers the shape with its engine queueing writes. */
+  readonly queueing?: boolean;
   readonly wrap: (store: ReferenceMemoryStore) => MemoryStore;
+}
+
+/** The store applying each list of a request as its own apply, in `order`. */
+function applyingInOrder(store: MemoryStore, order: readonly ("add" | "update" | "remove")[]): MemoryStore {
+  return breaking(store, {
+    apply: async (request) => {
+      const outcomes: MemoryStoreApplyOutcome[] = [];
+      for (const list of order) {
+        const answer = await store.apply({ ...request, add: [], update: [], remove: [], [list]: request[list] });
+        if (!answer.ok) return answer;
+        outcomes.push(...answer.outcomes);
+      }
+      return { ok: true, outcomes };
+    },
+  });
+}
+
+/** The outcomes of an apply the store answered, each passed through `change`. */
+function rewritingOutcomes(store: MemoryStore, change: (outcome: MemoryStoreApplyOutcome, request: MemoryStoreApplyRequest) => MemoryStoreApplyOutcome): MemoryStore {
+  return breaking(store, {
+    apply: async (request) => {
+      const answer = await store.apply(request);
+      return answer.ok ? { ...answer, outcomes: answer.outcomes.map((outcome) => change(outcome, request)) } : answer;
+    },
+  });
 }
 
 /** Each way an adapter gets the port wrong, and the case that must say so. */
@@ -140,6 +187,18 @@ const MISTAKES: readonly Mistake[] = [
         recall: async (request) => {
           const answer = await store.recall(request);
           return answer.ok ? { ...answer, entries: answer.entries.slice(0, 40) } : answer;
+        },
+      }),
+  },
+  {
+    mistake: "recall answers one search's top 100",
+    catches: "recall_complete",
+    options: { ranks: true },
+    wrap: (store) =>
+      breaking(store, {
+        recall: async (request) => {
+          const answer = await store.recall(request);
+          return answer.ok ? { ...answer, entries: answer.entries.slice(0, 100) } : answer;
         },
       }),
   },
@@ -200,6 +259,17 @@ const MISTAKES: readonly Mistake[] = [
         held: async (request) => {
           const answer = await store.held(request);
           return answer.ok ? { ...answer, entries: answer.entries.slice(0, 40) } : answer;
+        },
+      }),
+  },
+  {
+    mistake: "held reads one list page of 200",
+    catches: "held_complete",
+    wrap: (store) =>
+      breaking(store, {
+        held: async (request) => {
+          const answer = await store.held(request);
+          return answer.ok ? { ...answer, entries: answer.entries.slice(0, 200) } : answer;
         },
       }),
   },
@@ -350,6 +420,109 @@ const MISTAKES: readonly Mistake[] = [
                 : outcome,
             ),
           };
+        },
+      }),
+  },
+  {
+    mistake: "a text-keyed store folds an updated entry into the one already holding its new text",
+    catches: "apply_update",
+    options: { ids: "from_text" },
+    wrap: (store) =>
+      breaking(store, {
+        apply: async (request) => {
+          const answer = await store.apply(request);
+          if (!answer.ok) return answer;
+          const outcomes: MemoryStoreApplyOutcome[] = [];
+          for (const outcome of answer.outcomes) {
+            const update = outcome.op === "update" ? request.update[outcome.index] : undefined;
+            if (outcome.result !== "failed" || outcome.heldId === undefined || !update) {
+              outcomes.push(outcome);
+              continue;
+            }
+            // The entry being updated goes, and the one holding the text takes the new spelling.
+            await store.apply({
+              subject: request.subject,
+              kind: request.kind,
+              add: [],
+              update: [{ id: outcome.heldId, text: update.text }],
+              remove: [{ id: update.id, reason: "reverted" }],
+            });
+            outcomes.push({ op: "update", index: outcome.index, result: "updated", previousId: update.id, id: outcome.heldId });
+          }
+          return { ...answer, outcomes };
+        },
+      }),
+  },
+  {
+    mistake: "a failed item pairs a spent quota (413) with rejected",
+    catches: "apply_update",
+    options: { ids: "from_text" },
+    wrap: (store) =>
+      rewritingOutcomes(store, (outcome) => (outcome.result === "failed" ? { ...outcome, reason: "quota", status: 413 } : outcome)),
+  },
+  {
+    mistake: "an add the engine queued is answered added with the engine's event id",
+    catches: "apply_pending",
+    queueing: true,
+    wrap: (store) =>
+      rewritingOutcomes(store, (outcome) =>
+        outcome.op === "add" && outcome.result === "pending"
+          ? { op: "add", index: outcome.index, result: "added", id: `event-${outcome.index}` }
+          : outcome,
+      ),
+  },
+  {
+    mistake: "an update whose new text the engine queued is answered updated with an invented id",
+    catches: "apply_pending",
+    queueing: true,
+    wrap: (store) =>
+      rewritingOutcomes(store, (outcome) =>
+        outcome.op === "update" && outcome.result === "pending"
+          ? { op: "update", index: outcome.index, result: "updated", previousId: outcome.previousId, id: `event-${outcome.previousId}` }
+          : outcome,
+      ),
+  },
+  {
+    mistake: "a text-keyed store applies additions, then updates, then removals, as the request lists them",
+    catches: "apply_order",
+    options: { ids: "from_text" },
+    wrap: (store) => applyingInOrder(store, ["add", "update", "remove"]),
+  },
+  {
+    mistake: "a text-keyed store applies updates before removals",
+    catches: "apply_order",
+    options: { ids: "from_text" },
+    wrap: (store) => applyingInOrder(store, ["update", "remove", "add"]),
+  },
+  {
+    mistake: "a text-keyed store applies additions before updates",
+    catches: "apply_order",
+    options: { ids: "from_text" },
+    wrap: (store) => applyingInOrder(store, ["remove", "add", "update"]),
+  },
+  {
+    mistake: "apply reads what the subject holds, waits, and writes it back whole",
+    catches: "apply_concurrent",
+    wrap: (store) =>
+      breaking(store, {
+        apply: async (request) => {
+          const address = { subject: request.subject, kind: request.kind };
+          const read = await store.held(address);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          const answer = await store.apply(request);
+          const now = await store.held(address);
+          if (!read.ok || !answer.ok || !now.ok) return answer;
+          // What is written back is what was read plus this apply's own
+          // changes, so whatever another apply added in between is gone.
+          const kept = new Set([
+            ...read.entries.map((entry) => entry.id),
+            ...answer.outcomes.flatMap((outcome) => (outcome.result === "added" || outcome.result === "updated" ? [outcome.id] : [])),
+          ]);
+          const lost = now.entries.filter((entry) => !kept.has(entry.id));
+          if (lost.length > 0) {
+            await store.apply({ ...address, add: [], update: [], remove: lost.map((entry) => ({ id: entry.id, reason: "cap" as const })) });
+          }
+          return answer;
         },
       }),
   },
@@ -569,6 +742,17 @@ const MISTAKES: readonly Mistake[] = [
       }),
   },
   {
+    mistake: "a rate limit (429) is refused as rejected with its reason",
+    catches: "refusals_typed",
+    wrap: (store) =>
+      breaking(store, {
+        held: async (request) => {
+          const answer = await store.held(request);
+          return answer.ok || answer.code !== "rejected" ? answer : { ...answer, reason: "rate_limited", status: 429 };
+        },
+      }),
+  },
+  {
     mistake: "a refusal says nothing in its detail",
     catches: "refusals_typed",
     wrap: (store) =>
@@ -677,7 +861,7 @@ const MISTAKES: readonly Mistake[] = [
 
 for (const row of MISTAKES) {
   test(`conformance catches: ${row.mistake} (${row.catches})`, async (t) => {
-    const issues = await checkMemoryStoreConformance(harness(row.options ?? {}, row.wrap));
+    const issues = await checkMemoryStoreConformance(harness(row.options ?? {}, row.wrap, row.queueing));
     const caught = issues.find((issue) => issue.case === row.catches);
     assert.ok(caught, `expected ${row.catches} among the issues, which were:\n${describeIssues(issues)}`);
     t.diagnostic(caught.message);
