@@ -333,7 +333,7 @@ function pageLimit(requested: number | undefined): number {
 function toPage(rows: StoredMemoryEvent[], limit: number): MemoryEventPage {
   if (rows.length <= limit) return { events: rows, next: null };
   const events = rows.slice(0, limit);
-  return { events, next: events[events.length - 1]!.id };
+  return { events, next: events.at(-1)!.id };
 }
 
 /** A run's memory timeline, oldest first; `after` is the previous page's `next`. */
@@ -530,7 +530,7 @@ function withoutTexts(record: MemoryEventRecord): MemoryEventRecord {
             ...record.detail,
             ...(items === undefined
               ? {}
-              : { items: items.map((item) => ("text" in item ? { ...item, text: null } : item)) }),
+              : { items: items.map((item) => ("text" in item ? Object.assign({}, item, { text: null }) : item)) }),
           },
         }),
   };

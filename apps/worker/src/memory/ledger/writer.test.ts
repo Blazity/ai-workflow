@@ -181,24 +181,24 @@ describe("memoryLedgerWriter.record", () => {
 
     const outcome = await ledger.record([
       { ...base, event: "added", text: `Deploy key ${split}` },
-      { ...base, event: "added", text: "emoji \ud83d cut", detail: { query: "ticket \udc00 cut" } },
+      { ...base, event: "added", text: "emoji \uD83D cut", detail: { query: "ticket \uDC00 cut" } },
     ]);
 
     expect(outcome).toMatchObject({ ok: true, duplicates: 0 });
     const [redacted, surrogate] = (await listRunMemoryEvents(db, "run-1")).events;
     expect(redacted).toMatchObject({ text: `Deploy key ${REDACTED}`, textHash: sha(`deploy key ${REDACTED}`.toLowerCase()) });
-    expect(surrogate).toMatchObject({ text: "emoji \ufffd cut", textHash: sha("emoji \ufffd cut"), detail: { query: "ticket \ufffd cut" } });
+    expect(surrogate).toMatchObject({ text: "emoji \uFFFD cut", textHash: sha("emoji \uFFFD cut"), detail: { query: "ticket \uFFFD cut" } });
   });
 
   it("keeps a 300 KB text to 4 KiB on a character boundary, records its size, and hashes it whole", async () => {
     const ledger = memoryLedgerWriter({ repository: () => memoryLedgerRepository(db), knownSecrets: knowing(), log });
-    const text = "\u20ac".repeat(100_000);
+    const text = "\u20AC".repeat(100_000);
 
     await ledger.record([{ ...base, event: "added", text, previousText: text, reason: text }]);
 
     const [row] = (await listRunMemoryEvents(db, "run-1")).events;
     expect(bytes(text)).toBe(300_000);
-    expect(row!.text).toBe("\u20ac".repeat(Math.floor(MAX_MEMORY_LEDGER_TEXT_BYTES / 3)));
+    expect(row!.text).toBe("\u20AC".repeat(Math.floor(MAX_MEMORY_LEDGER_TEXT_BYTES / 3)));
     expect(row!.previousText).toBe(row!.text);
     expect(row!.reason).toBe(row!.text);
     expect(row!.bytes).toBe(300_000);

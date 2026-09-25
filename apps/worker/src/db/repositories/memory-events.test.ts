@@ -95,18 +95,18 @@ describe("appendMemoryEvents", () => {
   it("strips NUL characters and lone surrogates from every text, detail string and key, so the row is written", async () => {
     await appendMemoryEvents(db, [
       event({
-        text: "Run\u0000 tests \ud83d",
-        textHash: sha("run tests \ufffd"),
+        text: "Run\u0000 tests \uD83D",
+        textHash: sha("run tests \uFFFD"),
         reason: "ok\u0000",
-        detail: { items: [{ text: "a\u0000b", textHash: sha("ab") }], note: "x\u0000y", ["k\udc00"]: "v" },
+        detail: { items: [{ text: "a\u0000b", textHash: sha("ab") }], note: "x\u0000y", ["k\uDC00"]: "v" },
       }),
       event({ text: "second row", textHash: sha("second row") }),
     ]);
 
     const [row, second] = (await listRunMemoryEvents(db, "run-1")).events;
-    expect(row!.text).toBe("Run tests \ufffd");
+    expect(row!.text).toBe("Run tests \uFFFD");
     expect(row!.reason).toBe("ok");
-    expect(row!.detail).toEqual({ items: [{ text: "ab", textHash: sha("ab") }], note: "xy", ["k\ufffd"]: "v" });
+    expect(row!.detail).toEqual({ items: [{ text: "ab", textHash: sha("ab") }], note: "xy", ["k\uFFFD"]: "v" });
     expect(second!.text).toBe("second row");
   });
 

@@ -10,6 +10,7 @@
  *
  * Workflow-scope safe: the repository is a deferred import.
  */
+import { memoryTextHash } from "@integrations/sdk";
 import type { MemoryOpenDispute, MemoryStateKind } from "../../db/memory-vocabulary.js";
 import type {
   MemoryEntryStateValues,
@@ -25,7 +26,6 @@ import {
 } from "../known-secrets.js";
 import { cleanStrings } from "./clean.js";
 import { defaultMemoryEntryState, type MemoryEntryOriginHint } from "./entry-state.js";
-import { memoryTextHash } from "./text-hash.js";
 import type { MemoryEntryRef } from "./writer.js";
 
 type MemoryLedgerRead<T> =

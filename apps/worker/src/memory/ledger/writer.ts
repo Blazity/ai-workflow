@@ -36,6 +36,7 @@
  * Workflow-scope safe: the repository and the logger are deferred imports, so
  * importing this module reaches no Node module.
  */
+import { memoryTextHash } from "@integrations/sdk";
 import { storable } from "../../db/memory-storable.js";
 import {
   MEMORY_AREA_STATUSES,
@@ -65,7 +66,6 @@ import type {
 import { knownSecretsReader, takeOutKnownSecrets, type KnownSecretsReader } from "../known-secrets.js";
 import { cleanStrings } from "./clean.js";
 import { defaultMemoryEntryState, type MemoryEntryOriginHint } from "./entry-state.js";
-import { memoryTextHash } from "./text-hash.js";
 
 /** One event as a caller hands it over: texts in the clear, no hashes. */
 interface MemoryEventInput
@@ -183,7 +183,7 @@ async function connectedRepository(): Promise<MemoryLedgerRepository> {
 const pinoWarn: MemoryLedgerLog = (fields, message) => {
   void import("../../infra/logger.js")
     .then(({ logger }) => logger.warn(fields, message))
-    .catch(() => undefined);
+    .catch(() => {});
 };
 
 const utf8 = new TextEncoder();
@@ -363,7 +363,9 @@ async function toRecord(event: MemoryEventInput, withheld: MemoryTextWithheld | 
       ? undefined
       : await Promise.all(
           items.map(async (item): Promise<MemoryEventDetailItem> =>
-            typeof item.text === "string" ? { ...item, textHash: await memoryTextHash(item.text) } : item,
+            typeof item.text === "string"
+              ? Object.assign({}, item, { textHash: await memoryTextHash(item.text) })
+              : item,
           ),
         );
   const detail =

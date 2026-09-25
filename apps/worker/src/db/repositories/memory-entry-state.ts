@@ -202,10 +202,12 @@ function assignments(
   text("trust", change.trust);
   if (change.pinned !== undefined) set.push(sql`pinned = ${change.pinned}::boolean`);
   if (change.status !== undefined) {
-    set.push(sql`status = ${change.status}::text`);
     // The time a status began, so it moves only when the status does.
-    set.push(sql`status_since = CASE WHEN existing.status IS DISTINCT FROM ${change.status}::text
-      THEN now() ELSE existing.status_since END`);
+    set.push(
+      sql`status = ${change.status}::text`,
+      sql`status_since = CASE WHEN existing.status IS DISTINCT FROM ${change.status}::text
+      THEN now() ELSE existing.status_since END`,
+    );
   }
   text("status_reason", change.statusReason);
   if (change.openDisputes !== undefined || change.addOpenDisputes !== undefined) {
@@ -306,7 +308,7 @@ async function executeWrite(
 const RACED: MemoryEntryStateWrite = { applied: false, why: "duplicate", storedVersion: null };
 
 /** The ids offered on create that a stored entry already holds another id for. */
-function storeIdConflicts(
+function findStoreIdConflicts(
   stored: Readonly<Record<string, string>> | null,
   offered: Readonly<Record<string, string>>,
 ): MemoryStoreIdConflict[] {
@@ -399,7 +401,7 @@ export async function recordMemoryEntryState(
   `);
   if (written.raced) return RACED;
   const row = written.row as (WriteRow & { stored_store_ids: Record<string, string> | null }) | undefined;
-  return outcome(row, storeIdConflicts(row?.stored_store_ids ?? null, offered));
+  return outcome(row, findStoreIdConflicts(row?.stored_store_ids ?? null, offered));
 }
 
 function targetCondition(target: MemoryEntryTarget): SQL {
