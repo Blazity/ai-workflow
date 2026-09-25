@@ -1,16 +1,10 @@
 import type { VcsProviderKind } from "@shared/contracts";
 
 /** Spelled in `@shared/contracts`, because the dashboard finds a ticket's
- *  work scope record by it too. */
-export { ticketSubjectKey } from "@shared/contracts";
-
-export function prSubjectKey(
-  provider: VcsProviderKind,
-  repoPath: string,
-  prNumber: number,
-): string {
-  return `pr:${provider}:${repoPath}#${prNumber}`;
-}
+ *  work scope record by it too. The pull request key lives beside it so the
+ *  one function that restores a supplied key's spelling (`canonicalSubjectKey`)
+ *  sits next to both builders it has to agree with. */
+export { canonicalSubjectKey, prSubjectKey, ticketSubjectKey } from "@shared/contracts";
 
 /**
  * Concurrency identity of one webhook delivery. The second component is the

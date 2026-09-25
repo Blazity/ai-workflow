@@ -774,6 +774,45 @@ describe("provider trigger dispatch", () => {
     await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
+  it("does not start a second run on a pull request a person dispatched from a URL in another case", async () => {
+    // Someone pasted github.com/acme/api/pull/42 and manual dispatch reserved the
+    // pull request under that spelling (services/manual-dispatch/resolve.ts builds
+    // the key with prSubjectKey, as below). GitHub then delivers the same pull
+    // request as Acme/API. Red while the key keeps each caller's spelling: the
+    // webhook claims a second subject and starts a second run on the one PR.
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const manual = prSubjectKey("github", "acme/api", 42);
+    await registry.reserve({
+      subjectKey: manual,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:manual",
+    });
+    await registry.commitStartedRun({
+      subjectKey: manual,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:manual",
+      runId: "run-manual",
+    });
+    const webhook = event({
+      pr: {
+        ...event().pr,
+        repoPath: "Acme/API",
+        prNumber: 42,
+        prUrl: "https://github.com/Acme/API/pull/42",
+      },
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(webhook, deps())).resolves.toEqual({ result: "coalesced" });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(listPendingTriggersForSubject(db, manual)).resolves.toHaveLength(1);
+    await expect(registry.listAll()).resolves.toEqual([
+      expect.objectContaining({ subjectKey: manual, runId: "run-manual" }),
+    ]);
+  });
+
   it("persists a retryable supersession cancellation failure on the accepted delivery", async () => {
     mockGetEnabled.mockResolvedValue(
       enabled({ scope: "any" }, "trigger_pr_updated"),

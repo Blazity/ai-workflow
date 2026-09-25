@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canonicalTicketKey } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
@@ -127,7 +128,12 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           // would make a sliced-after-the-fact page carry a runCount wider
           // than what's actually returned. Reading workflow_runs directly
           // keeps the LIMIT in the query and this tool's page honest.
-          const rows = await deps.services.listTicketRunPage(input.ticketKey, limit);
+          // Runs record the key in its one spelling; a key typed in another
+          // case listed no runs for a ticket tickets.get could read.
+          const rows = await deps.services.listTicketRunPage(
+            canonicalTicketKey(input.ticketKey),
+            limit,
+          );
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;

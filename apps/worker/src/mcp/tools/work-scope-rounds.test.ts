@@ -203,6 +203,24 @@ describe("work_scope.get and its rounds", () => {
     expect(viaRoute.rounds.items[0]!.id).toBe(ASK);
   }, 120_000);
 
+  // Red when: a subject key typed in another case is compared verbatim, so its
+  // rounds read as "none you may read" beside the ticket's real rounds.
+  it("serves a subject's rounds for its key typed in another case, on both surfaces", async () => {
+    const typed = "ticket:jira:awp-235";
+    const viaRoute = (await route(
+      `/work-scope?subjectKey=${encodeURIComponent(typed)}&rounds=true`,
+    )) as { subjectKey: string; rounds: { items: { id: string }[] } };
+    const viaTool = await tool({ subjectKey: typed, rounds: true });
+    const deliveries = (await route(
+      `/work-scope/rounds/${ASK}/deliveries?subjectKey=${encodeURIComponent(typed)}`,
+    )) as { total: number };
+
+    expect(viaRoute.subjectKey).toBe(SUBJECT);
+    expect(viaRoute.rounds.items.map((round) => round.id)).toEqual([ASK]);
+    expect(JSON.stringify(viaTool.rounds)).toBe(JSON.stringify(viaRoute.rounds));
+    expect(deliveries.total).toBeGreaterThan(0);
+  }, 120_000);
+
   // Red when: a round's children are readable on one surface and not the
   // other, which is the failure this stage exists to prevent.
   it("serves the same deliveries and the same effects to both surfaces", async () => {
