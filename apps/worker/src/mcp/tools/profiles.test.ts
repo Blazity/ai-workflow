@@ -42,8 +42,12 @@ import {
   discoverDeploymentSkills,
   importDeploymentSkills,
 } from "../../services/harness/index.js";
-import type { McpActorContext } from "../contracts.js";
+import { ensureSystemHarnessProfilesOnDb } from "../../harness-profiles/system-seed.js";
+import { HarnessSkillImportError } from "../../services/harness/harness-errors.js";
+import type { MessagingSender } from "../../adapters/messaging/types.js";
+import type { McpToolDependencies } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerProfileTools } from "./profiles.js";
 
 const ORG_ID = "org-profiles";
@@ -119,16 +123,16 @@ afterEach(async () => {
   rmSync(workingDirectory, { force: true, recursive: true });
 });
 
-async function connectedClient(
-  actor: McpActorContext = actorFor({
-    organizationId: ORG_ID,
-    userId: ADMIN_ID,
-    role: "admin",
-    scopes: new Set(["mcp:read", "workflows:write"]),
-  }),
-): Promise<Client> {
+const ADMIN = actorFor({
+  organizationId: ORG_ID,
+  userId: ADMIN_ID,
+  role: "admin",
+  scopes: new Set(["mcp:read", "workflows:write"]),
+});
+
+async function connectedClient(overrides: Partial<McpToolDependencies> = {}): Promise<Client> {
   const server = new McpServer({ name: "profiles-test", version: "0.1.0" });
-  registerProfileTools(server, depsFor(db, () => NOW, { actor }));
+  registerProfileTools(server, depsFor(db, () => NOW, { actor: ADMIN, ...overrides }));
   const client = new Client({ name: "profiles-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   cleanups.push(() => client.close(), () => server.close());
@@ -142,9 +146,9 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
   return result.structuredContent as { data: T; error?: never } & Record<string, unknown>;
 }
 
-function errorOf(result: unknown): { code: string } {
+function errorOf(result: unknown): { code: string; message: string; retryable: boolean } {
   const [first] = (result as { content: Array<{ text: string }> }).content;
-  return (JSON.parse(first!.text) as { error: { code: string } }).error;
+  return (JSON.parse(first!.text) as { error: ReturnType<typeof errorOf> }).error;
 }
 
 describe("profiles tools", () => {
@@ -235,14 +239,14 @@ describe("profiles tools", () => {
 
   it("keeps the writes to the roles that manage profiles", async () => {
     const { profileId } = await profilePinningTheSkill();
-    const client = await connectedClient(
-      actorFor({
+    const client = await connectedClient({
+      actor: actorFor({
         organizationId: ORG_ID,
         userId: ADMIN_ID,
         role: "member",
         scopes: new Set(["mcp:read", "workflows:write"]),
       }),
-    );
+    });
 
     const refused = await client.callTool({
       name: "profiles.publish",
@@ -251,5 +255,97 @@ describe("profiles tools", () => {
 
     expect(refused.isError).toBe(true);
     expect(errorOf(refused).code).toBe("FORBIDDEN");
+  });
+
+  it("refuses a built-in profile, which only a deployment changes", async () => {
+    await ensureSystemHarnessProfilesOnDb(db);
+    const client = await connectedClient();
+
+    const refused = await client.callTool({
+      name: "profiles.publish",
+      arguments: {
+        profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
+        expectedRevision: 1,
+        idempotencyKey: randomUUID(),
+      },
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(errorOf(refused)).toMatchObject({ code: "FORBIDDEN", retryable: false });
+  });
+
+  it("refuses a publish from a stale revision as a conflict worth a fresh read", async () => {
+    const { profileId } = await profilePinningTheSkill();
+    const client = await connectedClient();
+
+    const stale = await client.callTool({
+      name: "profiles.publish",
+      arguments: { profileId, expectedRevision: 7, idempotencyKey: randomUUID() },
+    });
+
+    expect(errorOf(stale)).toMatchObject({
+      code: "CONFLICT",
+      message: "Profile draft revision conflict",
+      retryable: true,
+    });
+    const detail = await call<{ publishedVersion: number | null }>(client, "profiles.get", {
+      profileId,
+    });
+    expect(detail.data.publishedVersion).toBeNull();
+  });
+
+  it("answers a repeated publish key from the first answer, without a second announcement", async () => {
+    const { profileId, artifactHash } = await profilePinningTheSkill();
+    const notifyForTicket = vi.fn<MessagingSender["notifyForTicket"]>();
+    notifyForTicket.mockResolvedValue({ delivered: true });
+    const client = await connectedClient({
+      adapters: adaptersFor("not_connected", { messaging: { notifyForTicket } }),
+    });
+    const idempotencyKey = randomUUID();
+    const first = await call<{ version: number; changed: boolean }>(client, "profiles.publish", {
+      profileId,
+      expectedRevision: 1,
+      idempotencyKey,
+    });
+    // The draft moves on, so running the publish again from revision 1 would
+    // now be refused: only a replay can still answer it.
+    writeSkill("Rules the client rewrote.");
+    await call(client, "profiles.refresh_skill", {
+      profileId,
+      expectedRevision: 1,
+      artifactHash,
+      idempotencyKey: randomUUID(),
+    });
+
+    const replayed = await call<{ version: number; changed: boolean }>(
+      client,
+      "profiles.publish",
+      { profileId, expectedRevision: 1, idempotencyKey },
+    );
+
+    expect(replayed.data).toEqual(first.data);
+    expect(first.data).toMatchObject({ version: 1, changed: true });
+    expect(notifyForTicket).toHaveBeenCalledOnce();
+    const detail = await call<{ publishedVersion: number }>(client, "profiles.get", { profileId });
+    expect(detail.data.publishedVersion).toBe(1);
+  });
+
+  it("releases the key when a dependency is down, so the same call can be sent again", async () => {
+    const { profileId } = await profilePinningTheSkill();
+    const services = depsFor(db, () => NOW).services;
+    const publish = vi
+      .fn(services.publishHarnessProfileDraft)
+      .mockRejectedValueOnce(new HarnessSkillImportError(503, "Model catalog is not ready"));
+    const client = await connectedClient({
+      services: { ...services, publishHarnessProfileDraft: publish },
+    });
+    const args = { profileId, expectedRevision: 1, idempotencyKey: randomUUID() };
+
+    const down = await client.callTool({ name: "profiles.publish", arguments: args });
+    const retried = await call<{ version: number }>(client, "profiles.publish", args);
+
+    expect(errorOf(down)).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", retryable: true });
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(retried.data.version).toBe(1);
   });
 });

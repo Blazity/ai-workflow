@@ -13,6 +13,7 @@ import { requireIssueTracker } from "../issue-tracker-access.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 const DEFAULT_COMMENTS_LIMIT = 20;
+const EVERY_COMMENT = new Date(0).toISOString();
 const DEFAULT_RUNS_LIMIT = 20;
 
 type TicketGetData = {
@@ -62,14 +63,14 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           let ticket;
           try {
-            // With comments wanted, read from the newest end. A Jira issue read
-            // embeds only a first page of comments, so without a window the
-            // newest ones, usually the latest human instruction, can be exactly
-            // the ones missing. A window that starts now asks the adapter for
-            // the most recent page and nothing older.
+            // With comments wanted, ask for every comment. An issue read may
+            // embed only a first page, so without a window the newest ones,
+            // usually the latest human instruction, can be exactly the ones
+            // missing. A window from the start of time is "all of them" by the
+            // port's own contract, and the adapter bounds how far it pages.
             ticket = input.includeComments
               ? await issueTracker.fetchTicket(input.ticketKey, {
-                  commentsSince: new Date().toISOString(),
+                  commentsSince: EVERY_COMMENT,
                 })
               : await issueTracker.fetchTicket(input.ticketKey);
           } catch (error) {
@@ -107,8 +108,8 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             statusId: ticket.trackerStatusId ?? null,
             commentCount: ticket.comments.length,
             comments,
-            // Also true when the adapter itself read only part of the list:
-            // older comments exist that neither side handed over.
+            // Also true when the adapter itself stopped short of the whole
+            // list: comments exist that neither side handed over.
             commentsTruncated:
               Boolean(input.includeComments) &&
               (ticket.comments.length > commentsLimit || ticket.commentsComplete === false),

@@ -273,17 +273,24 @@ describe("tickets.get", () => {
     expect(data.commentsTruncated).toBe(true);
   });
 
-  // Jira embeds only a first page of comments in an issue read, so a read
-  // without a window can miss exactly the newest ones. This tracker behaves
-  // that way: the newest comment is there only for a read from the newest end.
-  it("reads comments from the newest end, so the latest one is never the one missing", async () => {
+  // An issue read may embed only a first page of comments, so a read without
+  // a window can miss exactly the newest ones. This tracker keeps the port's
+  // contract: a window hands over every comment written since that instant,
+  // and a read without one hands over the embedded page and says it is partial.
+  it("asks for every comment, so the latest one is never the one missing", async () => {
     const oldest = { author: "A", body: "oldest", createdAt: "2026-03-20T10:00:00Z" };
     const newest = { author: "B", body: "newest", createdAt: "2026-03-21T10:00:00Z" };
-    const fetchTicket = vi.fn(async (_id: string, options?: { commentsSince?: string }) =>
-      options?.commentsSince === undefined
-        ? ticketContent({ comments: [oldest], commentsComplete: false })
-        : ticketContent({ comments: [newest], commentsComplete: false }),
-    );
+    const fetchTicket = vi.fn(async (_id: string, options?: { commentsSince?: string }) => {
+      if (options?.commentsSince === undefined) {
+        return ticketContent({ comments: [oldest], commentsComplete: false });
+      }
+      const since = Date.parse(options.commentsSince);
+      const inWindow = [oldest, newest].filter((c) => Date.parse(c.createdAt) >= since);
+      return ticketContent({
+        comments: inWindow,
+        commentsComplete: inWindow.length === 2,
+      });
+    });
     const client = await connectedClient(adaptersFor(fakeIssueTracker({ fetchTicket })));
 
     const result = await client.callTool({
@@ -294,8 +301,8 @@ describe("tickets.get", () => {
     const data = (result.structuredContent as {
       data: { comments: Array<{ body: string }>; commentsTruncated: boolean };
     }).data;
-    expect(data.comments.map((c) => c.body)).toEqual(["newest"]);
-    expect(data.commentsTruncated).toBe(true);
+    expect(data.comments.map((c) => c.body)).toEqual(["oldest", "newest"]);
+    expect(data.commentsTruncated).toBe(false);
   });
 });
 

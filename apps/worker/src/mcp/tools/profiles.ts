@@ -93,18 +93,40 @@ function summaryOf(profile: {
   };
 }
 
-/** The profile stores' refusals, mapped onto codes an agent can act on. Each
- *  of these is raised before anything is written (a missing profile, a stale
- *  revision, a built-in profile, a draft that does not validate), so the key
- *  goes back into circulation. Anything else is rethrown as it is and the
- *  wrapper seals the key: an unexpected failure may have written. */
+/** The 409s that another attempt can clear: somebody else moved the draft or
+ *  published it first, so reading the profile again and resending with the
+ *  new revision is the way forward. An archived profile, a skill artifact that
+ *  failed its integrity check or a capability catalog that moved on stays that
+ *  way however often the call is repeated. */
+const RETRYABLE_CONFLICTS = new Set([
+  "Profile draft revision conflict",
+  "Profile changed while it was being published",
+]);
+
+/** The profile services' refusals, mapped onto codes an agent can act on and
+ *  forwarded with their messages, the sentences the dashboard shows people.
+ *
+ *  Each mapped refusal releases the idempotency key. That is safe because none
+ *  of them follows a write a retry could duplicate: refresh may already have
+ *  stored the new skill artifact when the draft update refuses, but that write
+ *  is keyed by the artifact's content hash and inserts nothing the second
+ *  time. Keep it that way: a non-idempotent write placed before one of these
+ *  refusals would make releasing the key wrong. Anything unmapped is rethrown
+ *  and the wrapper seals the key, since an unexpected failure may have written. */
 function throwPublicStoreError(error: unknown): never {
   if (error instanceof HarnessProfileStoreError || error instanceof HarnessSkillImportError) {
-    if (error.statusCode === 404) throw refusal("NOT_FOUND", error.message);
-    if (error.statusCode === 409) throw refusal("CONFLICT", error.message, true);
-    if (error.statusCode === 403) throw refusal("FORBIDDEN", error.message);
-    if (error.statusCode === 400 || error.statusCode === 422) {
-      throw refusal("VALIDATION_FAILED", error.message);
+    const { statusCode, message } = error;
+    if (statusCode === 404) throw refusal("NOT_FOUND", message);
+    if (statusCode === 403) throw refusal("FORBIDDEN", message);
+    if (statusCode === 409) throw refusal("CONFLICT", message, RETRYABLE_CONFLICTS.has(message));
+    if (statusCode === 400 || statusCode === 413 || statusCode === 422) {
+      throw refusal("VALIDATION_FAILED", message);
+    }
+    // A provider or catalog this deployment cannot reach right now: no VCS
+    // connected for a repository skill, model discovery not ready for a
+    // publish. The sentence says what to fix, and a later call can succeed.
+    if (statusCode === 502 || statusCode === 503) {
+      throw refusal("DEPENDENCY_UNAVAILABLE", message, true);
     }
   }
   throw error;
