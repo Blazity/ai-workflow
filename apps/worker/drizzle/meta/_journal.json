@@ -523,8 +523,8 @@
     {
       "idx": 74,
       "version": "7",
-      "when": 1790324936361,
-      "tag": "0074_memory_ledger",
+      "when": 1790321748670,
+      "tag": "0074_builtin_prompt_resync",
       "breakpoints": true
     }
   ]

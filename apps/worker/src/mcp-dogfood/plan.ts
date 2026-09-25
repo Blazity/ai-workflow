@@ -12,7 +12,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { integrationsProviding } from "@integrations/registry";
-import { INTEGRATION_ID } from "@shared/contracts";
+import {
+  HARNESS_PROFILE_ID,
+  HARNESS_SKILL_ARTIFACT_HASH,
+  INTEGRATION_ID,
+} from "@shared/contracts";
 
 type JsonSchema = {
   type?: string;
@@ -104,6 +108,9 @@ function sampleString(schema: JsonSchema): string {
     if (schema.pattern === INTEGRATION_ID.source) {
       return integrationsProviding("vcs")[0]?.id ?? "provider";
     }
+    // A harness profile, named by a slug-shaped id no deployment has.
+    if (schema.pattern === HARNESS_PROFILE_ID.source) return "dogfood-profile";
+    if (schema.pattern === HARNESS_SKILL_ARTIFACT_HASH.source) return "0".repeat(64);
     throw new Error(`no sample for pattern ${schema.pattern}`);
   }
   if (schema.format === "uuid") return "00000000-0000-4000-8000-000000000000";

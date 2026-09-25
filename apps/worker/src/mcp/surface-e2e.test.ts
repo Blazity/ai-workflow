@@ -188,6 +188,10 @@ const PUBLISHED = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  "profiles.list",
+  "profiles.get",
+  "profiles.refresh_skill",
+  "profiles.publish",
 ];
 
 const READ_ANNOTATIONS = {
@@ -362,6 +366,26 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     idempotentHint: true,
     openWorldHint: true,
   },
+  // Reading which skills a profile pins, and which workflows pin it, changes
+  // nothing.
+  "profiles.list": READ_ANNOTATIONS,
+  "profiles.get": READ_ANNOTATIONS,
+  // Only the draft moves, and no run reads a draft; a skill sourced from a
+  // repository is read back from that provider, so the world is open.
+  "profiles.refresh_skill": {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  // Adds a version; every workflow node keeps the exact version it pins, so
+  // nothing a run resolves is replaced.
+  "profiles.publish": {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
 };
 
 const DOMAINS = [
@@ -375,6 +399,7 @@ const DOMAINS = [
   "settings",
   "work_scope",
   "memory",
+  "profiles",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the

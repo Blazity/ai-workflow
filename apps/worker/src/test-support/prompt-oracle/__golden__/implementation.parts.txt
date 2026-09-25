@@ -8,7 +8,7 @@
   repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
 
 [block: Block role and task]
-  authored:1                     6225  block_prompt  "Block prompt text"
+  authored:1                     6408  block_prompt  "Block prompt text"
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"

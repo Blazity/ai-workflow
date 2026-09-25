@@ -193,7 +193,7 @@ export class ClaudeAgentAdapter implements AgentAdapter {
           ignoredDirs: [".claude"],
         }),
         `if [ -n "$changes" ]; then`,
-        `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
+        `  echo '{"decision":"block","reason":"You have uncommitted changes. Commit them with a descriptive message, or revert them, before stopping: the pull request is built from your commits only."}' >&2`,
         "  exit 2",
         "fi",
         "SCRIPT",

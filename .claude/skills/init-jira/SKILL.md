@@ -1,6 +1,6 @@
 ---
 name: init-jira
-description: Set up or modify Jira configuration for the AI Workflow workflow — credentials, project key, column statuses, workflow transitions, and webhook registration. State-aware: detects what's already in Vercel env and runs only the missing pieces. Use for "set up jira", "configure jira board", "rotate jira token", "register jira webhook", "fix jira transitions", "jira columns setup".
+description: Set up or modify Jira configuration for the AI Workflow workflow (credentials, project key, column statuses, workflow transitions, and webhook registration). State-aware, so it detects what's already in Vercel env and runs only the missing pieces. Use for "set up jira", "configure jira board", "rotate jira token", "register jira webhook", "fix jira transitions", "jira columns setup".
 ---
 
 # Initialize Jira
@@ -8,7 +8,7 @@ description: Set up or modify Jira configuration for the AI Workflow workflow �
 State-aware skill for the Jira side of AI Workflow. Two phases triggered by detected state:
 
 - **Phase 1: Credentials and secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
-- **Phase 2 — Webhook registration.** Runs when phase 1 is done and a production deploy exists.
+- **Phase 2: Webhook registration.** Runs when phase 1 is done and a production deploy exists.
 
 > **Canonical reference:** [SETUP.md section 2.1](../../../SETUP.md#21-jira) holds the facts and constraints for Jira, and section 7 covers the webhook. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
 
@@ -16,7 +16,7 @@ State-aware skill for the Jira side of AI Workflow. Two phases triggered by dete
 
 ## Precondition
 
-`.vercel/project.json` must exist (project must be linked). If missing:
+`apps/worker/.vercel/project.json` must exist: the worker is linked from `apps/worker` (SETUP.md section 3), and this skill's commands run there. If missing:
 
 ```
 ERROR: no Vercel project linked. Run `vercel link` first, or invoke `init-env`
@@ -31,14 +31,14 @@ On entry, run:
 
 ```bash
 test -f .vercel/project.json && cat .vercel/project.json   # project name
-vercel env ls | grep -E "^(JIRA_BASE_URL|JIRA_API_TOKEN)"  # phase 1 done?
+vercel env ls | grep -wE "JIRA_BASE_URL|JIRA_API_TOKEN"    # phase 1 done?
 # Also check Integrations → Jira in the dashboard: values stored there count as phase 1 done.
 vercel ls --prod                                           # production deploy?
 ```
 
 | `JIRA_*` set | Prod deploy | Action |
 |---|---|---|
-| no | — | Phase 1 |
+| no | any | Phase 1 |
 | yes | no | Phase 1 already done; print "Webhook registration needs a production deploy first. Run `vercel --prod` then re-invoke." |
 | yes | yes | Phase 2 |
 
@@ -53,7 +53,7 @@ Ask: *"Has your Jira board, statuses, and workflow transitions already been conf
 - **No / unsure:** walk the user through these references in order, one per turn:
   - `references/column-statuses.md`: statuses must exist in Jira and match the three board column settings.
   - `references/transitions.md`: the bot must find a transition into each target status, by configured id, destination status or name (the most-missed step).
-  - `references/description-format.md` — the "Acceptance Criteria" block in the description.
+  - `references/description-format.md`: the "Acceptance Criteria" block in the description.
 - **Yes:** continue.
 
 ### 1b. Generate the webhook secret
@@ -68,9 +68,9 @@ Hold the value for the paste-template below. Even if the user later defers webho
 
 Ask in one prompt (single credential bundle):
 
-- `JIRA_BASE_URL` — e.g. `https://acme.atlassian.net` (no trailing slash, no `/jira`)
+- `JIRA_BASE_URL`: e.g. `https://acme.atlassian.net` (no trailing slash, no `/jira`)
 - `JIRA_API_TOKEN`: a scoped service-account token (`read:jira-work`, `write:jira-work`) from admin.atlassian.com, Directory, Service accounts, API tokens ([SETUP.md section 2.1](../../../SETUP.md#21-jira)). A personal token from id.atlassian.com does not work: the client sends it as Bearer through api.atlassian.com.
-- `JIRA_PROJECT_KEY` — e.g. `AWT`
+- `JIRA_PROJECT_KEY`: e.g. `AWT`
 
 Tell the user that the AI, AI Review, and Backlog status names are configured on the Settings page. They must match Jira status names exactly, ignoring case.
 
@@ -97,7 +97,7 @@ If invoked from `init-env`, return control. If invoked standalone, end the turn.
 
 ---
 
-## Phase 2 — Webhook registration
+## Phase 2: Webhook registration
 
 ### 2a. Derive the webhook URL
 
@@ -156,5 +156,5 @@ For diagnostic flows after phase 2 (signature failures, transition errors, missi
 ## Don'ts
 
 - Don't print the webhook secret value back to chat after generating it. Reference by name.
-- Don't try to detect custom domains from `.vercel/project.json` — that file doesn't carry domain info reliably. Default to `<project>.vercel.app` and tell the user to swap if they have a custom domain.
+- Don't try to detect custom domains from `.vercel/project.json`: that file doesn't carry domain info reliably. Default to `<project>.vercel.app` and tell the user to swap if they have a custom domain.
 - Don't subscribe to every event: **Issue updated** is required, **Issue created** and **Comment created** are the only useful optional ones, and the rest is noise the handler filters away.
