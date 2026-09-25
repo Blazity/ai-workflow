@@ -458,7 +458,7 @@ function graphDigest(definition: unknown): string {
  * (services/workflow-definitions/policy-operations.ts:758), and a key handed back
  * there would buy a second deployment.
  */
-function throwPublicStoreError(error: unknown): never {
+export function throwPublicStoreError(error: unknown): never {
   // Before the base class below, which it extends: a deployment gate failure is a
   // 422 carrying the issues, not a generic conflict.
   if (error instanceof WorkflowDefinitionValidationError) {

@@ -106,6 +106,7 @@ export type {
   WebhookTestDeliveryResult,
 } from "./webhook-endpoint-nodes.js";
 export {
+  archiveConnectedWorkflowDefinition,
   archiveWorkflowDefinition,
   createConnectedWorkflowDefinition,
   createWorkflowDefinition,
@@ -118,6 +119,8 @@ export {
   saveWorkflowDefinitionDraft,
   saveWorkflowDefinitionLayout,
   saveWorkflowDefinitionVersion,
+  unarchiveConnectedWorkflowDefinition,
+  unarchiveWorkflowDefinition,
   updateConnectedWorkflowDefinition,
   updateWorkflowDefinition,
 } from "./policy-operations.js";
