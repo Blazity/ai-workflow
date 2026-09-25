@@ -1,1 +1,0 @@
-- Publishing a harness profile no longer fails with "Refresh Harness capabilities before publishing this profile" for part of every half hour. The model catalog it checks now stays current between two scheduled refreshes, and past one missed refresh.
