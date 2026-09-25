@@ -1,5 +1,5 @@
 {
-  "contractHash": "66abae569c2e77bbb9390a1de2ccb05ff7af4c4ba202e044dbc23603bcecb79a",
+  "contractHash": "c54795f81a8dece15d0dee0958adf6aae5f689651fdb9f0bba247eac8d521a80",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1781,7 +1781,7 @@
     },
     {
       "name": "memory.list",
-      "description": "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or the working notebook of one piece of work, which the built-in store files as `ai-workflow/memory/<task>.md` and Mem0 as `notebook/<task>`: take it from this list rather than composing it). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
+      "description": "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or the working notebook of one piece of work, whose path depends on the memory provider, `ai-workflow/memory/<task>.md` on the built-in store: take it from this list rather than composing it). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
       "inputSchema": {
         "type": "object",
         "properties": {

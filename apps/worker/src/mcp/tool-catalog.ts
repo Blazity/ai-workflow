@@ -224,7 +224,7 @@ const IMPORT_PREVIEW_PAGE_MAX = 100;
 // Said by the gate when a provider does not match, since "invalid_string" alone
 // sends the caller guessing at the spelling (`GitHub`, `git-hub`).
 const INTEGRATION_ID_RULE =
-  "an integration id: 3 to 32 lowercase letters and digits starting with a letter, such as github";
+  "an integration id: 3 to 32 lowercase letters and digits, starting with a letter";
 // A `provider:owner/name` key. Bounded so a pathological one is refused before it is
 // hashed into targetRefs and an audit row kept for a year.
 const REPOSITORY_KEY_MAX_LENGTH = 300;
@@ -947,7 +947,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "memory.list": {
     description:
-      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or the working notebook of one piece of work, which the built-in store files as `ai-workflow/memory/<task>.md` and Mem0 as `notebook/<task>`: take it from this list rather than composing it). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
+      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or the working notebook of one piece of work, whose path depends on the memory provider, `ai-workflow/memory/<task>.md` on the built-in store: take it from this list rather than composing it). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
     inputSchema: z
       .object({
         ticketKey: z.string().trim().min(1).max(MEMORY_KEY_MAX_LENGTH).optional(),
