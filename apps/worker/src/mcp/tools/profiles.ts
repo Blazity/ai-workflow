@@ -4,6 +4,7 @@ import {
   HarnessProfileStoreError,
   HarnessSkillImportError,
 } from "../../services/harness/harness-errors.js";
+import type { HarnessProfilePinOption } from "../../services/harness/index.js";
 import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
@@ -101,6 +102,17 @@ function summaryOf(profile: {
   };
 }
 
+function listedProfile(
+  profile: Parameters<typeof summaryOf>[0],
+  option: HarnessProfilePinOption | undefined,
+): ListedProfile {
+  return Object.assign(summaryOf(profile), {
+    provider: option?.provider ?? null,
+    model: option?.model ?? null,
+    pin: option?.pin ?? null,
+  });
+}
+
 /** The 409s that another attempt can clear: somebody else moved the draft or
  *  published it first, so reading the profile again and resending with the
  *  new revision is the way forward. An archived profile, a skill artifact that
@@ -159,15 +171,7 @@ export function registerProfileTools(server: McpServer, deps: McpToolDependencie
         ]);
         const pinOf = new Map(pins.map((option) => [option.profileId, option]));
         return {
-          profiles: profiles.map((profile) => {
-            const option = pinOf.get(profile.id);
-            return {
-              ...summaryOf(profile),
-              provider: option?.provider ?? null,
-              model: option?.model ?? null,
-              pin: option?.pin ?? null,
-            };
-          }),
+          profiles: profiles.map((profile) => listedProfile(profile, pinOf.get(profile.id))),
         };
       },
     });
