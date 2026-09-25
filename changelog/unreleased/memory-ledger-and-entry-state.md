@@ -1,0 +1,1 @@
+- The worker keeps a memory history: every memory event of a run (what it recalled and left out, what it learned, updated, removed or had refused) and every memory entry's place, trust, pin and status can now be recorded with secrets redacted, and a forgotten text is blanked everywhere it was recorded. The run card, `/memory` history and MCP read from it as they arrive.
