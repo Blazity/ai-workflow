@@ -138,9 +138,7 @@ Do NOT flag:
 - test fixtures and obviously fake placeholder values
 - pre-existing content on context lines (no leading "+")
 
-Every excerpt MUST be masked: at most 40 characters, and any secret-looking value must appear as a short prefix followed by "****". Never repeat a full secret value.
-
-Return { "findings": [], "summary": "..." } when the change is clean.`;
+Every excerpt MUST be masked: at most 40 characters, and any secret-looking value must appear as a short prefix followed by "****". Never repeat a full secret value.`;
 
 interface LeakReviewRepository {
   provider: string;

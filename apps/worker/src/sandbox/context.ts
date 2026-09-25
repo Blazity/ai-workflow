@@ -264,7 +264,7 @@ function repositoryAccessProtocol(
 
 ## Repository Access Protocol
 
-This protocol extends and overrides any older Output Format instructions above.
+This protocol adds to the Output Format in the block instructions above; where the two differ, follow this protocol.
 
 - Inspect only repositories already attached to the workspace.
 - Exhaust the attached repositories before asking for more: search them for the

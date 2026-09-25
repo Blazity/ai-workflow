@@ -519,6 +519,13 @@
       "when": 1790321473747,
       "tag": "0073_pr_subject_key_normalize",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1790321748670,
+      "tag": "0074_builtin_prompt_resync",
+      "breakpoints": true
     }
   ]
 }
