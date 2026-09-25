@@ -1,0 +1,1 @@
+- Integration authors can build a memory store against the new `MemoryStore` interface in `@integrations/sdk` and prove it with `checkMemoryStoreConformance`, which checks that a store returns everything it holds, reports every change with the entry's id, and erases every copy of a forgotten entry. The current memory interface keeps working alongside it.
