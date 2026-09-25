@@ -1,0 +1,5 @@
+Source URL: https://api.mem0.ai/v3/memories/add/
+What it is: Mem0's live answer (200) to POST /v3/memories/add/: the queued answer: an add with infer true (the only kind the probe saw queued), PENDING with an event id and no memory id.
+How these bytes were made: The response body of one call made by integrations/mem0/live-probe.ts (run aiw-probe-mugqd323, step infer-first) against the hosted platform, under app_id ai-workflow-probe and user_ids starting with aiw-probe-, all deleted by the same run. Parsed and written with two-space indentation; nothing else changed. The API key is in no body.
+Retrieved: 2026-09-25
+SHA-256: b95730d331e0955dd96cecdc2c6c4627d9965e578f00ae914c8c61124017c09a

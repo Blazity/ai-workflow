@@ -155,6 +155,84 @@ newest first. The listing reads at most 2,000 memories and says it is partial
 when Mem0 holds more. Erasing a document deletes each of its memories by id and
 answers "nothing stored" when there was nothing to delete.
 
+## Version 2 of the memory port (`store.ts`)
+
+`mem0MemoryStore` serves `MemoryStore`, the thin port core moves onto in the
+memory rebuild (ADR-010, "The memory store port, version 2"). Nothing calls it
+yet: the stage that wires version 2 adds the factory slot, and version 1 above
+keeps serving production until then. It passes `checkMemoryStoreConformance`
+against a fake of Mem0 built from what the live platform answered
+(`store-test-support.ts`).
+
+It files memories exactly as version 1 does (`app_id` `ai-workflow`, the
+subject as `user_id`, `facts` or `lessons` as `agent_id`), so both read the
+same memories, and adds `metadata.addedAt`, the time this store wrote it.
+
+What the live platform did on 2026-09-25, and what the store does about it
+(`live-probe.ts`; the full record is outside the repository, in the memory
+rebuild's lane notes):
+
+- **Adds are synchronous.** A Direct Import (`infer: false`) answered
+  `SUCCEEDED` with one id per text in 0.4 to 1.4 s, was listed at once and
+  searchable within a second, and stored 40,000 characters verbatim. An exact
+  repeat of a text its scope holds answers that memory's id. The OpenAPI
+  still documents a queued answer (`PENDING`, an event id): the store then
+  answers `pending`, never an id, and logs the event id (`mem0_add_queued`).
+- **A listing gives `created_at` to the second**, newest first, and within a
+  second in no order of writing, so `held` orders by `metadata.addedAt`.
+- **`immutable` changed nothing observable.** A `PUT` on a memory added with
+  `immutable: true` succeeded and was recorded in its history, although the
+  documentation says it is refused. The store writes no `immutable`; an
+  update is a `PUT` (the id and Mem0's history stay), and a `PUT` refused as a
+  bad request becomes a replacement: the new text added first, the old entry
+  deleted second.
+- **Supersede and Merge never acted on a direct import**, alike or
+  contradictory, protected or not. Mem0 documents both on every add, so the
+  store declares `consolidates: true` (core compares what it holds with its
+  own record) and `protects: false`, and reports `replaced_by` as
+  `replacedBy` only while the memory it names is held.
+- **Search with `threshold` 0 and `top_k` the size of the set returned every
+  memory** (11 of 11, a related and an unrelated query alike), so a ranked
+  recall is one listing plus one search, and an entry the search did not score
+  still comes back, after the scored ones.
+- **A `PUT` replaces the whole metadata**, so an update sends the origin and
+  `addedAt` again with the later run.
+- **A delete keeps Mem0's history** of the memory (a `DELETE` event holding the
+  old text), and `delete_linked=true` answers `cascade_count`. `forget` deletes
+  with it and, after a cascade, names every memory of the subject that went; a
+  removal core decided deletes only the one memory. `forget` also lists the
+  memories Merge folded away, which Mem0 hides from a default read, with
+  `include_merged: true`: the pinned OpenAPI does not list that field for a
+  listing and the probe had nothing merged to show it working, so if Mem0
+  ignores it, a merged original stays out of `forget`'s reach.
+
+How a failure reaches core: 401 and 403 are `key_rejected`, 413 and a 403
+with `upgrade_required` are `quota`, 429 is `rate_limited`, a timeout is
+`timeout` and a connection never made (refused, no such host, no route)
+`unreachable`, each `unavailable` with the status; 400, 409 and 422 are
+`rejected` with the status; any other status is `unavailable` with it. A
+connection that broke after the request left (a reset, a body cut short) is
+`unavailable` with no reason, and a write's fate is then unknown. Each request
+waits at most 10 seconds, is sent once, and after a timeout or a connection
+never made (or once core's memory time for the step runs out) the rest of the
+step does not ask Mem0 again. An apply is refused as a whole only when
+nothing it sent can have landed and every item failed for the same cause;
+otherwise each item says what became of it.
+
+`readMem0Identity` answers the organization and project the key resolves to
+(`GET /v1/ping/`), the identity a run pins.
+
+### Running the live probe
+
+It writes only under `app_id` `ai-workflow-probe` and `user_id`s starting
+with `aiw-probe-`, deletes everything it wrote, and reads the key from stdin
+so it is never in an argument, the environment or a file:
+
+```sh
+security find-generic-password -a "$USER" -s aiw-mem0 -w \
+  | pnpm --silent run probe:live <record.json> raw   # or store, or all
+```
+
 ## What lives here
 
 | File | What it is |
@@ -163,7 +241,11 @@ answers "nothing stored" when there was nothing to delete.
 | `worker.ts` | The connection test and the health probe. |
 | `memory.ts` | The memory port on Mem0: recall, observe, and the memory screen's list, read and erase. |
 | `client.ts` | Every request to Mem0, and how each answer or failure is read. |
-| `test-fixtures/` | Mem0's answers as its documentation shows them, each with a `.source.txt`. |
+| `store.ts` | Version 2 of the memory port on Mem0, and the identity a run pins. |
+| `store-client.ts` | Every request version 2 sends, and how each answer or failure is read, with its reason and status. |
+| `store-test-support.ts` | The fake of the live platform the version 2 tests and conformance run against. |
+| `live-probe.ts` | The live probe of the hosted platform (see "Running the live probe"). |
+| `test-fixtures/` | Mem0's answers as its documentation shows them, and (`live-*`) as the live platform gave them, each with a `.source.txt`. |
 
 ## Provider documentation this is written against
 
@@ -187,6 +269,12 @@ API version: Mem0 Platform API v3 for memories (`/v3/memories/`,
 | Self-hosted server keys (`m0sk_`, `X-API-Key`) | https://docs.mem0.ai/open-source/features/rest-api | 2026-09-23 |
 | Rate limits and 5xx | not documented anywhere in Mem0's docs or OpenAPI; read by what HTTP says they mean | 2026-09-23 |
 | Plan quotas | https://mem0.ai/pricing (plan table and FAQ); `upgrade_required` on plan-gated 403s in docs/openapi.json | 2026-09-23 |
+| Version 2: add, list, search (`threshold`, `top_k` 1 to 1000, `score`), update (`PUT`, whole metadata), delete (`delete_linked`, `cascade_count`), event, ping, `replaced_by` | docs/openapi.json at mem0ai/mem0 `ea9bbcabed98418a1800c104aade8975e6460a04`, and the live platform through `live-probe.ts` | 2026-09-25 |
+| Filters: `in` on `user_id` and `agent_id`, `*` as any value | docs/platform/features/v2-memory-filters.mdx at mem0ai/mem0 `8d6c001966573786d36908bfe4dfd52935749200` | 2026-09-25 |
+| Supersede and Merge on every add, `include_merged`, Synthesis only for memories with a `user_id` alone | docs/platform/features/dream.mdx at the same commit | 2026-09-25 |
+| Direct Import: exact repeats deduplicated, no semantic duplicate detection | docs/platform/features/direct-import.mdx at the same commit | 2026-09-25 |
+| Immutable memories are deleted and re-added, not updated | docs/core-concepts/memory-operations/update.mdx and delete.mdx at the same commit (contradicted live, above) | 2026-09-25 |
+| 401 and 403 authentication, 413 quota, 429 rate limit | mem0/exceptions.py (`HTTP_STATUS_TO_EXCEPTION`) at the same commit | 2026-09-25 |
 
 ## Proving it after the merge
 

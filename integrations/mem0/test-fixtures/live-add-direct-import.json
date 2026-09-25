@@ -1,0 +1,28 @@
+{
+  "message": "Memories stored successfully",
+  "status": "SUCCEEDED",
+  "event_id": "93d45c0d-9b0f-4214-9d63-091e67138d54",
+  "results": [
+    {
+      "id": "ca26de32-1a54-4baf-85a2-60e74297c469",
+      "data": {
+        "memory": "Probe fact: the API uses Postgres 16."
+      },
+      "event": "ADD"
+    },
+    {
+      "id": "d62ec856-8019-4fd7-95c4-8680f54f9a30",
+      "data": {
+        "memory": "Probe fact: the API listens on port 3000."
+      },
+      "event": "ADD"
+    },
+    {
+      "id": "1e779359-5545-4349-83d4-3241c10cef6c",
+      "data": {
+        "memory": "Probe fact: releases are tagged by a bot."
+      },
+      "event": "ADD"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+Source URL: https://api.mem0.ai/v1/memories/5d0a8ac0-b460-40ee-a733-93f9c0823783/?delete_linked=true
+What it is: Mem0's live answer (200) to DELETE /v1/memories/{id}/?delete_linked=true: a delete with delete_linked=true of a memory that superseded nothing: cascade_count 0.
+How these bytes were made: The response body of one call made by integrations/mem0/live-probe.ts (run aiw-probe-mugqd323, step delete-linked) against the hosted platform, under app_id ai-workflow-probe and user_ids starting with aiw-probe-, all deleted by the same run. Parsed and written with two-space indentation; nothing else changed. The API key is in no body.
+Retrieved: 2026-09-25
+SHA-256: f6071291320af1f61585c175cb422431c84f5f986feaa827dc69bddcc64430bf

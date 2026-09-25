@@ -1,0 +1,37 @@
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "d62ec856-8019-4fd7-95c4-8680f54f9a30",
+      "memory": "Probe fact: the API listens on port 3000.",
+      "user_id": "aiw-probe-mugqd323-a",
+      "agent_id": "facts",
+      "app_id": "ai-workflow-probe",
+      "metadata": {
+        "origin": "learned",
+        "runId": "r1",
+        "ticketKey": "T-1"
+      },
+      "categories": null,
+      "created_at": "2026-09-25T02:00:27-07:00",
+      "updated_at": "2026-09-25T02:00:27-07:00",
+      "expiration_date": null,
+      "structured_attributes": {
+        "year": 2026,
+        "month": 9,
+        "day": 25,
+        "hour": 9,
+        "minute": 0,
+        "day_of_week": "friday",
+        "week_of_year": 39,
+        "day_of_year": 268,
+        "quarter": 3,
+        "is_weekend": false
+      },
+      "replaced_by": null,
+      "synthesized": false
+    }
+  ]
+}
