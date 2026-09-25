@@ -211,7 +211,7 @@ function buildTheoryPrompt(input: {
   evidence: InvestigateEvidence[];
 }): string {
   return [
-    "You are triaging an issue tracker ticket. Classify it from the ticket and the collected evidence, and explain your reasoning.",
+    "You are triaging an issue tracker ticket. Classify it from the ticket and the collected evidence.",
     "",
     `Ticket ${input.identifier}`,
     `Summary: ${input.title}`,

@@ -8,7 +8,7 @@
   repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
 
 [block: Block role and task]
-  authored:1                     6973  block_prompt  "Block prompt text"
+  authored:1                     7099  block_prompt  "Block prompt text"
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"
@@ -49,5 +49,5 @@
   expansion-closed-guidance       390  platform  "What to do now that expansion is closed"
   expansion-last-pass              61  research_note  "The last planning pass a repository request buys"
   expansion-last-pass-guidance    482  platform  "Return a plan on this pass"
-  repository-access-protocol     1645  platform  "Repository Access Protocol"
+  repository-access-protocol     1682  platform  "Repository Access Protocol"
   resolution-check                899  platform  "Resolution Check"
