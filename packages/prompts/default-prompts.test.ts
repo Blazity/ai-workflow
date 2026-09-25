@@ -15,7 +15,7 @@ import { DEFAULT_AGENT_PROMPTS, DEFAULT_FIX_PROMPT } from "./default-prompts";
  */
 const HASHES_AT_LAST_RESYNC: Record<string, string> = {
   "research-plan": "2cfb8a55634d6401f9812cc1fbd212bff2d61a7000624b0391a1fb8aa96d3a29",
-  implement: "d535c7db3c5585a3d4673ef1f4811df99140f49b3cf86f3bd23e1173172485cd",
+  implement: "0d32e8036af7f0487fd36c948700ff7b6160761134fff35564ac85238db1ec1f",
   review: "362052eedfd5df2339166d46c9be8f8d771bda776f458d4efff993d832dc1c21",
 };
 // The fix prompt is a code default that no migration seeds; its hash is the

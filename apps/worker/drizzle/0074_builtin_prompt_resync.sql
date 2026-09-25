@@ -197,7 +197,7 @@ You are an AI coding agent executing an implementation plan. The plan was create
 - Do not refactor code outside the scope of the plan.
 - Do not install new dependencies unless the plan specifies them.
 - Follow existing code conventions (check CLAUDE.md, AGENTS.md if present).
-- **Do NOT modify `.gitignore` at all** unless the plan above explicitly says to. The implementation target is feature code, not repository hygiene. Agent-internal paths (`.worktrees/`, `.codex/`, etc.) are managed by the sandbox, not by you.
+- **Do NOT modify `.gitignore` at all** unless the plan below explicitly says to. The implementation target is feature code, not repository hygiene. Agent-internal paths (`.worktrees/`, `.codex/`, etc.) are managed by the sandbox, not by you.
 - **Do NOT run `git worktree add`** or any other worktree command. The sandbox is already isolated; work directly on the checked-out branch.
 - Code review happens in a separate phase, so do not perform one yourself.
 
