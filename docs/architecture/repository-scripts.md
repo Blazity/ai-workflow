@@ -764,14 +764,14 @@ under the same rules, with the same reason recorded and the same refusals.
 | Save on the entry, and "Add repository" | `repositories.upsert` | mutation | `repositories:write` | admin, owner |
 | The switch on a row | `repositories.set_enabled` | mutation | `repositories:write` | admin, owner |
 | The Activate dialog, before confirming | `repositories.activate_preview` | read | `repositories:write` | admin, owner |
-| Activate, confirmed | `repositories.activate` | mutation | `repositories:write` | owner |
+| Activate, confirmed | `repositories.activate` | mutation | `repositories:write` | admin, owner |
 | The import picker | `repositories.import_preview` | read | `repositories:write` | admin, owner |
 | Import selected | `repositories.import` | mutation | `repositories:write` | admin, owner |
 | "Suggest from repository" | `repositories.suggest` | mutation | `repositories:write` | admin, owner |
 | The Settings page | `settings.list` | read | `mcp:read` | any role |
 | One setting with its history | `settings.get` | read | `mcp:read` | any role |
 | Saving one setting | `settings.set` | mutation | `settings:write` | admin, owner |
-| Clearing a setting back to its default | `settings.reset` | mutation | `settings:write` | owner |
+| Clearing a setting back to its default | `settings.reset` | mutation | `settings:write` | admin, owner |
 
 The plain reads are open to every token that holds `mcp:read`, a
 client-credentials token included: knowing which repositories exist and what
@@ -821,11 +821,14 @@ Seven things differ from the HTTP routes the dashboard calls, each on purpose:
   and refuses when the catalog moved in between. That is the agent's equivalent
   of reading the dialog before pressing the button. A catalog with nothing
   enabled is refused outright, in the dialog's own words.
-- **Activation and clearing a setting are owner only.** The HTTP routes admit an
-  admin. Ending the bridge changes what every future run may enter, and clearing
-  a setting hands the key back to a value nobody on the call stated (the
-  registry default), so through MCP both are
-  the owner's, the same way `runs.answer_clarification` is a person's.
+- **Activation and clearing a setting follow the dashboard's roles.** An owner
+  or an admin may do either on both surfaces (MCP was owner only until the
+  product owner's decision of 2026-09-23), and tests hold each MCP role list
+  equal to the predicate its HTTP route asks (`canManageRepositoryCatalog`,
+  `canResetSettings`). An agent holding an admin's token can therefore end the
+  bridge with nobody reading a dialog, and nothing turns activation back off, so
+  on MCP the preview digest above and the refusal of a catalog with nothing
+  enabled are what slow it down; the tool description says it cannot be undone.
 - **Every mutation is person backed**, by the scope mechanism above.
 - **A reason is asked for exactly where one is recorded.** `repositories.upsert`
   and `settings.set` write the reason to the profile or settings version, as the
