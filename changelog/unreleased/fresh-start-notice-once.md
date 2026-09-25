@@ -1,0 +1,1 @@
+- A ticket restarted after its branch was deleted gets one comment naming the deleted branch, not one per run (planning and implementation used to post it twice).

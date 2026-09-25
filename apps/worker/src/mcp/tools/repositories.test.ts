@@ -58,6 +58,7 @@ vi.mock("../../services/repository-discovery/index.js", async (importOriginal) =
   return { ...actual, listCachedRepositoryDirectory: async () => state.directory };
 });
 
+import { canManageRepositoryCatalog } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -1224,11 +1225,33 @@ describe("repositories.activate", () => {
     expect(list.state).toMatchObject({ activated: false, bridge: true });
   });
 
-  it("is owner only and refuses a client-credentials token", async () => {
+  it("lets an admin with a person behind the token activate, as the dashboard does", async () => {
+    await seedRepository({ path: "acme/api", enabled: true });
+    const admin = await connectedClient({ role: "admin" });
+
+    const result = await admin.callTool({
+      name: "repositories.activate",
+      arguments: {
+        previewDigest: await previewDigest(admin),
+        reason: "the catalog is curated now",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result).state).toMatchObject({
+      activated: true,
+      bridge: false,
+      activatedById: "user-execute",
+      activationReason: "the catalog is curated now",
+    });
+  });
+
+  it("refuses a member holding the scope, and a client-credentials token", async () => {
     await seedRepository({ path: "acme/api", enabled: true });
     const owner = await connectedClient();
     const digest = await previewDigest(owner);
-    const admin = await connectedClient({ role: "admin" });
+    const member = await connectedClient({ role: "member" });
     const service = await connectedClient({
       kind: "service",
       role: "service",
@@ -1238,7 +1261,7 @@ describe("repositories.activate", () => {
 
     expect(
       errorOf(
-        await admin.callTool({
+        await member.callTool({
           name: "repositories.activate",
           arguments: { previewDigest: digest, reason: "let me", idempotencyKey: KEY_ONE },
         }),
@@ -1252,8 +1275,31 @@ describe("repositories.activate", () => {
         }),
       ),
     ).toMatchObject({ code: "FORBIDDEN" });
-    // The role list is the lock, exactly as it is for runs.answer_clarification.
-    expect(policyFor("repositories.activate").roles).toEqual(["owner"]);
+    const list = dataOf(await owner.callTool({ name: "repositories.list", arguments: {} }));
+    expect(list.state).toMatchObject({ activated: false, bridge: true });
+  });
+
+  // One rule for the catalog, whichever door is used: the HTTP routes and the
+  // service behind both surfaces ask canManageRepositoryCatalog, this surface
+  // also asks its policy's role list. Activation included, since 2026-09-23.
+  it("admits the same roles to every catalog write as the dashboard does", () => {
+    const writes = [
+      "repositories.upsert",
+      "repositories.set_enabled",
+      "repositories.activate",
+      "repositories.import",
+      "repositories.suggest",
+    ] as const;
+    for (const tool of writes) {
+      for (const role of ["owner", "admin", "member"] as const) {
+        expect(policyFor(tool).roles.includes(role), `${tool} for ${role}`).toBe(
+          canManageRepositoryCatalog(role),
+        );
+      }
+      // The person behind the token is kept: a client-credentials token holds
+      // no role these lists name.
+      expect(policyFor(tool).roles).not.toContain("service");
+    }
   });
 
   it("refuses when a repository takes a run claim after the preview was read", async () => {

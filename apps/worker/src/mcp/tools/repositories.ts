@@ -24,8 +24,10 @@
  *   safe from a screen that has just been told the repository is new and is not
  *   safe from an agent working off a stale list: the write would mint a version
  *   on somebody's configured repository under a reason written for a new one.
- * - `repositories.activate` is owner only and binds to a digest of the
- *   population the caller read, because there is no dialog to render it in.
+ * - `repositories.activate` binds to a digest of the population the caller
+ *   read, because there is no dialog to render it in. It admits the roles the
+ *   dashboard admits (an owner or an admin), so the digest is what stands
+ *   between an agent and an activation nobody can undo.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 

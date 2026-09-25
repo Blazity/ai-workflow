@@ -81,11 +81,13 @@ export interface TicketContent {
    * in the tracker's own order (a parent's subtasks are in the order the team
    * ranked them, which is the order a person plans them in).
    *
-   * Reported from the same read as the rest of the ticket, never from a
-   * second request: this read sits on the poll path. So it is only what that
-   * one answer carries, which for a tracker whose read does not list a
-   * parent's children (an epic's stories, on Jira) means the children are not
-   * here.
+   * Reported from the same read as the rest of the ticket where that read
+   * carries them, because this read sits on the poll path (dispatch, the
+   * reconciler, the answer poller all call it). A tracker whose read does not
+   * list a parent's children may spend ONE bounded extra request on them, and
+   * only for such a parent: Jira does, for an epic's child issues. That request
+   * may fail without failing the read; the children are then missing, as they
+   * were before it existed.
    *
    * ABSENT MEANS NOT READ: a tracker that does not report relations, and a
    * ticket snapshot recorded before this field existed. An empty list means

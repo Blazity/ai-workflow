@@ -36,9 +36,9 @@ export interface EffectivePromptPart {
   content: string;
   origin: EffectivePromptPartOrigin;
   /**
-   * Present only on a zero-byte part: a platform rule this prompt holds back
-   * on purpose, and why, so a reader sees the rule was left out deliberately
-   * rather than forgotten.
+   * Present only on a zero-byte part: a platform rule, or a piece of the
+   * ticket, this prompt holds back on purpose, and why, so a reader sees it was
+   * left out deliberately rather than forgotten.
    */
   withheld?: { reason: string; text: string };
   /**

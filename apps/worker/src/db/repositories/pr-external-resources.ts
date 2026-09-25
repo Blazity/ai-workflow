@@ -146,13 +146,25 @@ async function listRunStatuses(
     .from(workflowRuns).where(inArray(workflowRuns.runId, runIds));
 }
 
+/**
+ * The ledger's spelling of a repository: cased down, `repositoryCatalogKey`'s
+ * rule (@shared/contracts). One head is one review, and the same pull request
+ * reaches a run spelled by the provider (`Acme/API`) or by a person who pasted
+ * its URL (`acme/api`); a ledger keyed by the spelling let the second run miss
+ * the first run's review and post another. Rows from before were respelled by
+ * migration 0073_pr_subject_key_normalize.
+ */
+function ledgerRepository(repository: string): string {
+  return repository.toLowerCase();
+}
+
 export async function listPrReviewPublicationsForRound(
   db: Db,
   input: { provider: string; repository: string; prNumber: number; headSha: string },
 ): Promise<PrReviewPublication[]> {
   return db.select().from(workflowPrReviewPublications).where(and(
     eq(workflowPrReviewPublications.provider, input.provider),
-    eq(workflowPrReviewPublications.repository, input.repository),
+    eq(workflowPrReviewPublications.repository, ledgerRepository(input.repository)),
     eq(workflowPrReviewPublications.prNumber, input.prNumber),
     eq(workflowPrReviewPublications.headSha, input.headSha),
   )).orderBy(asc(workflowPrReviewPublications.createdAt));
@@ -170,7 +182,8 @@ export async function insertPrReviewPublication(
   if (input.commentContentHashes.length === 0) {
     await db.insert(workflowPrReviewPublications).values({
       id: input.id, runId: input.runId, nodeId: input.nodeId, attempt: input.attempt,
-      activationScope: input.activationScope, provider: input.provider, repository: input.repository,
+      activationScope: input.activationScope, provider: input.provider,
+      repository: ledgerRepository(input.repository),
       prNumber: input.prNumber, headSha: input.headSha, contentHash: input.contentHash,
       decision: input.decision, summary: input.summary, inlineCommentCount: input.inlineCommentCount,
       summaryFallbackCount: input.summaryFallbackCount,
@@ -185,7 +198,7 @@ export async function insertPrReviewPublication(
         head_sha, content_hash, decision, summary, inline_comment_count, summary_fallback_count
       ) VALUES (
         ${input.id}, ${input.runId}, ${input.nodeId}, ${input.attempt}, ${input.activationScope},
-        ${input.provider}, ${input.repository}, ${input.prNumber}, ${input.headSha},
+        ${input.provider}, ${ledgerRepository(input.repository)}, ${input.prNumber}, ${input.headSha},
         ${input.contentHash}, ${input.decision}, ${input.summary}, ${input.inlineCommentCount},
         ${input.summaryFallbackCount}
       ) RETURNING id

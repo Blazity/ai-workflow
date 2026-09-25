@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
@@ -70,6 +70,11 @@ export function CockpitShell({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  // Read so that a screen moving its own address in place (a workflow switch
+  // in the editor, a repository tab, a replay link) renders the shell again:
+  // the Back guard records the entry to put back on each render, and a
+  // departure agreed to ends when the destination's address arrives.
+  const search = useSearchParams()?.toString() ?? "";
   const screen = cockpitScreen(pathname, integrations);
   const canManageUsers = session.canManageUsers;
 
@@ -104,7 +109,7 @@ export function CockpitShell({
   const leaving = useRef(false);
   useEffect(() => {
     leaving.current = false;
-  }, [pathname]);
+  }, [pathname, search]);
 
   // The browser's Back and Forward, and a phone's back gesture, reach the
   // router without passing `navigate`, so the same question is asked there

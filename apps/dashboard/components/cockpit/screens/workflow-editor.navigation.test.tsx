@@ -38,9 +38,13 @@ const confirmPrompts: string[] = [];
 const history = {
   state: { __NA: true } as unknown,
   pushed: [] as Array<string | URL | null | undefined>,
+  replaced: [] as Array<string | URL | null | undefined>,
   pushState(data: unknown, _unused: string, url?: string | URL | null) {
     this.pushed.push(url);
     this.state = data;
+  },
+  replaceState(_data: unknown, _unused: string, url?: string | URL | null) {
+    this.replaced.push(url);
   },
 };
 const locationStub = { href: "http://localhost/editor?definition=7" };
@@ -256,6 +260,7 @@ async function mountEditor(
   confirmAnswer = true;
   confirmPrompts.length = 0;
   history.pushed.length = 0;
+  history.replaced.length = 0;
   locationStub.href = `http://localhost/editor?definition=${initial.meta.id}`;
   resetUnsavedSettings();
   installFetch();
@@ -418,6 +423,10 @@ test("switching workflows puts the open one in the address", async (t) => {
   });
   await settle();
   assert.match(textOf(root), /Default ticket workflow/);
+  // At once in the address bar (the browser's own entry, before any server
+  // render: production took five seconds to render the editor again), and to
+  // the router, which then holds a render of this workflow for the entry.
+  assert.deepEqual(history.replaced, ["/editor?definition=14"]);
   assert.deepEqual(replacements, ["/editor?definition=14"]);
 
   // The server renders the new address; the editor keeps what it has and asks
@@ -432,6 +441,7 @@ test("an address that stops naming the open workflow is put back", async (t) => 
   const { root, replacements, serverRenders } = await mountEditor(t);
   await editDuration(root);
   await serverRenders(DEFAULT_WORKFLOW);
+  assert.deepEqual(history.replaced, ["/editor?definition=52"]);
   assert.deepEqual(replacements, ["/editor?definition=52"]);
   assert.match(textOf(root), /\[QA\] arthur availability/);
   assert.match(textOf(root), /Unsaved changes/, "the edit is still there");

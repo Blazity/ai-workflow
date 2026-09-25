@@ -71,7 +71,25 @@ export const CONNECTION_SHAPE_TEST = [
   "src/services/integrations/connection-shape.test.ts",
 ] as const;
 
-export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
+/**
+ * The committed prompts every agent receives. A file that composes a prompt
+ * moves them without a test of its own going red, so a change to any of those
+ * files plans the golden and the oracle that compare the result byte for byte.
+ */
+export const PROMPT_ORACLE_TESTS = [
+  "src/test-support/prompt-oracle/golden.test.ts",
+  "src/test-support/prompt-oracle/oracle.test.ts",
+] as const;
+
+/** The files the prompt oracle composes its prompts from. */
+const PROMPT_SOURCES = new Set([
+  "apps/worker/src/sandbox/context.ts",
+  "apps/worker/src/engine/helpers/effective-prompt.ts",
+  "apps/worker/src/engine/repository-discovery/runner.ts",
+  "apps/worker/src/engine/blocks/generic-agent/execute.ts",
+]);
+
+export const WORKTREE_DIFF =["git", "diff", "--check"] as const satisfies Cmd;
 export const STAGED_WORKTREE_DIFF = ["git", "diff", "--cached", "--check"] as const satisfies Cmd;
 export const candidateDiff = (merge: string, candidate: string): Cmd =>
   ["git", "diff", "--check", merge, candidate, "--"];
@@ -160,7 +178,9 @@ const any = (paths: readonly string[], match: (path: string) => boolean) =>
   paths.some(match);
 const isDocs = (path: string) =>
   path.startsWith("docs/") ||
-  /\.(?:md|mdx|txt)$/i.test(path) ||
+  // A committed golden is a test fixture, not prose: a hand edit to one must
+  // plan the test that compares against it.
+  (/\.(?:md|mdx|txt)$/i.test(path) && !path.includes("/__golden__/")) ||
   path === ".claude/settings.json" ||
   path.startsWith(".claude/rules/") ||
   path.startsWith(".claude/skills/") ||
@@ -189,6 +209,10 @@ const isCi = (path: string) =>
 const isIntegration = (path: string) => path.startsWith("integrations/");
 const isIntegrationManifest = (path: string) =>
   isIntegration(path) && path.endsWith("/manifest.ts");
+const isPromptSource = (path: string) =>
+  PROMPT_SOURCES.has(path) ||
+  (path.startsWith("packages/prompts/") && !isDocs(path)) ||
+  path.startsWith("apps/worker/src/test-support/prompt-oracle/");
 const isWorkflowGraph = (path: string) =>
   path.startsWith("packages/workflow-graph/");
 const isProduct = (path: string) =>
@@ -327,6 +351,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ...(any(paths, isWorkflowGraph) ? WORKFLOW_GRAPH_TESTS : []),
     ...(integrations ? INTEGRATION_SDK_SEAM_TESTS : []),
     ...(integrationManifest ? CONNECTION_SHAPE_TEST : []),
+    ...(any(paths, isPromptSource) ? PROMPT_ORACLE_TESTS : []),
   ]);
   const dashboardTests = new Set<string>();
   const docs = any(paths, (path) => isDocs(path) && !isSkill(path) && !isRelease(path));
