@@ -1011,7 +1011,7 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 
 The last two scopes were added after the first clients registered, and a client carries the ceiling it registered with: re-authorizing an existing client does not grant a scope its registration never included, so a client registered before `repositories:write` and `settings:write` existed cannot reach the configuration tools no matter what its next consent screen says. Register a new client, or update the stored client row's scopes, before expecting them to work.
 
-**Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog — every block type the editor offers, with its input and output contract, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
+**Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog: one line for every block type the editor offers, and `blocks.get` then gives one block's input and output contract and configuration schema, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
 
 **A worked example: a loop and a branch together.** [`docs/example-workflows/loop-branch-workflow.json`](./docs/example-workflows/loop-branch-workflow.json) is a complete, valid workflow graph an agent can read for a concrete pattern rather than reasoning from the block catalog alone. Shape:
 

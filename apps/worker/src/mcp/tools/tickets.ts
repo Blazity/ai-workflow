@@ -93,7 +93,7 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
             ? ticket.comments.slice(-commentsLimit).map((c) => ({
                 author: c.author,
                 body: c.body,
-                createdAt: c.createdAt,
+                createdAt: utcInstant(c.createdAt),
               }))
             : null;
 
@@ -193,4 +193,10 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
       };
     },
   );
+}
+
+/** Jira writes `+0200` offsets; every other time on this surface is ISO in Z. */
+function utcInstant(value: string): string {
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? value : new Date(at).toISOString();
 }

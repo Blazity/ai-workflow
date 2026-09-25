@@ -1,13 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
+  applyWorkflowDefinitionLayout,
   isTriggerBlockType,
+  normalizeWorkflowDefinitionLayout,
   pinnedRepositoriesNotEnabledSentence,
+  positionsCarryNoLayout,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
 import type {
   WorkflowBlockType,
   WorkflowDefinition,
+  WorkflowDefinitionLayout,
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import { workflowDefinitionUrl } from "../../services/publication/dashboard-links.js";
@@ -135,6 +139,21 @@ type SaveDraftData = {
    * nothing was dropped.
    */
   deploymentIssueCount: number;
+  /**
+   * What happened to the node positions the graph carried. They are layout,
+   * stored beside the graph and never part of its hash, the way the editor
+   * stores them:
+   *
+   * - `saved`: they are now where the editor draws each node;
+   * - `unchanged`: they were already stored exactly so;
+   * - `not_sent`: every node sat on one point, which says nothing about where
+   *   anything goes, so the stored positions were left as they were and the
+   *   editor lays out a graph that has none;
+   * - `not_saved`: the draft is saved but the positions are not, because
+   *   somebody moved nodes in the editor at the same moment (or the write
+   *   failed); save again to place them.
+   */
+  positions: "saved" | "unchanged" | "not_sent" | "not_saved";
 };
 
 /** One editor issue, as an agent reads it: where in the graph, and what to fix. */
@@ -227,8 +246,10 @@ type GraphData = {
   deployedVersion: number | null;
   // The stored draft/deployed graphs in the exact {schemaVersion, nodes, edges}
   // shape workflows.save_draft accepts, read back through the SAME version-row path
-  // save_draft hashes (mapVersionRow, no editor layout applied over them), so
-  // re-saving an unmodified draft canonicalizes to the same bytes and the same hash.
+  // save_draft hashes, with the definition's stored layout put back on the nodes
+  // so a round trip keeps where the editor draws them. Positions are not part of
+  // the hash (the store saves every version with nodes at 0,0), so re-saving an
+  // unmodified draft still canonicalizes to the same bytes and the same hash.
   draft: WorkflowDefinition | null;
   deployed: WorkflowDefinition | LegacyGraphData | null;
   // sha256 over the canonical JSON of each stored version, by the same rule
@@ -437,6 +458,103 @@ function reportableIssues(
   }));
 }
 
+/**
+ * Store the positions a saved graph carried as the definition's layout, the
+ * way the editor stores a node somebody dragged: beside the graph, with the
+ * layout revision as its compare-and-set, merged over what was there so a
+ * node this graph does not name keeps its place and an edge keeps its bend.
+ *
+ * Never allowed to fail the save it follows: the draft has already landed,
+ * and an error here would tell the caller a completed save failed and seal
+ * its idempotency key over a version that exists.
+ */
+async function keepSentPositions(
+  deps: McpToolDependencies,
+  definition: { id: number; layout: WorkflowDefinitionLayout; layoutRevision: number },
+  graph: WorkflowDefinition,
+  actor: ReturnType<typeof storeActor>,
+): Promise<SaveDraftData["positions"]> {
+  if (positionsCarryNoLayout(graph.nodes)) return "not_sent";
+  const stored = normalizeWorkflowDefinitionLayout(definition.layout);
+  const sent = Object.fromEntries(graph.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+  const unchanged = graph.nodes.every(
+    (node) => stored.nodes[node.id]?.x === node.x && stored.nodes[node.id]?.y === node.y,
+  );
+  if (unchanged) return "unchanged";
+  try {
+    await deps.services.saveWorkflowDefinitionLayout({
+      definitionId: definition.id,
+      layout: { nodes: { ...stored.nodes, ...sent }, edges: stored.edges },
+      expectedLayoutRevision: definition.layoutRevision,
+      actor,
+    });
+    return "saved";
+  } catch (error) {
+    logger.warn(
+      {
+        err: error instanceof Error ? error.message : String(error),
+        definitionId: definition.id,
+        requestId: deps.requestId,
+      },
+      "mcp_save_draft_positions_not_saved",
+    );
+    return "not_saved";
+  }
+}
+
+/** Where a definition's two compare-and-set revisions stand now. */
+interface DefinitionHeads {
+  draftRevision: number;
+  deployedVersion: number | null;
+}
+
+/**
+ * Read after a stale-revision refusal, so the refusal can say what the caller has
+ * to send instead. Best effort: the refusal stands without it.
+ */
+async function currentHeads(
+  deps: McpToolDependencies,
+  definitionId: number,
+): Promise<DefinitionHeads | undefined> {
+  try {
+    const definition = await deps.services.getWorkflowDefinition(definitionId);
+    return definition
+      ? { draftRevision: definition.draftRevision, deployedVersion: definition.deployedVersion }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** "Draft changed; reload before saving", "Definition changed; reload before
+ *  deploying" and their kin: a compare-and-set that met a newer row. */
+const STALE_REVISION = /; reload before \w+$/u;
+
+function isStaleRevision(error: unknown): boolean {
+  return (
+    error instanceof WorkflowDefinitionStoreError &&
+    error.statusCode === 409 &&
+    STALE_REVISION.test(error.message)
+  );
+}
+
+/** The step that gets a refused write through, by which conflict the store named. */
+function conflictNextStep(message: string, heads: DefinitionHeads | undefined): string {
+  if (STALE_REVISION.test(message)) {
+    const where = heads
+      ? ` It is now at draftRevision ${heads.draftRevision}, deployedVersion ${heads.deployedVersion ?? "null"}.`
+      : "";
+    return `${where} Read it again with workflows.get_graph and send the revisions it reports, with your change applied to the graph it returns.`;
+  }
+  if (message === "Name already in use") {
+    return " Pick another name; workflows.list names the ones in use.";
+  }
+  if (message.startsWith("Its trigger")) {
+    return " workflows.list shows which definitions are enabled; workflows.set_enabled turns one off.";
+  }
+  return "";
+}
+
 /** Over the canonical JSON of the graph, the same rule the payload hash and the
  * audit row hash by, so an agent can reproduce it from the bytes it sent. */
 function graphDigest(definition: unknown): string {
@@ -458,7 +576,7 @@ function graphDigest(definition: unknown): string {
  * (services/workflow-definitions/policy-operations.ts:758), and a key handed back
  * there would buy a second deployment.
  */
-export function throwPublicStoreError(error: unknown): never {
+export function throwPublicStoreError(error: unknown, heads?: DefinitionHeads): never {
   // Before the base class below, which it extends: a deployment gate failure is a
   // 422 carrying the issues, not a generic conflict.
   if (error instanceof WorkflowDefinitionValidationError) {
@@ -481,10 +599,14 @@ export function throwPublicStoreError(error: unknown): never {
     if (error.statusCode === 404) {
       throw refusal("NOT_FOUND", redactIntegrationVariableNames(error.message));
     }
-    // Retryable because the message says which conflict it is: a draft that moved
-    // on is worth re-reading and re-sending, an archived definition is not.
+    // Not retryable: every conflict here meets the same row when the same call is
+    // sent again (a newer draft, a name in use, a trigger another definition
+    // holds, an archived definition). What the caller does instead is the next
+    // step the message names.
     if (error.statusCode === 409) {
-      throw refusal("CONFLICT", redactIntegrationVariableNames(error.message), true);
+      const said = redactIntegrationVariableNames(error.message);
+      const step = conflictNextStep(error.message, heads);
+      throw refusal("CONFLICT", step ? `${said.replace(/\.?$/u, ".")}${step}` : said);
     }
   }
   throw error;
@@ -620,7 +742,10 @@ export function registerWorkflowAuthoringTools(
               actor,
             });
           } catch (error) {
-            throwPublicStoreError(error);
+            throwPublicStoreError(
+              error,
+              isStaleRevision(error) ? await currentHeads(deps, input.definitionId) : undefined,
+            );
           }
           // Read back rather than hashed from the request: the store canonicalizes a
           // graph before it stores it, so only the stored version can produce a
@@ -645,6 +770,12 @@ export function registerWorkflowAuthoringTools(
             // effectNotApplied false and leave the lease held.
             throw new McpPublicError("CONFLICT", "Saved draft version was not readable", true);
           }
+          const positions = await keepSentPositions(
+            deps,
+            saved.definition,
+            candidate.parsed,
+            actor,
+          );
           // The graph is not echoed. This value is stored as the idempotency key's
           // response for its whole lifetime and hashed into the audit row's
           // outputHash, and a workflow graph belongs in neither.
@@ -656,6 +787,7 @@ export function registerWorkflowAuthoringTools(
             deployable: candidate.response.issues.length === 0,
             deploymentIssues: reportableIssues(candidate.response.issues),
             deploymentIssueCount: candidate.response.issues.length,
+            positions,
           };
         },
       });
@@ -716,7 +848,10 @@ export function registerWorkflowAuthoringTools(
               actor,
             });
           } catch (error) {
-            throwPublicStoreError(error);
+            throwPublicStoreError(
+              error,
+              isStaleRevision(error) ? await currentHeads(deps, input.definitionId) : undefined,
+            );
           }
           // Everything below reads the graph THIS deploy pinned, from the store's own
           // read of the version row, so the digest, the pins and the trigger nodes
@@ -843,21 +978,27 @@ export function registerWorkflowGraphTools(
             deps.services.getDeployedWorkflowDefinitionVersion(input.definitionId),
           ]);
           const draft = runnableDefinitionOf(draftVersion) ?? null;
-          const deployed =
-            deployedVersion?.schema === "legacy-v1"
-              ? { schema: "legacy-v1" as const, message: RETIRED_SCHEMA_MESSAGE }
-              : runnableDefinitionOf(deployedVersion) ?? null;
+          const deployedGraph = runnableDefinitionOf(deployedVersion) ?? null;
+          const layout = normalizeWorkflowDefinitionLayout(definition.layout);
+          const placed = (graph: WorkflowDefinition) =>
+            applyWorkflowDefinitionLayout(graph, layout);
           return {
             definitionId: definition.id,
             name: definition.name,
             enabled: definition.enabled,
             draftRevision: definition.draftRevision,
             deployedVersion: definition.deployedVersion,
-            draft,
-            deployed,
+            draft: draft ? placed(draft) : null,
+            deployed:
+              deployedVersion?.schema === "legacy-v1"
+                ? { schema: "legacy-v1" as const, message: RETIRED_SCHEMA_MESSAGE }
+                : deployedGraph
+                  ? placed(deployedGraph)
+                  : null,
+            // Over the stored version, not the placed one: the hash names the
+            // graph, and where a node is drawn is not part of it.
             draftGraphHash: draft ? graphDigest(draft) : null,
-            deployedGraphHash:
-              deployed !== null && "schemaVersion" in deployed ? graphDigest(deployed) : null,
+            deployedGraphHash: deployedGraph ? graphDigest(deployedGraph) : null,
           };
         },
       });

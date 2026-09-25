@@ -247,13 +247,15 @@ describe("tickets.get", () => {
     expect(serialized).not.toContain("Use OAuth for login");
   });
 
-  it("with includeComments and a limit, returns the newest comments, oldest of them first", async () => {
+  // Red when: Jira's "+0200" offsets reach the caller beside every other time
+  // on this surface, which ends in Z.
+  it("with includeComments and a limit, returns the newest comments, oldest of them first, in UTC", async () => {
     const fetchTicket = vi.fn().mockResolvedValue(
       ticketContent({
         comments: [
-          { author: "A", body: "first", createdAt: "2026-03-20T10:00:00Z" },
-          { author: "B", body: "second", createdAt: "2026-03-20T11:00:00Z" },
-          { author: "C", body: "third", createdAt: "2026-03-20T12:00:00Z" },
+          { author: "A", body: "first", createdAt: "2026-03-20T12:00:00.000+0200" },
+          { author: "B", body: "second", createdAt: "2026-03-20T13:00:00.000+0200" },
+          { author: "C", body: "third", createdAt: "2026-03-20T14:00:00.000+0200" },
         ],
       }),
     );
@@ -265,10 +267,18 @@ describe("tickets.get", () => {
     });
 
     const data = (result.structuredContent as {
-      data: { comments: Array<{ body: string }>; commentCount: number; commentsTruncated: boolean };
+      data: {
+        comments: Array<{ body: string; createdAt: string }>;
+        commentCount: number;
+        commentsTruncated: boolean;
+      };
     }).data;
     expect(data.comments).toHaveLength(2);
     expect(data.comments.map((c) => c.body)).toEqual(["second", "third"]);
+    expect(data.comments.map((c) => c.createdAt)).toEqual([
+      "2026-03-20T11:00:00.000Z",
+      "2026-03-20T12:00:00.000Z",
+    ]);
     expect(data.commentCount).toBe(3);
     expect(data.commentsTruncated).toBe(true);
   });

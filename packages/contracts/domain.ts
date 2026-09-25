@@ -9,6 +9,7 @@ import type {
 import type { RunRepositoryAccess } from "./repository-catalog";
 
 export type { WorkflowBlockType } from "./block-catalog.generated";
+export { WORKFLOW_BLOCK_GROUPS } from "./block-catalog-types";
 export type {
   WorkflowBlockAdditionalInputContract,
   WorkflowBlockGroup,

@@ -460,6 +460,14 @@ function describeIssue(issue: ZodIssue): string {
   // what tells a caller how to correct the argument rather than guess again.
   if (issue.code === "too_big") return `${at} (too_big, max ${issue.maximum})`;
   if (issue.code === "too_small") return `${at} (too_small, min ${issue.minimum})`;
+  // A closed set names its members, which are the schema's words and never the
+  // caller's, and a patterned string names its rule when the schema gave it one.
+  if (issue.code === "invalid_enum_value") {
+    return `${at} (invalid_enum_value, one of ${issue.options.map(String).join(", ")})`;
+  }
+  if (issue.code === "invalid_string" && issue.validation === "regex" && issue.message !== "Invalid") {
+    return `${at} (invalid_string, ${issue.message})`;
+  }
   return `${at} (${issue.code})`;
 }
 

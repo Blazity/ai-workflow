@@ -29,6 +29,7 @@ import {
   createConnectedWorkflowDefinition,
   deployConnectedWorkflowDefinition,
   saveConnectedWorkflowDefinitionDraft,
+  saveConnectedWorkflowDefinitionLayout,
   unarchiveConnectedWorkflowDefinition,
   updateConnectedWorkflowDefinition,
 } from "../workflow-definitions/index.js";
@@ -44,6 +45,7 @@ import {
   refreshHarnessProfileSkill,
 } from "../harness/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
+import { listHarnessProfilePinOptions } from "../harness/index.js";
 import { createConnectedMcpGateServices } from "./gate-services.js";
 import type { McpToolServices } from "./tool-services.js";
 import { mapMcpTicketRunRows } from "./tool-queries.js";
@@ -118,6 +120,7 @@ export function createConnectedMcpToolServices(
     getWebhookEndpointForNode: getConnectedWebhookEndpointForNode,
     createWorkflowDefinition: createConnectedWorkflowDefinition,
     saveWorkflowDefinitionDraft: saveConnectedWorkflowDefinitionDraft,
+    saveWorkflowDefinitionLayout: saveConnectedWorkflowDefinitionLayout,
     deployWorkflowDefinition: deployConnectedWorkflowDefinition,
     updateWorkflowDefinition: updateConnectedWorkflowDefinition,
     // The very function the dashboard's DELETE reaches (definition-authoring.ts,
@@ -128,6 +131,7 @@ export function createConnectedMcpToolServices(
     getWorkflowDefinitionVersion: readConnectedWorkflowDefinitionVersion,
     getCurrentWorkflowDefinitionVersion: readConnectedCurrentWorkflowDefinitionVersion,
     getDeployedWorkflowDefinitionVersion: readConnectedDeployedWorkflowDefinitionVersion,
+    listHarnessProfilePins: listHarnessProfilePinOptions,
     preflightManualDispatch: (input) =>
       preflightConnectedManualDispatch({
         ...input,

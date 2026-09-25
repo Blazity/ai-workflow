@@ -1,6 +1,7 @@
 /** Service policy around the raw definition repository. */
 import type { DashboardRole, WorkflowDefinition, WorkflowDefinitionLayoutInput } from "@shared/contracts";
 import {
+  applyWorkflowDefinitionLayout,
   canEditWorkflowDefinitions,
   normalizeWorkflowDefinitionLayout,
   RETIRED_SCHEMA_MESSAGE,
@@ -205,7 +206,7 @@ async function assertNoTriggerOverlap(
     if (conflict && conflict.definition.id !== definitionId) {
       throw new raw.WorkflowDefinitionStoreError(
         409,
-        `Its trigger is already handled by the enabled definition "${conflict.definition.name}"`,
+        `Its trigger ${triggerType} is already handled by the enabled definition "${conflict.definition.name}" (definition ${conflict.definition.id}). Disable that one first, or remove the trigger from this one.`,
       );
     }
   }
@@ -271,18 +272,7 @@ function layoutOf(definition: WorkflowDefinition) {
   });
 }
 
-function applyLayout(
-  definition: WorkflowDefinition,
-  savedLayout: ReturnType<typeof normalizeWorkflowDefinitionLayout>,
-): WorkflowDefinition {
-  return {
-    ...definition,
-    nodes: definition.nodes.map((node) => {
-      const position = savedLayout.nodes[node.id];
-      return position ? { ...node, ...position } : node;
-    }),
-  };
-}
+const applyLayout = applyWorkflowDefinitionLayout;
 
 function requireRunnableVersion(version: WorkflowDefinitionVersionRow): WorkflowDefinition {
   if (version.schema !== "v2") {

@@ -70,6 +70,7 @@ import { executeMcpMutation, executeMcpRead, mcpToolTimeoutMs } from "../execute
 import { hashCanonicalJson } from "../sanitize-result.js";
 import {
   HISTORY_PAGE_DEFAULT,
+  IMPORT_PREVIEW_PAGE_DEFAULT,
   mcpEnvelopeResult,
   registerCatalogTool,
 } from "../tool-catalog.js";
@@ -712,12 +713,34 @@ export function registerRepositoryCatalogTools(
     return mcpEnvelopeResult(envelope);
   });
 
-  registerCatalogTool(server, "repositories.import_preview", async () => {
+  registerCatalogTool(server, "repositories.import_preview", async (input) => {
     const envelope = await executeMcpRead({
       deps,
       toolName: "repositories.import_preview",
       targetRefs: [],
-      operation: async () => await previewRepositoryImport(),
+      operation: async () => {
+        const preview = await previewRepositoryImport();
+        // Filtered and paged here rather than in the service: the dashboard's
+        // dialog wants the whole listing to search in the browser, and an agent
+        // wants a page it can read. Ordered by key so a page boundary means the
+        // same thing on the next call.
+        const query = input.query?.toLowerCase();
+        const matching = preview.repositories
+          .filter((row) => input.provider === undefined || row.provider === input.provider)
+          .filter((row) => query === undefined || row.path.toLowerCase().includes(query))
+          .filter((row) => input.inCatalog === undefined || row.inCatalog === input.inCatalog)
+          .sort((a, b) => a.key.localeCompare(b.key));
+        const offset = input.offset ?? 0;
+        const limit = input.limit ?? IMPORT_PREVIEW_PAGE_DEFAULT;
+        const end = offset + limit;
+        return {
+          repositories: matching.slice(offset, end),
+          providers: preview.providers,
+          total: matching.length,
+          offset,
+          nextOffset: end < matching.length ? end : null,
+        };
+      },
     });
     return mcpEnvelopeResult(envelope);
   });

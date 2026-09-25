@@ -39,6 +39,7 @@ import {
   createWorkflowDefinition,
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
+  saveWorkflowDefinitionLayout,
   unarchiveWorkflowDefinition,
   updateWorkflowDefinition,
 } from "../workflow-definitions/index.js";
@@ -52,6 +53,10 @@ import {
 } from "../manual-dispatch/index.js";
 import { cancelRunForOperator } from "../run-lifecycle/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
+import {
+  listHarnessProfilePinOptionsFromDb,
+  type HarnessProfilePinOption,
+} from "../harness/index.js";
 import { createMcpGateServices, type McpGateServices } from "./gate-services.js";
 import {
   deployedDefinitionVersionsQuery,
@@ -230,6 +235,11 @@ export interface McpToolServices extends McpGateServices {
   saveWorkflowDefinitionDraft(
     input: Parameters<typeof saveWorkflowDefinitionDraft>[1],
   ): ReturnType<typeof saveWorkflowDefinitionDraft>;
+  /** The editor's own layout write: positions only, compare-and-set on the
+   *  layout revision, never a version and never the graph's hash. */
+  saveWorkflowDefinitionLayout(
+    input: Parameters<typeof saveWorkflowDefinitionLayout>[1],
+  ): ReturnType<typeof saveWorkflowDefinitionLayout>;
   deployWorkflowDefinition(
     input: Parameters<typeof deployWorkflowDefinition>[1],
   ): ReturnType<typeof deployWorkflowDefinition>;
@@ -257,6 +267,8 @@ export interface McpToolServices extends McpGateServices {
   getDeployedWorkflowDefinitionVersion(
     definitionId: number,
   ): ReturnType<typeof readDeployedWorkflowDefinitionVersion>;
+  /** The Harness Profiles an agent block of this organization can pin. */
+  listHarnessProfilePins(organizationId: string): Promise<HarnessProfilePinOption[]>;
 
   // --- manual dispatch ---------------------------------------------------
   // Function-typed properties, not method shorthand: a method-shorthand
@@ -353,6 +365,7 @@ export function createMcpToolServices(
       getWebhookEndpointForNode(db, definitionId, nodeId),
     createWorkflowDefinition: (input) => createWorkflowDefinition(db, input),
     saveWorkflowDefinitionDraft: (input) => saveWorkflowDefinitionDraft(db, input),
+    saveWorkflowDefinitionLayout: (input) => saveWorkflowDefinitionLayout(db, input),
     deployWorkflowDefinition: (input) => deployWorkflowDefinition(db, input),
     updateWorkflowDefinition: (input) => updateWorkflowDefinition(db, input),
     archiveWorkflowDefinition: (input) => archiveWorkflowDefinition(db, input),
@@ -364,6 +377,8 @@ export function createMcpToolServices(
       readCurrentWorkflowDefinitionVersion(db, definitionId),
     getDeployedWorkflowDefinitionVersion: (definitionId) =>
       readDeployedWorkflowDefinitionVersion(db, definitionId),
+    listHarnessProfilePins: (organizationId) =>
+      listHarnessProfilePinOptionsFromDb(db, organizationId),
 
     preflightManualDispatch: (input) =>
       preflightManualDispatch({

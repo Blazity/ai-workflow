@@ -349,3 +349,55 @@ describe("profiles tools", () => {
     expect(retried.data.version).toBe(1);
   });
 });
+
+type Listed = {
+  profileId: string;
+  system: boolean;
+  provider: string | null;
+  model: string | null;
+  publishedVersion: number | null;
+  pin: { profileId: string; version: number } | null;
+};
+
+describe("profiles.list as the pin an agent block takes", () => {
+  // Red when: a graph authored over MCP cannot learn which model a profile runs
+  // or what to put in `configuration.harnessProfile`, and every agent block
+  // runs the built-in default.
+  it("names each published profile's provider and model, and the pin that runs it", async () => {
+    await ensureSystemHarnessProfilesOnDb(db);
+    const client = await connectedClient();
+
+    const listed = await call<{ profiles: Listed[] }>(client, "profiles.list", {});
+
+    const system = listed.data.profiles.filter((profile) => profile.system);
+    expect(system.length).toBeGreaterThan(0);
+    for (const profile of system) {
+      expect(profile.model?.length).toBeGreaterThan(0);
+      expect(["claude", "codex"]).toContain(profile.provider);
+      // Exactly the shape configuration.harnessProfile validates.
+      expect(profile.pin).toEqual({
+        profileId: profile.profileId,
+        version: profile.publishedVersion,
+      });
+    }
+  });
+
+  it("lists a profile nobody published with its draft's model and no pin, rather than one that would not run", async () => {
+    const created = await createHarnessProfileDraft({
+      slug: "team-draft",
+      draft: draft(),
+      actor: { organizationId: ORG_ID, role: "admin", id: ADMIN_ID },
+    });
+    const client = await connectedClient();
+
+    const listed = await call<{ profiles: Listed[] }>(client, "profiles.list", {});
+
+    expect(listed.data.profiles.find((profile) => profile.profileId === created.id)).toMatchObject({
+      system: false,
+      provider: draft().harness.provider,
+      model: draft().model.id,
+      publishedVersion: null,
+      pin: null,
+    });
+  });
+});

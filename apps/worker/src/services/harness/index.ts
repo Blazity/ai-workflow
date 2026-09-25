@@ -27,11 +27,14 @@ export {
 } from "./profile-authoring.js";
 export {
   currentSystemHarnessProfileReference,
+  listHarnessProfilePinOptions,
+  listHarnessProfilePinOptionsFromDb,
   listHarnessProfilesForOrganization,
   readHarnessProfileDetail,
 } from "./profile-reads.js";
 export type {
   HarnessProfileActor,
+  HarnessProfilePinOption,
 } from "./profile-reads.js";
 export {
   discoverDeploymentSkills,

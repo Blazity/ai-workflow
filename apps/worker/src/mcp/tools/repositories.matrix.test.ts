@@ -62,6 +62,7 @@ import { resolveMcpActor } from "../../services/mcp/actor-resolution.js";
 import { settingsSnapshotFromEnvironment } from "../../services/settings/snapshot.js";
 import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 import { registerRepositoryCatalogTools } from "./repositories.js";
+import { MCP_CLIENT_INLINE_BYTES } from "./page-budget.js";
 
 const ORG_ID = "org-execute";
 const NOW = new Date("2026-09-13T09:00:00.000Z");
@@ -224,6 +225,88 @@ describe("repositories.import_preview", () => {
     });
     expect(allowed.isError).not.toBe(true);
     expect(dataOf(allowed).repositories).toHaveLength(1);
+  });
+});
+
+describe("repositories.import_preview, one page at a time", () => {
+  /** Two hundred repositories, the listing size that made one answer 40 KB,
+   *  which went out twice and landed in a file instead of in front of the model. */
+  function largeInstallation() {
+    state.directory = {
+      repositories: Array.from({ length: 200 }, (_, index) =>
+        option(`acme/service-${String(index).padStart(3, "0")}`, index % 4 === 0 ? "gitlab" : "github"),
+      ),
+      providers: [
+        { provider: "github", status: "ready" },
+        { provider: "gitlab", status: "ready" },
+      ],
+    };
+  }
+
+  // Red when: the preview hands back every repository in one answer.
+  it("answers the first page by default, small enough to be shown inline", async () => {
+    largeInstallation();
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "repositories.import_preview", arguments: {} });
+    const data = dataOf(result);
+
+    expect(data.repositories).toHaveLength(50);
+    expect(data).toMatchObject({ total: 200, offset: 0, nextOffset: 50 });
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(MCP_CLIENT_INLINE_BYTES);
+    // The provider statuses ride every page: a failed listing is news on any of them.
+    expect(data.providers).toHaveLength(2);
+  });
+
+  it("walks the pages by nextOffset without skipping or repeating a repository", async () => {
+    largeInstallation();
+    const client = await connectedClient();
+    const seen: string[] = [];
+
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const data = dataOf(
+        await client.callTool({
+          name: "repositories.import_preview",
+          arguments: { offset, limit: 80 },
+        }),
+      );
+      seen.push(...(data.repositories as Array<{ key: string }>).map((row) => row.key));
+      offset = data.nextOffset as number | null;
+    }
+
+    expect(seen).toHaveLength(200);
+    expect(new Set(seen).size).toBe(200);
+  });
+
+  it("narrows by provider, by a piece of the path, and by whether the catalog holds it", async () => {
+    largeInstallation();
+    await upsertRepositoryProfile(db, {
+      provider: "gitlab",
+      path: "acme/service-004",
+      description: "",
+      rules: "",
+      relationships: [],
+      scriptGroups: null,
+      gateGroups: null,
+      actorId: "user-execute",
+      actorLabel: "Ada",
+      reason: "seeded",
+    });
+    const client = await connectedClient();
+
+    const narrowed = dataOf(
+      await client.callTool({
+        name: "repositories.import_preview",
+        arguments: { provider: "gitlab", query: "SERVICE-00", inCatalog: false },
+      }),
+    );
+
+    expect((narrowed.repositories as Array<{ key: string }>).map((row) => row.key)).toEqual([
+      "gitlab:acme/service-000",
+      "gitlab:acme/service-008",
+    ]);
+    expect(narrowed).toMatchObject({ total: 2, nextOffset: null });
   });
 });
 

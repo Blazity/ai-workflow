@@ -116,6 +116,7 @@ export {
   restoreWorkflowDefinitionVersion,
   rollbackWorkflowDefinition,
   saveConnectedWorkflowDefinitionDraft,
+  saveConnectedWorkflowDefinitionLayout,
   saveWorkflowDefinitionDraft,
   saveWorkflowDefinitionLayout,
   saveWorkflowDefinitionVersion,
