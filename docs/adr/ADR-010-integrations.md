@@ -2923,6 +2923,86 @@ by the hardening plan's D6: every one now answers through `refusedOrThrow`):
 | `ctx.llm` records no usage against the block and is not bound to `ctx.signal` | `engine/support/integration-capabilities.ts` |
 | The webhook route removes `legacyBotLogin` (`VCS_LEGACY_BOT_LOGIN_FIELD.key`) from every integration's connection, `vcs` or not; it no longer writes `botLogin` | `routes/webhooks/[id].post.ts` |
 
+## The memory store port, version 2, decided in the memory rebuild
+
+Amendment of 2026-09-25, from decision D2 of the memory rebuild plan
+(`docs/plans/2026-09-23-memory-package.md`, with the port changes in
+`docs/plans/2026-09-23-memory-quality-and-routing.md`, "Port v2").
+
+**What was wrong with version 1.** S13 designed `memory` as observations in,
+rendering out, on the premise that a hosted engine does the merging itself.
+S15 found Mem0 v3 only adds, so each provider ended up deciding policy on its
+own: how many entries a subject keeps, which two sentences are the same one,
+what to evict, how to render. Three places decided sameness three ways (the
+built-in store's normalised key, Mem0's exact text, the org promotion's
+comparison key), so the same fact behaved differently depending on which store
+held it, and a person could not tell why the agent forgot something.
+
+**The decision.** A second port, `MemoryStore` in `integrations/sdk/memory.ts`,
+beside `MemoryAdapter`, under which a store is thin: it holds entries per
+subject and kind, recalls them, applies what core decided and forgets what a
+person erases. Core owns every policy (caps, sameness, redaction, budgets,
+eviction, ranking use, trust, placement) the same way for every store. What
+the port binds a store to, each stated on the type and each a case of
+`checkMemoryStoreConformance`:
+
+- `recall` and `held` return the COMPLETE set for what was asked. A store that
+  can rank orders a recall by relevance to the query (`ranked: true`, a score
+  per entry it scored, unscored ones after); relevance never filters, because
+  a store that dropped what its search found irrelevant would make the run
+  card say nothing was left out while the agent missed a fact. `held` is never
+  ranked, is oldest first, and carries a version when the store can compare
+  and swap.
+- `apply` answers one outcome per item, never a count, and each outcome
+  carries the id the entry has afterwards: an update may change it (a store
+  whose ids follow the text, or one that replaces an entry its engine will not
+  edit), and core chains the two ids in its record. An engine that queues
+  writes has no id yet, so an add or a replacing update answers `pending` and
+  core finds the text on a later `held`; a replacing store adds first and
+  deletes second, and answers `failed` with `unavailable` when it cannot say
+  both halves landed. A consolidating store that merges an add into an entry
+  it holds answers `added` with the id its engine gave. A store whose ids
+  follow the text refuses an update to a text another entry holds (`rejected`,
+  with `heldId`) instead of folding the two. The answer as a whole is a
+  refusal only when nothing was applied.
+- Within one apply, removals go first, then updates, then additions, so a text
+  one frees can be written again in the same call. Two applies to one subject
+  and kind may run at once and neither loses the other's writes; a caller that
+  needs no writer between its read and its write passes `ifVersion`.
+- A store declares whether it consolidates on its own (Mem0's Supersede and
+  Merge do; the built-in store never does) and whether `protect` keeps an entry
+  out of that. A store that says it does not consolidate holds exactly what
+  `apply` left.
+- `forget` erases by text, never by id, within one subject (and one kind when
+  given), so duplicates written by parallel runs go too. It matches by
+  `memoryTextHash`: SHA-256 of `normalizeMemoryText`, which is the comparison
+  key core already deduplicated with (`repoMemoryComparisonKey`) plus NUL
+  removal and Unicode NFC. That rule lives in the SDK because a store needs it
+  to forget; core's dedup and core's record of erased text use the same
+  function, so there is exactly one.
+- Refusals use `MemoryFailure`'s store codes (`unavailable`, `contended`,
+  `rejected`), with an optional typed `reason` (`key_rejected`, `quota`,
+  `rate_limited`, `timeout`, `unreachable`) and HTTP `status`, so a run card
+  and a store status can say why without parsing a sentence. Every reason goes
+  with `unavailable`: each is the engine's state, and asking again later gets
+  past it (plan cases E3 and E4).
+- An entry carries its text, origin (`learned`, `derived`, `imported`,
+  `human`, the last meaning a person wrote or restored it, while an edit or a
+  confirmation is core's trust record), last writer and, from a consolidating
+  store, `replacedBy`; never
+  trust, status, pins, placement or routing, which are core's record. Kinds
+  stay `facts` and `lessons`: notebooks leave the port, because core keeps
+  every notebook in its built-in store whichever store serves facts.
+
+**Why additive, and when version 1 goes.** Production runs version 1 until
+core moves onto version 2 (stage 6a of that plan), so nothing in version 1
+changed and both are exported. Stage 11 of the plan removes `MemoryAdapter`,
+`MemoryStoreAdapter` and their types once the cut-over is proven; that removal
+is not additive and is recorded here when it lands. `MemoryFailure` stays,
+because the version 2 codes are drawn from it. No factory slot returns a
+`MemoryStore` yet (`IntegrationCapabilityFactories.memory` still returns a
+`MemoryAdapter`); the stage that wires a store adds one, additively.
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -2930,6 +3010,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-25 | memory rebuild, stage 2 | `MemoryStore`, version 2 of the memory port, beside `MemoryAdapter`: `recall`, `held`, `apply`, `forget`, `list` and `traits`, with `MemoryStoreEntry`, `MemoryRecalledEntry`, `MemoryKind`, `MemoryEntryOrigin` (gains `human`), `MemoryRemovalReason` (gains `retired` and `reverted`), `MemoryStoreApplyOutcome`, `MemoryStoreRefusal` and the request and answer types; `normalizeMemoryText` and `memoryTextHash`; `checkMemoryStoreConformance` with `MemoryStoreConformanceHarness`, proven against an in-memory reference store (`memory-reference-store.ts`, test support) | Stores decided memory policy three ways, so one fact behaved differently per store; version 2 makes a store hold, recall, apply and forget, and core decide the rest (section "The memory store port, version 2, decided in the memory rebuild"). Additive: version 1 is unchanged and production keeps running it until the cut-over; stage 11 of the plan removes it. |
 | 2026-09-23 | review fixes | `IntegrationConnection.connectionless`, and conformance codes `connection_required_field_missing` and `connection_connectionless_has_required` | Core treats a connection whose every field is optional as complete from the start, so a manifest that forgot to mark a field required read Connected on every deployment with nothing configured, and a memory integration like that would have replaced the built-in store everywhere. A connection now declares at least one required field, or says it needs nothing. Not additive for a manifest with no required field, which fails conformance until it chooses; none in this repository has one. |
 | 2026-09-23 | review fixes | `ISSUE_TRACKER_BOARD_FIELDS` and conformance code `issue_tracker_board_field_invalid` | Core read a tracker's project and transition ids by Jira's own field names and identified the tracker by its `baseUrl`, so a second tracker would have run its board with no project check and every move by bare name. Core now reads those fields by the SDK's keys, conformance holds a tracker to declaring the project as required and the transition ids as optional, and a tracker's identity is its integration id plus its config fingerprint. Chosen over a port member because it follows `VCS_BOT_LOGIN_FIELD` and needs no runtime code in each tracker. |
 | 2026-09-23 | hardening | `IntegrationRequestInit.streamBody`; `ctx.http.fetch` now reads the body inside the attempt | The attempt deadline ended when the headers arrived, so a body cut off after that read as a short success: GitHub's skill download came back as 200 with zero bytes and the person read "could not be unpacked safely" about a repository that was fine. The body is now read inside the attempt, so a cut body is a failed attempt (a read goes again, a write throws). `streamBody` opts out for a download too large to hold in memory, which the caller then reads under a deadline of its own. |
