@@ -805,7 +805,7 @@ export const apiClient = {
         jsonInit("PATCH", body),
       ),
     /** Remove one stored value, handing the key back to its environment
-     *  variable or default. Owner only; a 409 is the same conflict as above. */
+     *  variable or default. Owners and admins; a 409 is the same conflict as above. */
     reset: (body: SettingsResetRequest) =>
       requestJson<SettingsResetResponse>(
         "/api/settings/reset",

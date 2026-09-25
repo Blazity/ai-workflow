@@ -57,11 +57,10 @@ function defaultNote(entry: SettingsEntryView): string {
   return `Default: ${displaySettingValue(entry.default)}.`;
 }
 
-/** Whether this field offers removing its stored value, says who may, or
- *  says nothing (nothing stored, or a reader who can change nothing here). */
+/** Whether this field offers removing its stored value, or says nothing
+ *  (nothing stored, or a reader who can change nothing here). */
 type Removal =
   | { kind: "none" }
-  | { kind: "owner_only" }
   | {
       kind: "allowed";
       onRemoved: (setting: SettingsEntryView, removed: boolean) => void;
@@ -137,11 +136,6 @@ function SettingField({
           />
         </div>
       )}
-      {removal.kind === "owner_only" && (
-        <p className="m-0 font-body text-[11px] text-neutral-500">
-          Only an owner can remove a stored value.
-        </p>
-      )}
       <div>
         <Button
           variant="text"
@@ -179,8 +173,8 @@ export function SettingsGroupForm({
   group: SettingsGroupView;
   /** The role rule: false renders every control read only with the notice. */
   canEdit: boolean;
-  /** canResetSettings(role): true offers "Remove stored value", false says
-   *  who may. Left out, the form offers neither, so a panel that mounts it
+  /** canResetSettings(role): true offers "Remove stored value" on a stored
+   *  value. Left out, the form offers no removal, so a panel that mounts it
    *  without deciding keeps what it had. */
   canReset?: boolean;
   /** Renders only these keys. The area panels pass a module level list. */
@@ -387,15 +381,13 @@ export function SettingsGroupForm({
               issue={issues[entry.key]}
               historyOpen={openHistory === entry.key}
               removal={
-                !canEdit || entry.source !== "stored" || canReset === undefined
-                  ? { kind: "none" }
-                  : canReset
-                    ? {
-                        kind: "allowed",
-                        onRemoved: removedStoredValue,
-                        onConflict: (found) => showConflicts("remove", found),
-                      }
-                    : { kind: "owner_only" }
+                canEdit && canReset === true && entry.source === "stored"
+                  ? {
+                      kind: "allowed",
+                      onRemoved: removedStoredValue,
+                      onConflict: (found) => showConflicts("remove", found),
+                    }
+                  : { kind: "none" }
               }
               onToggleHistory={() =>
                 setOpenHistory((current) => (current === entry.key ? null : entry.key))
