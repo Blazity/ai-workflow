@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-25
 
 # AGENTS.md
 
@@ -54,9 +54,9 @@ it on a matching read, other agents open it themselves.
 
 ## How to work here
 
-- Read current docs before writing or judging code against a library, SDK,
-  API or CLI, for the pinned version: `ctx7 library <name> "<q>"`, then
-  `ctx7 docs <id> "<q>"`. Feeling sure is no reason to skip it.
+- Check a library, SDK, API or CLI against the pinned version before writing
+  or judging code that uses it: working usage in this repo, then installed
+  types and source, then `ctx7 library <name> "<q>"` and `ctx7 docs <id> "<q>"`.
 - State assumptions before implementing. If two readings are possible, name
   both instead of silently picking one.
 - Write the minimum that solves the problem. No speculative abstraction, no
@@ -64,10 +64,9 @@ it on a matching read, other agents open it themselves.
 - Touch only what the task requires. Match the surrounding style. Remove the
   orphans your own change creates, and mention pre-existing dead code rather
   than deleting it.
-- Turn the task into a verifiable goal ("write the test that reproduces it,
-  then make it pass") and loop on it yourself.
-- Record a newly found defect as its own Jira issue instead of widening the
-  slice you are in.
+- Fix a defect you find during the task in the same session. Open a Jira
+  issue instead only when the fix needs a migration, a contract change or an
+  unmade product decision, and say why.
 
 ## Commands
 
@@ -90,8 +89,8 @@ pnpm run typecheck
 pnpm run test:ci
 ```
 
-Run the smallest test that reproduces the issue first, then nearby regression
-tests. Root `pnpm test` and `pnpm build` are not local defaults; broad suites
+Reproduce the issue with the smallest test first and make it pass, then run
+nearby regression tests. Root `pnpm test` and `pnpm build` are not local defaults; broad suites
 belong in CI.
 
 ## Evidence
@@ -120,10 +119,9 @@ passed. The run echoes each planned command with its position, stops at the
 first failure, and then names that command and lists every later one as
 unproven: a command that never started is not a command that passed.
 
-`main` carries the branch ruleset decided in ADR-004: since 2026-09-09 it
-requires the `ci` aggregator to pass, so a red `ci` job blocks the merge. The
-only bypass is one named user account, and every use of it must open a Jira
-issue recording what was merged and why.
+`main` requires the `ci` aggregator to pass (ADR-004), so a red `ci` job
+blocks the merge. The only bypass is one named user account, and every use of
+it must open a Jira issue recording what was merged and why.
 
 ## Four gotchas that break production
 

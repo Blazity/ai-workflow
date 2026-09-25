@@ -1,9 +1,11 @@
 # Mem0
 
 [Mem0](https://mem0.ai) is a hosted memory engine. Connecting it makes it this
-deployment's memory: the facts and lessons runs learn about repositories and
-owners, and the notebook an agent keeps for a ticket, are stored in your Mem0
-project instead of the built-in store.
+deployment's memory for what runs learn: the facts and lessons about
+repositories and owners are stored in your Mem0 project instead of the
+built-in store. The notebook an agent keeps for a ticket stays in the built-in
+store either way, because the next run reads it back exactly as it was
+written, and Mem0 may reword what it stores.
 
 ## Connecting it
 
@@ -26,10 +28,11 @@ and Test says so instead of sending one to the hosted platform.
 
 ## What connecting it unlocks
 
-- Memory served by Mem0 for every run, in place of the built-in store.
+- Facts and lessons served by Mem0 for every run, in place of the built-in
+  store.
 - The memory screen (`/memory`) and the `memory.list`, `memory.get` and
   `memory.forget` MCP tools list, show and erase what Mem0 holds for this
-  deployment.
+  deployment, with the ticket notebooks the built-in store keeps.
 - The **API access** row on the System health page.
 
 ## What an admin should know
@@ -55,9 +58,9 @@ and Test says so instead of sending one to the hosted platform.
   yesterday.
 
 - **Connecting copies nothing, disconnecting deletes nothing.** The first runs
-  after you connect find Mem0 empty: the repository seed writes again, and a
-  ticket already in flight starts without the notebook it had in the built-in
-  store (which stays there, untouched). Disable the integration and the
+  after you connect find no facts or lessons in Mem0, so the repository seed
+  writes again. A ticket's notebook does not move: it stays in the built-in
+  store whether Mem0 is connected or not. Disable the integration and the
   deployment is back on the built-in store as it was; everything written to
   Mem0 stays there, and reconnecting the same project brings it back.
 - **Connect while nothing runs.** A run in flight while you connect may read
@@ -143,15 +146,13 @@ memories are gone.
   run B retracts a fact before run A's add of that same fact lands, the fact
   survives until a later run retracts it again. An identical seed written by
   two runs at once is stored once, because Mem0 drops an exact repeat.
-- **A ticket in flight when you connect** starts in Mem0 without the notebook
-  it had in the built-in store (which keeps it, untouched). Nothing says so in
-  the run itself beyond Mem0 holding nothing for that ticket; connect while no
-  run is in flight.
 
 ## The memory screen
 
-Documents are listed one per subject and kind (facts, lessons, a notebook),
-newest first. The listing reads at most 2,000 memories and says it is partial
+Documents are listed one per subject and kind, newest first. A ticket's
+notebook (`ai-workflow/memory/<KEY>.md`) is the built-in store's, listed,
+shown and erased there; a `notebook/<KEY>` document is one Mem0 kept from
+before notebooks stayed in the built-in store. The listing reads at most 2,000 memories and says it is partial
 when Mem0 holds more. Erasing a document deletes each of its memories by id and
 answers "nothing stored" when there was nothing to delete.
 
@@ -286,9 +287,9 @@ it, for Mem0:
    built-in store (`provider` on the memory log lines).
 2. Test on the Connection form names the organization and project ids the
    key belongs to, and they match the project meant.
-3. A notebook of about 40 KB and one of about 200 KB each come back byte for
-   byte on the next run (`memory_document_hydrated_from_store`), or the save
-   says it was refused with both sizes.
+3. After a run on a ticket, the memory screen lists its notebook at
+   `ai-workflow/memory/<KEY>.md`, and Mem0 holds nothing new under a
+   `notebook/` agent id.
 4. After Disable, the next run is served by the built-in store again and the
    memory screen shows the built-in documents as they were.
 

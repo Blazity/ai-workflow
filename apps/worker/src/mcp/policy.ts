@@ -423,6 +423,85 @@ const MEMORY_FORGET_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * Harness profiles, on the authoring scope and the two roles the dashboard's
+ * profile routes admit (`canManageHarnessProfiles`). A profile is part of what a
+ * workflow node runs with, so consent to author workflows is the consent that
+ * covers it; a scope of its own would ask every client for a second agreement
+ * to the same thing. No "service": a profile decides what every sandboxed agent
+ * on it is handed, which is not a change an unattended client should make.
+ *
+ * Refreshing a skill moves only the draft, which no run reads. It is open
+ * world because a skill sourced from a repository is read back from that
+ * provider.
+ */
+const PROFILE_DRAFT_POLICY = {
+  ...WORKFLOW_WRITE_POLICY,
+  annotations: {
+    ...WORKFLOW_WRITE_POLICY.annotations,
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
+/**
+ * Archiving a definition: the editor's Delete, which has only ever archived.
+ *
+ * The authoring scope and its admin/owner list, for the reason every authoring
+ * write has them: `canEditWorkflowDefinitions` is the predicate the store's own
+ * gate asks, on this surface and behind the dashboard's DELETE alike.
+ *
+ * Destructive, because the definition leaves every list and can no longer be
+ * edited, published, dispatched or triggered, and a client must not probe with
+ * it. It is not a hard delete: workflows.unarchive takes it back with every
+ * version, the draft and the deployed pointer intact, and the store refuses to
+ * archive an enabled definition, so nothing that answers real events can be
+ * taken away by this call. Closed world: only this deployment's own row moves.
+ */
+const WORKFLOW_ARCHIVE_POLICY = {
+  ...WORKFLOW_WRITE_POLICY,
+  annotations: { ...WORKFLOW_WRITE_POLICY.annotations, destructiveHint: true },
+} as const satisfies McpToolPolicy;
+
+// Taking an archive back replaces nothing: the definition returns disabled,
+// exactly as it was archived, so no trigger is armed by it. The authoring
+// write's own annotations say that.
+const WORKFLOW_UNARCHIVE_POLICY = WORKFLOW_WRITE_POLICY;
+
+/**
+ * Deciding a plan a run filed for a person: the Approvals screen's two buttons.
+ *
+ * Rides runs:dispatch rather than a scope of its own. Approving starts the run
+ * that implements the plan, which is the dispatch authority, and rejecting
+ * settles the run that parked on the plan, which is how answering a
+ * clarification rides the same scope. A new scope would also leave every client
+ * registered before it unable to reach these tools, since a client keeps the
+ * ceiling it registered with.
+ *
+ * The role list is `canApproveWorkflowPlans`, the predicate the dashboard's two
+ * routes ask, and the service both doors call asks it again. No "service", for
+ * the reason CLARIFICATION_ANSWER_POLICY refuses one: the run parked because it
+ * needed a person, and `withoutAuthoringScopes` never strips runs:dispatch, so
+ * this list is the only lock on that.
+ *
+ * Destructive, because neither decision can be taken back: an approved plan has
+ * a run working on somebody's ticket, and a rejected one has retired the run
+ * that filed it. Open world, because both write to the ticket and approving
+ * reaches the sandbox provider.
+ */
+const PLAN_DECISION_POLICY = {
+  scope: "runs:dispatch",
+  roles: ["admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    // A repeat under the same idempotency key replays the first answer, and a
+    // fresh key on a decided plan is refused as already decided.
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -522,6 +601,25 @@ const TOOL_POLICY = {
   "memory.list": READ_POLICY,
   "memory.get": READ_POLICY,
   "memory.forget": MEMORY_FORGET_POLICY,
+  // A plain read, as on the dashboard, where every member sees the profiles
+  // list: which skills a profile pins is configuration, not a customer's data.
+  "profiles.list": READ_POLICY,
+  "profiles.get": READ_POLICY,
+  "profiles.refresh_skill": PROFILE_DRAFT_POLICY,
+  // Publishing adds a version and replaces nothing: every workflow node pins an
+  // exact profile version (engine/definition/harness-profile-runtime.ts), so no
+  // run resolves the new one until a graph is edited to name it and published.
+  // That later workflows.publish is the destructive step, and it says so.
+  "profiles.publish": WORKFLOW_WRITE_POLICY,
+  "workflows.archive": WORKFLOW_ARCHIVE_POLICY,
+  "workflows.unarchive": WORKFLOW_UNARCHIVE_POLICY,
+  // Plain reads, matching GET /api/v1/approvals, which is open to every
+  // dashboard role: seeing what is waiting on a decision, and what the plan
+  // says, is how a member tells an admin a run is stuck on one.
+  "approvals.list": READ_POLICY,
+  "approvals.get": READ_POLICY,
+  "approvals.approve": PLAN_DECISION_POLICY,
+  "approvals.reject": PLAN_DECISION_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

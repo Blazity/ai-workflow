@@ -620,7 +620,7 @@ export function OverviewScreen({
                 Workflow · latest ticket
               </th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Runs {wShort}</th>
-              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">p95</th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200" title="p95 of successful runs">p95</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Err</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Cost</th>
               <th className="px-4 py-2.5 text-right font-medium border-b border-neutral-200">{wShort} trend</th>

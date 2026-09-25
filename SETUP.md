@@ -344,16 +344,16 @@ Two timing rules matter:
 - A run reads the catalog **once, at its start**, and finishes under the list it started with. Disabling a repository stops the next run, not one already in flight. The same is true of every setting on the Settings page: `appliesToRunsInFlight` in the settings registry says which.
 - A pull request or merge request event is checked at dispatch, and a pending event queued while the deployment was busy is checked again on the tick that drains it, so a repository disabled in the meantime is dropped rather than dispatched late.
 
-`AGENT_ALLOWED_REPOS` has been unused since H2: neither startup, a build, nor a
-run reads it. If an existing Vercel environment still defines it, remove it at
+`AGENT_ALLOWED_REPOS` is no longer read: neither startup, a build, nor a run
+reads it. If an existing Vercel environment still defines it, remove it at
 leisure; its presence does not change behavior and does not currently block
 boot. A follow-up cleanup should add it to the retired-variable startup check
 after operators have removed it everywhere. Configure access on the
 Repositories page instead.
 
-Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
-**Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned
-with one-click restore.
+Repository scripts (per-repo commands run before push/PR creation) are configured per repository on
+the dashboard's **Repositories** page. Admins and owners can edit; every save is a new version of
+the repository's profile ([repository scripts](docs/architecture/repository-scripts.md)).
 
 ---
 
@@ -896,8 +896,10 @@ The tracer travels with the integration as `integrations/arthur/tracer.generated
 Memory is an integration capability. With nothing connected, runs keep what
 they learn about repositories and owners, and each ticket's notebook, in the
 built-in store in this deployment's database; nothing needs configuring. To
-store it in a hosted [Mem0](https://mem0.ai) project instead, connect the Mem0
-integration (Integrations → Mem0, or `AIW_MEM0_API_KEY`). Read
+store the facts and lessons in a hosted [Mem0](https://mem0.ai) project
+instead, connect the Mem0 integration (Integrations → Mem0, or
+`AIW_MEM0_API_KEY`). Each ticket's notebook stays in the built-in store either
+way. Read
 [`integrations/mem0/README.md`](./integrations/mem0/README.md) first: every
 deployment that shares this database switches with it, and what the built-in
 store already holds is not copied over.
@@ -1001,9 +1003,9 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 
 | Scope | Grants |
 | --- | --- |
-| `mcp:read` | Read tickets, runs and their logs, agent briefings (the full prompt each agent was sent), workflows, prompts, the block catalog, repositories, settings, work scope and agent memory. Enough to inspect a deployment without changing anything. |
-| `runs:dispatch` | Start a manual run and check it first, answer a run's clarification, cancel a run, edit which repositories a ticket's work may touch, and permanently forget one agent memory document. |
-| `workflows:write` | Author workflows: create a definition, read its draft and deployed graph, save a draft, publish it live, and enable or disable it. |
+| `mcp:read` | Read tickets, runs and their logs, agent briefings (the full prompt each agent was sent), workflows, prompts, the block catalog, repositories, settings, work scope, agent memory and the plans waiting for approval. Enough to inspect a deployment without changing anything. |
+| `runs:dispatch` | Start a manual run and check it first, answer a run's clarification, approve or reject a plan (owners and admins, as on the dashboard), cancel a run, edit which repositories a ticket's work may touch, and permanently forget one agent memory document. |
+| `workflows:write` | Author workflows: create a definition, read its draft and deployed graph, save a draft, publish it live, enable or disable it, and archive it or bring it back from the archive. |
 | `prompts:write` | Edit the prompt library. |
 | `tickets:write` | Comment on, transition, or create a ticket in the connected tracker. |
 | `repositories:write` | Configure the repository catalog: save a profile, flip a repository's switch, import from a provider, ask for a suggestion, and end the bridge by activating the catalog. Separate from `workflows:write` because it decides which repositories the platform may enter at all. |
@@ -1011,7 +1013,7 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 
 The last two scopes were added after the first clients registered, and a client carries the ceiling it registered with: re-authorizing an existing client does not grant a scope its registration never included, so a client registered before `repositories:write` and `settings:write` existed cannot reach the configuration tools no matter what its next consent screen says. Register a new client, or update the stored client row's scopes, before expecting them to work.
 
-**Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog — every block type the editor offers, with its input and output contract, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
+**Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog: one line for every block type the editor offers, and `blocks.get` then gives one block's input and output contract and configuration schema, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
 
 **A worked example: a loop and a branch together.** [`docs/example-workflows/loop-branch-workflow.json`](./docs/example-workflows/loop-branch-workflow.json) is a complete, valid workflow graph an agent can read for a concrete pattern rather than reasoning from the block catalog alone. Shape:
 

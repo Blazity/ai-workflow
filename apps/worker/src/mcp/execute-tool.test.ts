@@ -894,12 +894,13 @@ describe("executeMcpMutation", () => {
 
     // Exactly the move the timeout told the caller NOT to make, and the answer
     // is the recorded verdict rather than a second dispatch. The way forward is
-    // runs.get, so the replay stops promising that repeating helps.
+    // reading the current state, so the replay stops promising that repeating
+    // helps.
     clock = new Date("2026-08-11T12:35:30.000Z");
     await expect(executeMcpMutation(input)).rejects.toMatchObject({
       code: "TIMEOUT",
       retryable: false,
-      message: expect.stringContaining("runs.get"),
+      message: expect.stringContaining("read the current state"),
     });
     expect(operations).toBe(1);
   });

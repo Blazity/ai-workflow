@@ -1,4 +1,5 @@
 export {
+  IssueTrackerInputRejectedError,
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,

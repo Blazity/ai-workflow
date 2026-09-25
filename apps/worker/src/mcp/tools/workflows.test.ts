@@ -253,6 +253,21 @@ describe("workflows.dispatch_preflight", () => {
     expect(await auditedOutcomes()).toEqual(["attempted", "rejected"]);
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);
   });
+
+  it("answers a definition that does not exist as NOT_FOUND", async () => {
+    service.preflightManualDispatch.mockRejectedValue(
+      new ManualDispatchError(404, "invalid_input", "Workflow definition 999999 not found."),
+    );
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "workflows.dispatch_preflight",
+      arguments: { ...PREFLIGHT_ARGS, definitionId: 999_999 },
+    });
+
+    expect(errorPayload(result)).toMatchObject({ code: "NOT_FOUND", retryable: false });
+    expect(errorText(result)).toContain("workflows.list");
+  });
 });
 
 describe("workflows.dispatch", () => {
@@ -428,7 +443,7 @@ describe("workflows.dispatch", () => {
     expect(errorText(first)).toContain("no run has started yet");
     // Says when to look for the run, and sends a dispatch that never appears to a
     // new key rather than back to this one, which cannot serve it any more.
-    expect(errorText(first)).toContain("60000");
+    expect(errorText(first)).toContain("up to 15 minutes");
     expect(errorText(first)).toContain("NEW idempotency key");
     // The first attempt's dispatch row is alive and the recovery pass will pick
     // it up, so this key is spent: the retry is answered from the record and the

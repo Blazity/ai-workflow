@@ -425,6 +425,23 @@ describe("workflowAgg", () => {
     expect(rows.find((r) => r.id === "wf_agent")!.gateway).toBe("anthropic");
   });
 
+  // Red when: a workflow's latency counts its failed runs while the Overview's
+  // p95 tile counts only successful ones, so a workflow whose runs fail fast
+  // reads as fast, and one whose runs all failed shows a latency at all.
+  it("reads a workflow's latency from its successful runs only", async () => {
+    await seed({ workflowId: "wf_agent", status: "success", durationSec: 400 });
+    await seed({ workflowId: "wf_agent", status: "failed", durationSec: 30 });
+    await seed({ workflowId: "wf_post_pr_gate", status: "failed", durationSec: 53 });
+    const { rows } = await workflowAgg({ db, window: "24h", ...base });
+    const agent = rows.find((r) => r.id === "wf_agent")!;
+    expect(agent.p50).toBe(400);
+    expect(agent.p95).toBe(400);
+    const gate = rows.find((r) => r.id === "wf_post_pr_gate")!;
+    expect(gate.runs24h).toBe(1);
+    expect(gate.p50).toBeNull();
+    expect(gate.p95).toBeNull();
+  });
+
   it("sums per-workflow cost (costToday) from persisted cost", async () => {
     await seed({ workflowId: "wf_agent", costUsd: 1.25 });
     await seed({ workflowId: "wf_agent", costUsd: 0.75 });

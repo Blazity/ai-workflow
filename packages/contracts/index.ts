@@ -18,6 +18,7 @@ export * from "./workflow-graph";
 export * from "./integration-id";
 export * from "./subject-default";
 export * from "./workflow-layout";
+export * from "./workflow-auto-layout";
 export * from "./prompt-references";
 export * from "./prompt-slots";
 export * from "./prompt-slot-name";

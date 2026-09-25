@@ -75,8 +75,10 @@ function mismatchesOf<T>(
   current: (input: T) => string,
 ): string[] {
   const pinned = (text: string) =>
-    withoutIntegrationRenames(
-      withoutStageSevenRewrites(withoutReviewSiblingSection(withoutRepositorySection(text))),
+    withoutPromptAuditRewrites(
+      withoutIntegrationRenames(
+        withoutStageSevenRewrites(withoutReviewSiblingSection(withoutRepositorySection(text))),
+      ),
     );
   return mismatchesOfRaw(rows, (input) => pinned(oracle(input)), (input) => pinned(current(input)));
 }
@@ -221,6 +223,33 @@ function withoutIntegrationRenames(text: string): string {
     // words around them stay pinned, and which provider it picks is proved by
     // `repository-map/repository-path-example.test.ts`.
     .replace(/`[a-z0-9-]+:acme\/api src\/auth\.ts:42/, "`<provider>:acme/api src/auth.ts:42");
+}
+
+/**
+ * THE THIRD DECLARED CHANGE: the prompt audit's rewrites, base wording to live.
+ *
+ * 1. The Repository Access Protocol's opening sentence called the block's Output
+ *    Format "older", a prompt version the model never saw.
+ * 2. Discovery said "select the smallest set" twice, the second time as an
+ *    "Always"; the two lines became one.
+ *
+ * Each pattern is the exact base sentence, so a copy left behind or moved still
+ * shows up as a mismatch.
+ */
+function withoutPromptAuditRewrites(text: string): string {
+  return text
+    .replace(
+      "This protocol extends and overrides any older Output Format instructions above.",
+      "This protocol adds to the Output Format in the block instructions above; where the two differ, follow this protocol.",
+    )
+    .replace(
+      "Select the smallest sufficient repository set for researching this ticket.\n",
+      "Select the smallest sufficient repository set for researching this ticket, and always return a best-effort selection: research continues from what is selected.\n",
+    )
+    .replace(
+      "Always select the smallest best-effort set from the catalog; research continues from what is selected.\n",
+      "",
+    );
 }
 
 function withoutStageSevenRewrites(text: string): string {

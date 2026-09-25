@@ -678,3 +678,75 @@ test("on a phone every header action is on the action row or one tap away in Mor
   assert.match(textOf(renderer.toJSON()), /Snapshots/);
   await act(async () => renderer.unmount());
 });
+
+// ── A graph nobody placed ───────────────────────────────────────────────────
+//
+// A workflow saved through MCP or the API without positions arrives with every
+// node at 0,0. The editor drew them in one pile, End on top of the trigger, and
+// only the block painted last could be clicked.
+
+function drawnNodeLefts(root: ReactTestInstance): number[] {
+  return root
+    .findAll(
+      (node) =>
+        typeof node.type === "string" &&
+        typeof node.props.style?.left === "number" &&
+        node.props.style?.width === 190,
+    )
+    .map((node) => node.props.style.left as number);
+}
+
+// Red when: the editor draws a graph whose nodes all sit on one point where they sit.
+test("a graph whose nodes all sit on one point opens laid out, not stacked", async (t) => {
+  installFetch(async (url) => {
+    if (url.includes("/validate")) {
+      return Response.json({ valid: true, issues: [], nodeContracts: {}, availableValuesByNode: {} });
+    }
+    if (url.includes("/catalog")) return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const node = (id: string) => ({ ...seed.nodes[0]!, id });
+  const unplaced = {
+    ...seed,
+    nodes: [node("first"), node("second")],
+    edges: [{ id: "first-second", from: "first", to: "second" }],
+  };
+  const detailResponse = {
+    ...deployableDetail(),
+    draft: unplaced,
+    layout: { nodes: {}, edges: {} },
+  } as unknown as WorkflowDefinitionDetailResponse;
+
+  let renderer!: ReturnType<typeof create>;
+  await act(async () => {
+    renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
+      <WorkflowEditorScreen
+        definitions={[detailResponse.meta]}
+        templates={[]}
+        initialDetail={detailResponse}
+        defaultDefinition={seed}
+        options={{
+          blockRegistry: { trigger_ticket_ai: triggerContract },
+        } as unknown as WorkflowEditorOptions}
+        liveBlocks={{
+          generatedAt: "2026-09-10T00:00:00.000Z",
+          run: null,
+        } satisfies RunBlockStatusesResponse}
+        canEdit={false}
+        canDispatch={false}
+        actorLabel="Member"
+      />
+      </AppRouterContext.Provider>,
+    );
+  });
+  await settle();
+
+  const lefts = drawnNodeLefts(renderer.root);
+  assert.equal(lefts.length, 2);
+  // One column each, the second to the right of the first: the edge reads left
+  // to right, as the replay draws the same graph.
+  assert.equal(new Set(lefts).size, 2, `both nodes drawn at x=${lefts.join(", ")}`);
+  await act(async () => renderer.unmount());
+});

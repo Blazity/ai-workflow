@@ -45,7 +45,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["src/mcp/tool-catalog*.test.ts", "src/mcp/contract*.test.ts"],
+    include: [
+      "src/mcp/tool-catalog*.test.ts",
+      "src/mcp/contract*.test.ts",
+      "src/mcp/block-configuration-schema.test.ts",
+    ],
     hookTimeout: 30_000,
     testTimeout: 15_000,
   },

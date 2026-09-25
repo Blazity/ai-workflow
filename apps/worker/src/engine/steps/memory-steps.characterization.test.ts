@@ -2,9 +2,10 @@
  * CHARACTERIZATION: the ticket notebook's life in one run, as it is today.
  * Prepare hydrates the stored notebook into the sandbox root, the workflow
  * upserts the "Human decisions" section into that copy, and teardown stores
- * the newest copy it finds back. Stage 1b sends notebooks to the built-in
- * store only and checks the checkout overwrite pinned below; stage 6a pins
- * the provider per run. Both rewrite the tests named after them.
+ * the newest copy it finds back, carrying the root copy's human decisions.
+ * Since stage 1b the notebook lives in the built-in store whoever serves facts
+ * and lessons; stage 6a pins the provider per run and rewrites the test named
+ * after it.
  *
  * The three real steps run in sequence against one fake sandbox that keeps
  * its files and their modification times, and against the built-in store on
@@ -224,11 +225,12 @@ describe("hydrate, then human decisions, then persist", () => {
     expect((await storedNotebook())?.content).toBe(created);
   });
 
-  it("pins current bug (A1, checked in 1b): in the promoted layout the agent's newer checkout copy is stored, and the human decisions written at the root are lost from the store", async () => {
+  it("in the promoted layout, stores the agent's newer checkout copy together with the human decisions written at the root (A1)", async () => {
     // Hydrate and the decisions both write the root copy only; the agent,
     // working inside repos/<slug>, saves its notebook there without the
-    // section. Teardown takes the newest copy, so the stored notebook no
-    // longer holds what a person decided.
+    // section. Mistake that turns this red: storing the newest copy as it is,
+    // which drops what a person decided, or the root copy, which drops what
+    // the agent learned.
     await storeNotebook(STORED);
     const sandbox = sandboxHolding(promotedManifest);
 
@@ -240,14 +242,14 @@ describe("hydrate, then human decisions, then persist", () => {
 
     await persistWorkspaceMemoryStep({ ...target(promotedManifest), notebookRecalled: hydrated.recalled });
 
-    const stored = await storedNotebook();
-    expect(stored?.content).toBe(agentCopy);
-    expect(stored?.content).not.toContain("<!-- human-decisions:start -->");
+    expect((await storedNotebook())?.content).toBe(`${agentCopy.trimEnd()}\n\n${SECTION}\n`);
   });
 });
 
 describe("which store the notebook goes to", () => {
-  it("changes in 1b: hydrate and persist follow the deployment's memory provider, so with Mem0 connected the notebook is read from and written to Mem0", async () => {
+  it("hydrate and persist use the built-in store with Mem0 connected, and Mem0 is never asked about the notebook", async () => {
+    // Mistake that turns this red: resolving the notebook's store like facts
+    // and lessons, which hands Mem0 a document it may rewrite or merge.
     const mem0 = fakeActiveMemory({
       [fakeMemoryAddress(SUBJECT_KEY, { kind: "notebook", name: TASK_ID })]: {
         entries: [STORED],
@@ -265,25 +267,28 @@ describe("which store the notebook goes to", () => {
     mocks.states = new Map([
       ["mem0", { integrationId: "mem0", status: "connected", connection: "connected", enabled: true, usable: true, failure: null }],
     ]);
-    // A notebook the built-in store also holds, which nothing reads now.
-    await storeNotebook("# Session Memory: AIW-500\n\nonly in the built-in store\n");
+    // Mem0 holds a notebook for this ticket too (the ones written before this
+    // stage), and nothing reads it: the built-in copy is the notebook.
+    const builtinOnly = "# Session Memory: AIW-500\n\nonly in the built-in store\n";
+    await storeNotebook(builtinOnly);
     const sandbox = sandboxHolding(rootManifest);
 
-    await hydrateWorkspaceMemoryStep(target(rootManifest));
-    expect(sandbox.files.get(ROOT_COPY)).toBe(STORED);
-    sandbox.agentWrites(ROOT_COPY, `${STORED}- a new note\n`);
-    await persistWorkspaceMemoryStep({ ...target(rootManifest), notebookRecalled: true });
+    const hydrated = await hydrateWorkspaceMemoryStep(target(rootManifest));
+    expect(hydrated).toEqual({ source: "db", trackedInRepo: false, written: true, recalled: true });
+    expect(sandbox.files.get(ROOT_COPY)).toBe(builtinOnly);
+    sandbox.agentWrites(ROOT_COPY, `${builtinOnly}- a new note\n`);
+    const persisted = await persistWorkspaceMemoryStep({
+      ...target(rootManifest),
+      notebookRecalled: hydrated.recalled,
+    });
 
-    expect(mem0.observations).toEqual([
-      {
-        subject: { key: SUBJECT_KEY, label: TASK_ID },
-        scope: { kind: "notebook", name: TASK_ID },
-        runId: "run_7",
-        ticketKey: TASK_ID,
-        observation: { kind: "document", text: `${STORED}- a new note\n` },
-      },
-    ]);
-    expect((await storedNotebook())?.content).toBe("# Session Memory: AIW-500\n\nonly in the built-in store\n");
+    expect(persisted).toEqual({ persisted: true });
+    expect(mem0.recalls).toEqual([]);
+    expect(mem0.observations).toEqual([]);
+    expect(await storedNotebook()).toMatchObject({
+      content: `${builtinOnly}- a new note\n`,
+      sourceRunId: "run_7",
+    });
     expect(await db.select().from(agentMemoryDocuments)).toHaveLength(1);
   });
 

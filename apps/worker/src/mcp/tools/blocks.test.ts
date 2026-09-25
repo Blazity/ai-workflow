@@ -21,6 +21,7 @@ import { organization } from "../../db/schema.js";
 import { integrationManifests } from "@integrations/registry";
 import { depsFor } from "../../test-support/mcp.js";
 import { registerBlockTools } from "./blocks.js";
+import { MCP_CLIENT_INLINE_BYTES } from "./page-budget.js";
 
 let db: Db;
 
@@ -75,38 +76,72 @@ const ALL_BLOCK_TYPES = [
 ].sort();
 
 describe("blocks.list", () => {
-  it("covers every WorkflowBlockType with an input and output contract", async () => {
+  it("names every block this deployment offers, one line each", async () => {
     const client = await connectedClient();
 
     const result = await client.callTool({ name: "blocks.list", arguments: {} });
-    const blocks = dataOf(result).blocks as Array<{
-      type: string;
-      presentation: { label: string; group: string };
-      inputs: Record<string, unknown>;
-      output: { schema: unknown; statusVariants: string[] };
-    }>;
+    const blocks = dataOf(result).blocks as Array<Record<string, unknown>>;
 
     expect(result.isError).not.toBe(true);
     expect(blocks.map((block) => block.type).sort()).toEqual(ALL_BLOCK_TYPES);
     for (const block of blocks) {
-      expect(block.presentation.label.length).toBeGreaterThan(0);
-      expect(typeof block.inputs).toBe("object");
-      expect(block.output.schema).toBeDefined();
-      expect(block.output.statusVariants.length).toBeGreaterThan(0);
+      // The summary and nothing else: the contracts are blocks.get's answer.
+      expect(Object.keys(block).sort()).toEqual([
+        "available",
+        "group",
+        "integration",
+        "label",
+        "purpose",
+        "type",
+        "unavailableReason",
+      ]);
+      expect(String(block.label).length).toBeGreaterThan(0);
+      expect(String(block.purpose)).not.toContain("\n");
+      expect(String(block.purpose).length).toBeLessThanOrEqual(160);
     }
   });
 
-  it("lists the same contract blocks.get returns for one type", async () => {
+  // Red when: the list carries every block's whole contract again. At 85 KB it
+  // went out twice per call and Claude Code wrote it to a file instead of
+  // showing it.
+  it("fits what a client shows inline, both copies of the envelope included", async () => {
     const client = await connectedClient();
 
-    const listResult = await client.callTool({ name: "blocks.list", arguments: {} });
-    const listed = (dataOf(listResult).blocks as Array<{ type: string }>).find(
-      (block) => block.type === "loop",
-    );
-    const getResult = await client.callTool({ name: "blocks.get", arguments: { type: "loop" } });
+    const result = await client.callTool({ name: "blocks.list", arguments: {} });
 
-    expect(getResult.isError).not.toBe(true);
-    expect(dataOf(getResult)).toEqual(listed);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(MCP_CLIENT_INLINE_BYTES);
+  });
+
+  it("narrows to one group", async () => {
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "blocks.list", arguments: { group: "control" } });
+    const blocks = dataOf(result).blocks as Array<{ type: string; group: string }>;
+
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.every((block) => block.group === "control")).toBe(true);
+    expect(blocks.map((block) => block.type)).toContain("branch");
+  });
+
+  it("narrows to the blocks one integration contributes, or to core's own", async () => {
+    const client = await connectedClient();
+    const contributed = integrationManifests.flatMap((manifest) =>
+      manifest.blocks.map((block) => ({ type: block.type, integration: manifest.id })),
+    );
+
+    const core = dataOf(
+      await client.callTool({ name: "blocks.list", arguments: { integration: "core" } }),
+    ).blocks as Array<{ type: string; integration: string | null }>;
+
+    expect(core.map((block) => block.type).sort()).toEqual(Object.keys(BLOCK_TYPE_SPECS).sort());
+    expect(core.every((block) => block.integration === null)).toBe(true);
+    for (const { type, integration } of contributed.slice(0, 1)) {
+      const one = dataOf(
+        await client.callTool({ name: "blocks.list", arguments: { integration } }),
+      ).blocks as Array<{ type: string; integration: string | null }>;
+      expect(one.map((block) => block.type)).toContain(type);
+      expect(one.every((block) => block.integration === integration)).toBe(true);
+    }
   });
 });
 
@@ -123,7 +158,7 @@ describe("blocks.get", () => {
     });
   });
 
-  it("answers NOT_FOUND for a type this deployment does not register", async () => {
+  it("answers NOT_FOUND for a type this deployment does not register, and says where the types are", async () => {
     const client = await connectedClient();
 
     const result = await client.callTool({
@@ -133,5 +168,45 @@ describe("blocks.get", () => {
 
     expect(result.isError).toBe(true);
     expect(errorPayload(result)).toMatchObject({ code: "NOT_FOUND" });
+    expect(errorPayload(result).message).toContain("blocks.list");
+    expect(errorPayload(result).message).not.toContain("not_a_real_block");
+  });
+
+  // Red when: a graph can only be configured by guessing keys, which is how a
+  // graph built from the listed defaults saved as deployable on a provider nobody
+  // meant to use.
+  it("carries the JSON Schema of the block's configuration", async () => {
+    const client = await connectedClient();
+
+    const loop = dataOf(await client.callTool({ name: "blocks.get", arguments: { type: "loop" } }));
+    const agent = dataOf(
+      await client.callTool({ name: "blocks.get", arguments: { type: "planning_agent" } }),
+    );
+
+    expect(loop.configurationSchema).toMatchObject({
+      type: "object",
+      properties: { maxAttempts: expect.any(Object), onExhaust: expect.any(Object) },
+    });
+    // An agent block also takes a pinned Harness Profile, which lives outside its
+    // own parameters and is the way to choose a model for real.
+    expect(agent.configurationSchema).toMatchObject({
+      type: "object",
+      properties: {
+        prompt: expect.any(Object),
+        harnessProfile: {
+          type: "object",
+          properties: { profileId: { type: "string" }, version: { type: "integer" } },
+        },
+      },
+    });
+  });
+
+  it("carries a configuration schema for every block type, never a missing one", async () => {
+    const client = await connectedClient();
+
+    for (const type of ALL_BLOCK_TYPES) {
+      const block = dataOf(await client.callTool({ name: "blocks.get", arguments: { type } }));
+      expect(block.configurationSchema, type).toMatchObject({ type: "object" });
+    }
   });
 });

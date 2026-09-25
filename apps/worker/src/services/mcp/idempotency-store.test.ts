@@ -242,7 +242,7 @@ describe("MCP mutation idempotency", () => {
     await expect(beginMcpMutation(db, input())).rejects.toMatchObject({
       code: "DEPENDENCY_UNAVAILABLE",
       retryable: false,
-      message: expect.stringContaining("runs.get"),
+      message: expect.stringContaining("read the current state"),
     });
     await expect(beginMcpMutation(db, input())).rejects.toMatchObject({
       message: expect.stringContaining("new idempotency key"),
