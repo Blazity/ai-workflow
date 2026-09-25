@@ -70,6 +70,28 @@ describe("the ticket comment a person reads", () => {
     expect(comment).toContain("Write repositories: github:acme/api");
   });
 
+  // Red when: the agent names its write repository in another case than the
+  // workspace holds it (GitHub's `Acme/API` against the catalog's `acme/api`),
+  // and the comment then calls the repository the run will write to "read".
+  it("lists a write repository as write whatever case the decision spells it in", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "run-wording",
+      workspaceManifest: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", branchName: "ai/AWP-1", researchBaseSha: "abcdef123456", access: "read" },
+        ],
+      },
+      selectedRepositories: [
+        { provider: "github", repoPath: "acme/api", selectedRationale: "The endpoint lives here." },
+      ],
+      writeRepositories: [{ provider: "github", repoPath: "Acme/API", rationale: "The fix goes here." }],
+      researchResult: { body: "# Plan" },
+      usage,
+    });
+    const comment = formatResearchAnalysisComment(report, "https://dashboard.example/runs/run-wording");
+    expect(comment).toContain("- github:acme/api · write ·");
+  });
+
   // Red when: the blank lines inside a code block of the plan are dropped, so
   // the code the comment shows is not the code the plan wrote.
   it("keeps the blank lines of the plan", () => {
@@ -116,6 +138,37 @@ describe("run analysis report", () => {
     expect(report.repositories[0]?.rationale).not.toContain("ai-workflow/memory/AWT-1.md");
     expect(report.sanitization.redactions).toBeTruthy();
     expect(report.usage.research.costKnown).toBe(false);
+  });
+
+  // Production AWP-279 (wrun_01M3755BR7PYPCZ7VVSJ7RGM88): the plan turned every
+  // row of the ticket's attachment cases.csv into a test, and the plan comment
+  // told the ticket it would use "[omitted private path]". The file is the
+  // ticket's own attachment, and its name is what the person recognises.
+  it("names a ticket attachment by its file name instead of hiding it as a private path", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "run-attachment",
+      workspaceManifest: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          branchName: "ai/AWP-279",
+          researchBaseSha: "abcdef123456",
+          access: "read",
+        }],
+      },
+      selectedRepositories: [{ provider: "github", repoPath: "acme/api", selectedRationale: "Pricing lives here." }],
+      researchResult: {
+        body: "# Plan\n- Every row from `/tmp/attachments/cases.csv`, each as its own assertion.\n- Read /tmp/attachments/spec v2.pdf, then /vercel/sandbox/repos/api/src/x.ts.",
+      },
+      usage,
+    });
+    const comment = formatResearchAnalysisComment(report, "https://dashboard.example/runs/run-attachment");
+    expect(comment).toContain("Every row from `cases.csv`, each as its own assertion.");
+    expect(comment).not.toContain("/tmp/attachments");
+    // Everything else under the sandbox stays hidden.
+    expect(comment).not.toContain("/vercel/sandbox");
+    expect(comment).toContain("[omitted private path]");
   });
 
   /**

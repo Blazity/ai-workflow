@@ -108,6 +108,10 @@ const { loadRepositoryCatalogSnapshot } = await import(
 const { REPOSITORY_NOT_IN_CATALOG_REASON } = await import(
   "../dispatch/repo-allowlist.js"
 );
+// The real lookup the fix agent's ownership check makes, imported past the
+// mocked barrel above.
+const { findRunPrSiblings } = await import("../../db/repositories/runs/run-pr-siblings.js");
+const { workflowRuns } = await import("../../db/schema.js");
 
 const pr: PrTriggerPayload = {
   provider: "github",
@@ -768,6 +772,100 @@ describe("manual dispatch against a definition repository pin", () => {
     ).resolves.toMatchObject({
       subjectKey: "pr:github:acme/api#42",
       ticketKey: "AIW-1",
+    });
+  });
+
+  describe("a pull request URL pasted in another case than the provider spells it", () => {
+    // Someone types github.com/acme/api for the repository GitHub calls
+    // Acme/API. GitHub reads either spelling and answers with its own in the
+    // pull request's URL, and every record a run is later checked against
+    // (the run that published the pull request, the workflow-owned branch)
+    // carries GitHub's spelling.
+    const pasted = "https://github.com/acme/api/pull/42";
+    const providerUrl = "https://github.com/Acme/API/pull/42";
+
+    beforeEach(() => {
+      mocks.getManualDispatchPullRequest.mockResolvedValue(snapshot({ prUrl: providerUrl }));
+    });
+
+    it("lets the fix agent find the publication it is about to push to", async () => {
+      // Red when dispatch starts the run under the pasted spelling: the fix
+      // agent's ownership lookup then misses the run that opened the pull
+      // request and refuses to push with "workflow PR ownership is unknown".
+      await catalogDb.insert(workflowRuns).values({
+        runId: "run-published",
+        workflowId: "workflow",
+        workflowName: "Workflow",
+        status: "success",
+        ticketKey: "AIW-1",
+        ticketTitle: "Published",
+        model: "claude",
+        prs: [{ provider: "github", repoPath: "Acme/API", id: 42, url: providerUrl }],
+      });
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+
+      const resolved = await resolveManualDispatch({
+        db: definitionDb,
+        issueTrackerResolution,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pasted },
+        repositoryCatalog,
+      });
+      const started = resolved.inputPayload as { pr: PrTriggerPayload };
+
+      expect(started.pr.repoPath).toBe("Acme/API");
+      await expect(
+        findRunPrSiblings({
+          db: catalogDb,
+          provider: started.pr.provider,
+          repoPath: started.pr.repoPath,
+          prNumber: started.pr.prNumber,
+        }),
+      ).resolves.toMatchObject({ status: "none", runId: "run-published" });
+    });
+
+    it("asks for workflow ownership, and reserves the pull request, under the provider's spelling", async () => {
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+        deployed("workflow_owned", {}),
+      );
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pasted },
+          repositoryCatalog,
+        }),
+      ).resolves.toMatchObject({ subjectKey: "pr:github:Acme/API#42" });
+      expect(mocks.findWorkflowOwnedPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ repoPath: "Acme/API", prNumber: 42 }),
+      );
+    });
+
+    it("keeps the pasted path when the provider's URL names another repository", async () => {
+      // A rename the provider redirected is a different repository as far as
+      // the catalog and the pin are concerned; only a respelling is adopted.
+      mocks.getManualDispatchPullRequest.mockResolvedValue(
+        snapshot({ prUrl: "https://github.com/acme/api-renamed/pull/42" }),
+      );
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pasted },
+          repositoryCatalog,
+        }),
+      ).resolves.toMatchObject({
+        inputPayload: { pr: expect.objectContaining({ repoPath: "acme/api" }) },
+      });
     });
   });
 

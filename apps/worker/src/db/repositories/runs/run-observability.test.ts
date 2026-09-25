@@ -21,6 +21,7 @@ import {
 import { createTestDb } from "../../test-db.js";
 import {
   captureRunObservationStart,
+  closeOpenBlockAttempts,
   deleteExpiredRunObservations,
   getWorkflowBlockAttemptPersistence,
   markRunReplayCaptureUnavailable,
@@ -779,6 +780,92 @@ describe("attempt lifecycle", () => {
     );
     expect(diagnosticBytes).toBeLessThanOrEqual(256 * 1024);
     expect(row!.logEnvelope?.metadata.truncated).toBe(true);
+  });
+});
+
+/**
+ * A run cancelled mid-attempt never reaches the workflow's own finalize, which is
+ * what closes an open attempt on every other exit. Production run
+ * wrun_01M375BB1PC0CG3F8KR0DGEWJ6 (AWP-280) was stopped during planning, and
+ * runs.logs went on showing that attempt with completedAt and durationMs null.
+ */
+describe("closing the attempts of a run the cancel stopped", () => {
+  const start = (runId: string, nodeId: string, startedAt: Date) =>
+    startWorkflowBlockAttempt({
+      db,
+      runId,
+      organizationId: "org-replay",
+      nodeId,
+      attempt: 1,
+      activationScopeId: "root",
+      startedAt,
+    });
+
+  it("gives the attempt that was executing an end, a duration and a cancelled outcome", async () => {
+    await capture("run-stopped");
+    await db.update(workflowRuns).set({ status: "running" }).where(eq(workflowRuns.runId, "run-stopped"));
+    const prepare = await start("run-stopped", "prepare", new Date("2026-07-23T10:00:46.000Z"));
+    await finishWorkflowBlockAttempt({
+      db,
+      runId: "run-stopped",
+      organizationId: "org-replay",
+      attemptId: prepare.attemptId,
+      state: "completed",
+      outcome: { kind: "completed", status: "ok" },
+      completedAt: new Date("2026-07-23T10:01:15.000Z"),
+    });
+    const planning = await start("run-stopped", "planning", new Date("2026-07-23T10:01:15.000Z"));
+
+    await expect(
+      closeOpenBlockAttempts({
+        db,
+        runId: "run-stopped",
+        outcomeStatus: "run_cancelled",
+        closedAt: new Date("2026-07-23T10:01:35.000Z"),
+      }),
+    ).resolves.toBe(1);
+    await db.update(workflowRuns).set({ status: "blocked" }).where(eq(workflowRuns.runId, "run-stopped"));
+
+    // Read back the way runs.logs reads it.
+    const replay = await getRunReplay({
+      db,
+      runId: "run-stopped",
+      organizationId: "org-replay",
+      now: capturedAt,
+    });
+    const byNode = new Map(replay.attempts.map((attempt) => [attempt.nodeId, attempt]));
+    expect(byNode.get("planning")).toMatchObject({
+      id: planning.attemptId,
+      state: "cancelled",
+      outcome: { kind: "cancelled", status: "run_cancelled" },
+      completedAt: "2026-07-23T10:01:35.000Z",
+      durationMs: 20_000,
+    });
+    // The finished one keeps its own end.
+    expect(byNode.get("prepare")).toMatchObject({
+      state: "completed",
+      completedAt: "2026-07-23T10:01:15.000Z",
+    });
+  });
+
+  it("closes nothing twice, so a repeated cancel changes nothing", async () => {
+    await capture("run-stopped-twice");
+    await start("run-stopped-twice", "planning", new Date("2026-07-23T10:01:15.000Z"));
+    const closedAt = new Date("2026-07-23T10:01:35.000Z");
+    await closeOpenBlockAttempts({ db, runId: "run-stopped-twice", outcomeStatus: "run_cancelled", closedAt });
+    await expect(
+      closeOpenBlockAttempts({
+        db,
+        runId: "run-stopped-twice",
+        outcomeStatus: "run_cancelled",
+        closedAt: new Date("2026-07-23T10:09:00.000Z"),
+      }),
+    ).resolves.toBe(0);
+    const [row] = await db
+      .select({ completedAt: workflowBlockAttempts.completedAt })
+      .from(workflowBlockAttempts)
+      .where(eq(workflowBlockAttempts.runId, "run-stopped-twice"));
+    expect(row?.completedAt).toEqual(closedAt);
   });
 });
 

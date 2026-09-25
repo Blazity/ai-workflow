@@ -1,5 +1,5 @@
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
-import type { ExecutionErrorCategory } from "@shared/contracts";
+import type { AgentProtocolProvider, ExecutionErrorCategory } from "@shared/contracts";
 import { clampBothEnds } from "./clamp-text";
 
 /** Longest single-line snippet of raw `detail` we append to a user-facing
@@ -126,13 +126,49 @@ const DIAGNOSTIC_ID_PATTERN = new RegExp(
     ")$",
 );
 
-/** Curated (pattern, message) rules for provider-category failures. The first
- * match wins, so order them from the most to the least specific cause. Each
- * message names the cause and the fix without echoing the raw provider
- * payload, so it is safe for Slack and client-visible Jira comments. */
-const PROVIDER_CAUSES: Array<{
+/**
+ * The account a coding agent's harness bills and authenticates against. The
+ * Claude CLI talks to Anthropic and Codex to OpenAI (the adapters in
+ * apps/worker/src/sandbox/agents route the credentials), so the harness that
+ * failed says whose account refused.
+ *
+ * Named in the sentence because an account refusal is fixed by an admin of that
+ * account and by nobody else: "the AI provider" leaves the person who reads the
+ * ticket unable to tell a bug from an empty balance, and the admin unable to
+ * tell which of two bills to look at (production run
+ * wrun_01M3755BR7PYPCZ7VVSJ7RGM88, 2026-09-23).
+ */
+export type ProviderAccount = "Anthropic" | "OpenAI";
+
+const PROVIDER_ACCOUNTS: Record<AgentProtocolProvider, ProviderAccount> = {
+  claude: "Anthropic",
+  codex: "OpenAI",
+};
+
+/** Every value `account` below can take, the unnamed one included, so a reader
+ *  of a recorded sentence can try each spelling the table produces. */
+const ACCOUNT_SPELLINGS: ReadonlyArray<ProviderAccount | null> = [null, "Anthropic", "OpenAI"];
+
+/** What a curated provider sentence says happened. The first three are about
+ *  the account and are fixed by an admin of it; the rest are not. */
+export type ProviderFailureCause =
+  | "credit"
+  | "spend_limit"
+  | "usage_limit"
+  | "auth"
+  | "rate_limit"
+  | "model"
+  | "overloaded"
+  | "disconnected";
+
+/** The half of every account sentence that answers "is this my fault, and will
+ *  trying again help?", worded once so the causes cannot drift apart on it. */
+const NOT_THE_TICKET =
+  "nothing is wrong with the ticket, and a rerun fails the same way until then.";
+
+interface ProviderCauseRule {
+  cause: ProviderFailureCause;
   pattern: RegExp;
-  message: string;
   /**
    * False for a pattern that is only trustworthy against a `detail` we composed,
    * because the same words occur in ordinary local process output. AIW-254 began
@@ -141,75 +177,170 @@ const PROVIDER_CAUSES: Array<{
    * than the generic line it replaced. Defaults to true.
    */
   tailSafe?: boolean;
-}> = [
+  /** The first sentence: what happened, naming the account when the harness
+   *  said which one. Unnamed, it is exactly the sentence runs recorded before
+   *  the account was named, which is what lets a reader of an old run and of a
+   *  new one match the same lead. */
+  lead(account: ProviderAccount | null): string;
+  /** What a person does about it, or nothing when the lead already says. */
+  action(account: ProviderAccount | null): string;
+}
+
+/** Curated rules for provider-category failures. The first match wins, so order
+ * them from the most to the least specific cause. Each message names the cause
+ * and the fix without echoing the raw provider payload, so it is safe for Slack
+ * and client-visible Jira comments.
+ *
+ * Only phrasings observed in real captures, or published by the CLI or the API
+ * that emits them, are added here; guessing at wordings produces rules that
+ * never fire and rules that fire on the wrong failure. Where each one comes
+ * from is listed in apps/worker/src/workflow-graph-suites/failure-message.test.ts. */
+const PROVIDER_CAUSES: ProviderCauseRule[] = [
   {
-    // `no credits remaining` is the phrasing the OpenAI API returns through the
-    // Codex CLI, captured verbatim on the Arthur outage of 2026-08-12:
-    // "stream disconnected before completion: You have no credits remaining.
-    // Add credits to continue using the API at .../organization/billing/."
-    // It is matched explicitly rather than relying on `billing` appearing in
-    // that trailing URL: a provider that drops the link, or shortens it, would
-    // otherwise fall back to an unclassified snippet for the single cause this
-    // rule exists to name. Only phrasings observed in real captures are added
-    // here; guessing at wordings produces rules that never fire and rules that
-    // fire on the wrong failure.
+    cause: "credit",
+    // `Credit balance is too low` is the Claude CLI's own sentence for the
+    // Anthropic API's "Your credit balance is too low" (observed on
+    // wrun_01M3755BR7PYPCZ7VVSJ7RGM88). `no credits remaining` is the OpenAI
+    // API through the Codex CLI, captured verbatim on the Arthur outage of
+    // 2026-08-12 ("stream disconnected before completion: You have no credits
+    // remaining. Add credits to continue using the API at .../billing/."), and
+    // is matched explicitly rather than relying on `billing` appearing in that
+    // trailing URL. `Quota exceeded` is Codex's CodexErr::QuotaExceeded,
+    // `out of credits` its workspace variant, `credit_balance_exhausted` and
+    // `exceeded your current quota` the OpenAI API's own code and sentence.
+    //
+    // First, ahead of the rate limit: OpenAI answers an empty balance with a
+    // 429, and "rerun shortly" is exactly the wrong advice for it.
+    //
+    // No bare `billing`: it matched a repository called billing in a clone
+    // error and an agent's own "fixing the billing module". The provider
+    // sentences that say billing say it next to a phrase matched here, or as
+    // Anthropic's `billing_error` type.
     pattern:
-      /credit balance|billing|no credits remaining|insufficient.*(credit|quota|funds)/i,
-    message:
-      "The AI provider rejected the request: the account credit or billing balance is too low.",
+      /credit[ _]balance|billing_error|no credits remaining|out of credits|insufficient[_ ](?:quota|credits?|funds|balance)|quota exceeded|exceeded your current quota/i,
+    lead: (account) =>
+      account
+        ? `The ${account} account has no credit left, so ${account} refused the request.`
+        : "The AI provider rejected the request: the account credit or billing balance is too low.",
+    action: (account) =>
+      `An admin must top up the ${account ?? "AI provider"} account; ${NOT_THE_TICKET}`,
   },
   {
-    // `spend limit` is the phrasing the OpenAI API returns through the Codex
-    // CLI, captured verbatim on the Arthur outage of 2026-08-21 (run
-    // wrun_01M0J7D367ZQW6Q487T467M0PV): "stream disconnected before completion:
-    // Your project has reached its configured enforced spend limit. Update your
-    // limit at https://platform.openai.com/settings/proj_.../limits." The bigram
-    // is matched instead of the full sentence so a reworded prefix keeps firing,
-    // and no shell emits these words, so the rule stays trustworthy against
-    // captured tails. Order relative to the credits rule above is not
-    // correctness-bearing: the two patterns do not overlap.
-    pattern: /\bspend limit\b/i,
-    message:
-      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+    cause: "spend_limit",
+    // `spend limit` is the OpenAI API through the Codex CLI, captured verbatim
+    // on the Arthur outage of 2026-08-21 (run wrun_01M0J7D367ZQW6Q487T467M0PV:
+    // "Your project has reached its configured enforced spend limit"); the
+    // underscore spelling is the API's organization_/project_spend_limit_exceeded
+    // code, and `spend cap` Codex's workspace wording. `reached your ... API
+    // usage limits` is Anthropic's: a 400 for a limit the organization set, and
+    // a 429 for the tier's monthly cap, which is why this sits ahead of the rate
+    // limit too. No shell emits these words, so the rule stays trustworthy
+    // against captured tails.
+    pattern:
+      /(?<![a-z])spend[_ ](?:limits?|caps?)(?![a-z])|reached your (?:specified )?(?:workspace )?API usage limits?/i,
+    lead: (account) =>
+      account
+        ? `The ${account} account has reached its spend limit, so ${account} refused the request.`
+        : "The AI provider rejected the request: the account has reached its configured spend limit.",
+    action: (account) =>
+      `An admin must raise or remove the spend limit in the ${
+        account ? `${account} billing settings` : "provider's billing settings"
+      }, or wait for it to reset; ${NOT_THE_TICKET}`,
   },
   {
+    cause: "usage_limit",
+    // A subscription plan's limit rather than an API account's: Codex signed in
+    // with ChatGPT ("You've hit your usage limit. ...", CodexErr::
+    // UsageLimitReached) and the Claude CLI signed in with a claude.ai plan
+    // ("You've hit your ... limit"). It lifts on its own, which is the one
+    // difference from the two rules above.
+    pattern: /you(?:'|\u2019)?ve hit your\b|usage limit reached|usage_limit_exceeded/i,
+    lead: (account) =>
+      `The ${account ?? "AI provider"} plan this deployment signs in with has hit its usage limit${
+        account ? `, so ${account} refused the request` : ""
+      }.`,
+    action: () =>
+      "Rerun after the limit resets, or ask an admin to move to a larger plan or an API key; nothing is wrong with the ticket.",
+  },
+  {
+    cause: "rate_limit",
     pattern: /rate.?limit(?!er)|\b429\b|too many requests/i,
-    message: "The AI provider rate-limited the request. Please retry shortly.",
+    lead: (account) =>
+      account ? `${account} rate-limited the request.` : "The AI provider rate-limited the request.",
+    action: () => "Please retry shortly.",
   },
   {
-    pattern: /\b401\b|unauthorized|authentication|invalid.*(api.?key|x-api-key)/i,
-    message:
-      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+    cause: "auth",
+    // `not logged in`, `login expired` and `oauth token ... revoked` are the
+    // Claude CLI's sentences for a claude.ai login it cannot use; `disabled
+    // organization` its sentence for a key whose organization was switched off;
+    // `incorrect api key` the OpenAI API's. Each is anchored on the CLI's own
+    // wording ("Not logged in · Please run /login") rather than on the bare
+    // words, because "not logged in" is also what `gh` prints about GitHub.
+    pattern:
+      /\b401\b|unauthorized|authentication|invalid.*(api.?key|x-api-key)|incorrect api key|not logged in\W+please run \/login|login expired|oauth token (?:has )?(?:expired|revoked)|disabled organization/i,
+    lead: authLead,
+    action: authAction,
   },
   {
+    cause: "auth",
     // Kept as its own rule so it can be excluded from tail matching. "permission
     // denied" is the most common line in a failed local command's stderr (chmod,
     // exec, a read-only mount), and matching it there reported an unwritable
     // wrapper script as rejected API credentials.
     pattern: /permission denied/i,
-    message:
-      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+    lead: authLead,
+    action: authAction,
     tailSafe: false,
   },
   {
+    cause: "model",
     pattern: /model.*(not found|does not exist|access|not allowed)/i,
-    message: "The requested AI model is unavailable or access is denied.",
+    lead: (account) =>
+      account
+        ? `${account} refused the requested AI model: it is unavailable or this account cannot use it.`
+        : "The requested AI model is unavailable or access is denied.",
+    action: () => "",
   },
   {
+    cause: "overloaded",
     pattern: /\b529\b|overloaded/i,
-    message: "The AI provider is overloaded. Please retry shortly.",
+    lead: (account) =>
+      account ? `${account} is overloaded.` : "The AI provider is overloaded.",
+    action: () => "Please retry shortly.",
   },
   {
+    cause: "disconnected",
     // Codex prefixes provider refusals with this transport line ("stream
     // disconnected before completion: You have no credits remaining."), so this
     // must stay the LAST rule: classifyProviderFailure tries rules in table
     // order for each candidate, and a named cause after the prefix has to win.
     // On its own the line names a dropped connection and nothing more.
     pattern: /stream disconnected before completion/i,
-    message:
-      "The AI provider connection dropped before the response completed. Please retry shortly.",
+    lead: (account) =>
+      account
+        ? `The connection to ${account} dropped before the response completed.`
+        : "The AI provider connection dropped before the response completed.",
+    action: () => "Please retry shortly.",
   },
 ];
+
+function authLead(account: ProviderAccount | null): string {
+  return account
+    ? `${account} rejected the credential AI Workflow uses for it (authentication failed).`
+    : "The AI provider rejected the credentials (authentication failed).";
+}
+
+function authAction(account: ProviderAccount | null): string {
+  return account
+    ? `An admin must replace the ${account} API key or login; ${NOT_THE_TICKET}`
+    : `An admin must check and replace the API key; ${NOT_THE_TICKET}`;
+}
+
+function curatedMessage(rule: ProviderCauseRule, account: ProviderAccount | null): string {
+  const action = rule.action(account);
+  return action ? `${rule.lead(account)} ${action}` : rule.lead(account);
+}
 
 /** True when `value` is a whole, well-formed diagnostic ID.
  *
@@ -227,14 +358,37 @@ export function isDiagnosticId(value: string): boolean {
  * message for the first hit, or undefined when nothing matches.
  *
  * `fromCapturedTail` says the text is raw process output rather than a detail we
- * composed, which excludes the rules whose words a shell also emits. */
+ * composed, which excludes the rules whose words a shell also emits. `provider`
+ * is the harness that failed, when one did, and names its account. */
 export function classifyProviderFailure(
   detail: string,
   fromCapturedTail = false,
+  provider?: AgentProtocolProvider,
 ): string | undefined {
-  for (const { pattern, message, tailSafe } of PROVIDER_CAUSES) {
-    if (fromCapturedTail && tailSafe === false) continue;
-    if (pattern.test(detail)) return message;
+  const account = provider ? PROVIDER_ACCOUNTS[provider] : null;
+  for (const rule of PROVIDER_CAUSES) {
+    if (fromCapturedTail && rule.tailSafe === false) continue;
+    if (rule.pattern.test(detail)) return curatedMessage(rule, account);
+  }
+  return undefined;
+}
+
+/**
+ * Which curated provider sentence `message` opens with, and the account it
+ * names, or undefined when it opens with none of them.
+ *
+ * For a reader of a RECORDED reason (runs.diagnose), which has only the
+ * sentence. It matches the leads this table produces, so the sentences and the
+ * reader cannot drift apart, and the unnamed leads are the sentences recorded
+ * before accounts were named, so an old run reads the same way.
+ */
+export function curatedProviderFailureOf(
+  message: string,
+): { cause: ProviderFailureCause; account: ProviderAccount | null } | undefined {
+  for (const rule of PROVIDER_CAUSES) {
+    for (const account of ACCOUNT_SPELLINGS) {
+      if (message.startsWith(rule.lead(account))) return { cause: rule.cause, account };
+    }
   }
   return undefined;
 }
@@ -413,6 +567,8 @@ export interface FailureEvidence {
   /** Agent protocol failure kind, used to name candidate causes when nothing
    *  classifies and to decide whether `detail` outranks the captured tails. */
   failureKind?: string;
+  /** The coding agent CLI that failed, which says whose account refused. */
+  provider?: AgentProtocolProvider;
 }
 
 /**
@@ -518,28 +674,48 @@ function trailingLines(text: string, budget: number): string {
   return picked.join(" ");
 }
 
+/**
+ * One piece of evidence and whose words it is.
+ *
+ * `isTail` says it is raw process output rather than text a call site composed,
+ * which decides how a snippet of it is cut. `agentStream` says it is the
+ * coding agent's own output stream: the assistant's messages and every tool
+ * result it saw. That is free text the agent wrote or read out of the
+ * repository, so it may be quoted but never classified: an agent fixing a
+ * billing module prints "billing", and reading that as the provider refusing
+ * the account blamed an admin for the agent's own work.
+ */
+interface EvidenceCandidate {
+  text: string;
+  isTail: boolean;
+  agentStream: boolean;
+}
+
 /** Candidate evidence texts in priority order: the caller's isolated cause, the
  * structured provider error, stderr, stdout, then `detail`. `detail` moves
  * ahead of the tails for the failure kinds whose detail is the cause. */
 function orderedEvidence(
   evidence: FailureEvidence | undefined,
   detail: string,
-): Array<{ text: string; isTail: boolean }> {
+): EvidenceCandidate[] {
   const tails = [
-    { text: evidence?.providerError, isTail: true },
-    { text: evidence?.stderrTail, isTail: true },
-    { text: evidence?.stdoutTail, isTail: true },
+    // The provider's own refusal, out of its error envelope or error event.
+    { text: evidence?.providerError, isTail: true, agentStream: false },
+    // The CLI's own diagnostics: the phase scripts send only the CLI's stderr
+    // here, and the agent's tools report into its stdout stream.
+    { text: evidence?.stderrTail, isTail: true, agentStream: false },
+    { text: evidence?.stdoutTail, isTail: true, agentStream: true },
   ];
-  const detailEntry = { text: detail, isTail: false };
+  const detailEntry = { text: detail, isTail: false, agentStream: false };
   const detailLeads =
     evidence?.failureKind !== undefined &&
     !SHAPE_ONLY_FAILURE_KINDS.has(evidence.failureKind);
   const ordered = [
-    { text: evidence?.cause, isTail: false },
+    { text: evidence?.cause, isTail: false, agentStream: false },
     ...(detailLeads ? [detailEntry, ...tails] : [...tails, detailEntry]),
   ];
   return ordered.filter(
-    (candidate): candidate is { text: string; isTail: boolean } =>
+    (candidate): candidate is EvidenceCandidate =>
       typeof candidate.text === "string" && candidate.text.trim().length > 0,
   );
 }
@@ -548,6 +724,7 @@ function orderedEvidence(
  * so this module keeps its type-only dependency surface and stays importable
  * from workflow scope. */
 export function failureEvidenceFromDiagnostic(diagnostic: {
+  provider?: AgentProtocolProvider;
   failureKind?: string;
   exitCode?: number | null;
   providerError?: string;
@@ -555,6 +732,7 @@ export function failureEvidenceFromDiagnostic(diagnostic: {
   stdoutTail?: string;
 }): FailureEvidence {
   return {
+    ...(diagnostic.provider !== undefined ? { provider: diagnostic.provider } : {}),
     ...(diagnostic.providerError !== undefined
       ? { providerError: diagnostic.providerError }
       : {}),
@@ -704,7 +882,14 @@ export function deriveFailureMessage(params: {
 
   if (category === "provider") {
     for (const candidate of candidates) {
-      const curated = classifyProviderFailure(candidate.text, candidate.isTail);
+      // The agent's stream is quoted below, never classified: see
+      // EvidenceCandidate.
+      if (candidate.agentStream) continue;
+      const curated = classifyProviderFailure(
+        candidate.text,
+        candidate.isTail,
+        evidence?.provider,
+      );
       // The curated text names the cause and the fix on its own, so it stands
       // as the whole message: prefixing the generic category line back onto it
       // would only restate that the block failed.

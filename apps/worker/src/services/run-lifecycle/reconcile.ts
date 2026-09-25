@@ -49,6 +49,7 @@ import {
   type ConnectedIssueTracker,
 } from "../../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { POLL_LEFT_COLUMN_REASON } from "../../engine/support/ticket-left-column.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const NON_TERMINAL_STATUSES = new Set(["pending", "running"]);
@@ -83,6 +84,10 @@ type TicketCancellationReason = "orphaned_run" | "inflight_claim";
 type TicketCancellationCallback = (
   ticketKey: string,
   reason: TicketCancellationReason,
+  /** The sentence saying a person stopped the run by moving its ticket, when
+   *  this pass is the one that recorded that stop. The callback says exactly
+   *  this, so the chat message and the ticket comment read the same. */
+  stopAnnouncement?: string,
 ) => Promise<void> | void;
 type SubjectReleasedCallback = (subjectKey: string) => Promise<void> | void;
 type ClarificationRetirement = (
@@ -501,8 +506,9 @@ export async function reconcileRuns(
       reason:
         reviewDestination && board
           ? prematureAiReviewCancellationReason(board.trackerName)
-          : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+          : POLL_LEFT_COLUMN_REASON,
       clarificationNotice: { aiColumnName: settings.COLUMN_AI },
+      leftColumn: { movedTo: departure.trackerStatus },
     });
     if (
       await finalizeTicketCancellation({
@@ -681,9 +687,14 @@ async function finalizeTicketCancellation(input: {
         ? "reconcile_orphan_cancel_unconfirmed"
         : "reconcile_missing_ticket_cancel_unconfirmed",
     );
+    // The stop itself was recorded by this pass even though its bookkeeping
+    // was not, and the next pass will find it recorded: say it now or never.
+    if (result.stopAnnouncement) {
+      await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled, result.stopAnnouncement);
+    }
     return false;
   }
-  if (result.alreadyTerminal) {
+  if (result.alreadyTerminal && !result.stopAnnouncement) {
     logger.info({ ticketKey, runId }, "reconcile_released_already_terminal_run");
     return true;
   }
@@ -693,7 +704,7 @@ async function finalizeTicketCancellation(input: {
       ? "reconcile_cancelled_orphaned_run"
       : "reconcile_cancelled_run_for_missing_ticket",
   );
-  await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
+  await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled, result.stopAnnouncement);
   return true;
 }
 
@@ -762,7 +773,7 @@ async function retryCancellingClaim(
 ): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const reason = entry.runId
-    ? "Orphaned run cancelled by reconciler: ticket no longer in the AI column"
+    ? POLL_LEFT_COLUMN_REASON
     : "In-flight claim cancelled by reconciler: ticket left the AI column before a run was bound";
   // Cancel the subject this claim actually holds. Deriving one from the ticket
   // key was the same string while every run was ticket-keyed; a pull request run
@@ -1222,10 +1233,11 @@ async function notifyTicketCancelled(
   ticketKey: string,
   reason: TicketCancellationReason,
   callback?: TicketCancellationCallback,
+  stopAnnouncement?: string,
 ): Promise<void> {
   if (!callback) return;
   try {
-    await callback(ticketKey, reason);
+    await callback(ticketKey, reason, ...(stopAnnouncement ? [stopAnnouncement] : []));
   } catch (err) {
     logger.warn(
       { ticketKey, reason, error: (err as Error).message },

@@ -1,0 +1,12 @@
+{
+  "package": "@anthropic-ai/claude-code",
+  "version": "2.1.216",
+  "protocol": "claude-json-2.1.216",
+  "provenance": "captured from production run wrun_01M3755BR7PYPCZ7VVSJ7RGM88 (2026-09-23, AWP-279) attempt 4028 LOGS, implementation phase; the whole 737-byte stdout kept verbatim, stderr was empty",
+  "artifacts": {
+    "stdout": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"api_error_status\":400,\"duration_ms\":476,\"duration_api_ms\":0,\"num_turns\":1,\"result\":\"Credit balance is too low\",\"stop_reason\":\"stop_sequence\",\"session_id\":\"e7bc0fe6-8f4c-42db-a811-b40ee8b4126c\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"api_error\",\"fast_mode_state\":\"off\",\"uuid\":\"736d2abf-b0a5-43d8-887b-25f2722bba4e\"}",
+    "stderr": "",
+    "structuredOutput": null,
+    "exitCode": 1
+  }
+}

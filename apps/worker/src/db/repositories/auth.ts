@@ -84,6 +84,18 @@ export function createAuthRepository(db: Db) {
       return row?.name?.trim() || row?.email || userId;
     },
 
+    /** `dashboardUserLabel` for many ids in one read. An id no user has is
+     *  missing from the map, so the caller decides what a non-person is called. */
+    async dashboardUserLabels(userIds: readonly string[]): Promise<Map<string, string>> {
+      const ids = [...new Set(userIds)];
+      if (ids.length === 0) return new Map();
+      const rows = await db
+        .select({ id: user.id, name: user.name, email: user.email })
+        .from(user)
+        .where(inArray(user.id, ids));
+      return new Map(rows.map((row) => [row.id, row.name?.trim() || row.email || row.id]));
+    },
+
     listOrganizationInvites(organizationId: string) {
       return db
         .select({
@@ -415,6 +427,12 @@ export function createConnectedAuthRepository() {
 
 export function getConnectedDashboardUserLabel(userId: string): Promise<string> {
   return createConnectedAuthRepository().dashboardUserLabel(userId);
+}
+
+export function getConnectedDashboardUserLabels(
+  userIds: readonly string[],
+): Promise<Map<string, string>> {
+  return createConnectedAuthRepository().dashboardUserLabels(userIds);
 }
 
 /** Better Auth adapter construction is database wiring, not a custom write. */

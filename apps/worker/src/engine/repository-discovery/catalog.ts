@@ -3,6 +3,7 @@ import {
   type RepositoryRelationshipKind,
 } from "@shared/contracts";
 import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
+import { repositoryKey } from "../support/repository-access.js";
 import { providerNestsRepositoryPaths } from "../../repository-map/provider-shape.js";
 import type { RepositoryMapFacts } from "../../repository-map/map.js";
 
@@ -170,7 +171,7 @@ export function addRepositoryDiscoveryRelationships(input: {
   // the same catalog spends it the same way on every run.
   let descriptionBudget = MAX_CATALOG_DESCRIPTION_TOTAL;
   return input.catalog.map((repository) => {
-    const key = repositoryCatalogKey(repository);
+    const key = repositoryKey(repository);
     const fact = facts.get(key);
     const candidate = catalogDescription(fact?.catalogDescription ?? "");
     const described = candidate !== null && candidate.length <= descriptionBudget ? candidate : null;
@@ -277,7 +278,7 @@ function toCatalogEntries(
       };
     })
     .sort((left, right) =>
-      repositoryCatalogKey(left).localeCompare(repositoryCatalogKey(right)),
+      repositoryKey(left).localeCompare(repositoryKey(right)),
     );
 
   // Fail closed on entries that collapse to the same case-insensitive key.
@@ -285,7 +286,7 @@ function toCatalogEntries(
   // (e.g. gitlab group/Repo vs group/repo) would silently drop one of the pair.
   const seen = new Set<string>();
   for (const entry of entries) {
-    const key = repositoryCatalogKey(entry);
+    const key = repositoryKey(entry);
     if (seen.has(key)) {
       throw new RepositoryCatalogError(
         `Repository catalog contains a case-insensitive key collision: ${key}`,
@@ -296,12 +297,6 @@ function toCatalogEntries(
   }
 
   return entries;
-}
-
-export function repositoryCatalogKey(
-  repository: Pick<RepositoryCatalogEntry, "provider" | "repoPath">,
-): string {
-  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
 }
 
 function isValidProviderPath(

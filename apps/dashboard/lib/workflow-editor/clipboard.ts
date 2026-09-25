@@ -208,6 +208,41 @@ function allocateNodeId(
   throw new Error(`Unable to allocate a node id for "${sourceId}".`);
 }
 
+function nameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+const COPY_SUFFIX = /\s*\(copy(?:\s+\d+)?\)$/i;
+
+/**
+ * The name a pasted block reads by. Its id is always fresh, but a person reads
+ * the name: every validation and deploy message says `Block "<name>"`, so two
+ * blocks with one name make each of those sentences ambiguous. A name nothing
+ * else on the canvas uses is kept as it was; a taken one gets the next free
+ * "(copy)", "(copy 2)" and so on, counted from the name without any copy
+ * suffix, so a copy of a copy reads "(copy 2)" rather than "(copy) (copy)".
+ * An unnamed block stays unnamed and is told apart by its id.
+ */
+function allocateNodeName(
+  name: string | undefined,
+  taken: Set<string>,
+): string | undefined {
+  if (name === undefined || !name.trim()) return name;
+  if (!taken.has(nameKey(name))) {
+    taken.add(nameKey(name));
+    return name;
+  }
+  const base = name.trim().replace(COPY_SUFFIX, "") || name.trim();
+  for (let copy = 1; copy <= 10_000; copy += 1) {
+    const candidate = copy === 1 ? `${base} (copy)` : `${base} (copy ${copy})`;
+    if (!taken.has(nameKey(candidate))) {
+      taken.add(nameKey(candidate));
+      return candidate;
+    }
+  }
+  return name;
+}
+
 function defaultGenerateEdgeId(): string {
   if (typeof globalThis.crypto?.randomUUID !== "function") {
     // The thrown class is part of the public contract for the exported paste operation.
@@ -290,12 +325,19 @@ export function planWorkflowClipboardPaste<TGeometry = JsonValue>(input: {
     );
   });
 
+  const takenNames = new Set(
+    input.destinationNodes.flatMap((node) =>
+      node.name?.trim() ? [nameKey(node.name)] : [],
+    ),
+  );
   const offset = 32 * (input.payload.pasteCount + 1);
   const addedNodes = input.payload.nodes.map((node) => {
     const remapped = remapFlowNodeReferences(node, nodeIdMap);
+    const name = allocateNodeName(node.name, takenNames);
     return {
       ...remapped,
       id: nodeIdMap.get(node.id)!,
+      ...(name === undefined ? {} : { name }),
       x: node.x + offset,
       y: node.y + offset,
     };

@@ -9,7 +9,7 @@
 import { settingDefinition } from "@integrations/registry";
 import type { SettingsVersionView } from "@shared/contracts";
 import { listConnectedSettingsVersionPageRows } from "../../db/repositories/settings-history.js";
-import { SettingsValidationError, versionView } from "./store.js";
+import { SettingsValidationError, actorLabelsFor, versionView } from "./store.js";
 
 export interface SettingsHistoryPage {
   versions: SettingsVersionView[];
@@ -41,8 +41,10 @@ export async function readSettingsHistoryPage(input: {
     limit: input.limit + 1,
     before: input.before,
   });
+  const page = rows.slice(0, input.limit);
+  const labels = await actorLabelsFor(page);
   return {
-    versions: rows.slice(0, input.limit).map(versionView),
+    versions: page.map((row) => versionView(row, labels)),
     hasMore: rows.length > input.limit,
   };
 }

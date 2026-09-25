@@ -15,7 +15,12 @@ import { settingDefinition } from "@integrations/registry";
 import { resolveSettingWithoutStoredRow, type SettingsEntryView } from "@shared/contracts";
 import { deleteConnectedSetting } from "../../db/repositories/settings-reset.js";
 import { settingsEnvironment } from "../../infra/settings-environment.js";
-import { SettingsValidationError, readSettings } from "./store.js";
+import {
+  SettingsValidationError,
+  SettingsVersionConflictError,
+  readSettings,
+  settingsConflicts,
+} from "./store.js";
 
 export interface SettingsResetOutcome {
   /** False when nothing was stored: the resolved fallback was already
@@ -30,6 +35,10 @@ export async function resetSetting(input: {
   key: string;
   actor: string;
   reason: string;
+  /** The version the caller read (0 for none). When somebody changed the
+   *  stored value since, nothing is removed and `SettingsVersionConflictError`
+   *  names what it holds now. Absent means remove whatever is stored. */
+  expectedVersion?: number;
 }): Promise<SettingsResetOutcome> {
   // Refused the way a patch of an unknown key is refused, and for the same
   // reason: a typo answered with "nothing was stored" reads as success.
@@ -47,13 +56,22 @@ export async function resetSetting(input: {
   const after = resolveSettingWithoutStoredRow(input.key, settingsEnvironment, settingDefinition);
   // Whether a row existed is the delete's own answer, so nothing here asks
   // first: the statement returns the row it removed, or none.
-  const removed = await deleteConnectedSetting({
+  const outcome = await deleteConnectedSetting({
     key: input.key,
     resolvedValue: after?.value ?? null,
     actor: input.actor,
     reason: input.reason,
+    expectedVersion: input.expectedVersion,
   });
-  return { removed, entry: await entryFor(input.key) };
+  if (outcome.staleVersion !== null) {
+    throw new SettingsVersionConflictError(
+      await settingsConflicts(
+        [{ key: input.key, currentVersion: outcome.staleVersion }],
+        () => input.expectedVersion ?? 0,
+      ),
+    );
+  }
+  return { removed: outcome.removed, entry: await entryFor(input.key) };
 }
 
 /** Read back through the same view the settings page renders, rather than

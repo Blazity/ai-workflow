@@ -657,3 +657,47 @@ test("mobile: confirming posts the cancel proxy and reports a cancelled outcome"
   await waitForText(root, /Run cancelled\./);
   assert.deepEqual(refreshes, ["refresh"]);
 });
+
+// ── One window, one count; ages people can read ─────────────────────────────
+//
+// QA at one moment: the Overview tile said 27 runs in the last 24h, this page
+// said 30. The three extra were runs parked four and five days ago, listed
+// because they still wait for an answer, counted as if they had started today,
+// and dated "6998m ago".
+
+function windowListing(): RunsResponse {
+  const today = Array.from({ length: 27 }, (_, index) =>
+    makeRun({ id: `run_${index}`, status: "success", startedAtMin: 10 + index * 40 }),
+  );
+  const parked = [
+    makeRun({ id: "run_awp240", status: "awaiting", startedAtMin: 6998, ticketTitle: "Parked four days" }),
+    makeRun({ id: "run_awp241", status: "awaiting", startedAtMin: 7040 }),
+    makeRun({ id: "run_awp242", status: "awaiting", startedAtMin: 5800 }),
+  ];
+  return makeData([...parked, ...today]);
+}
+
+test("desktop: the heading counts the window's runs and names the older open ones apart", (t) => {
+  const { root } = renderDesktop(t, { data: windowListing() });
+  const text = screenText(root);
+  assert.match(text, /27 runs · last 24h/);
+  assert.doesNotMatch(text, /30 runs/);
+  assert.match(text, /Also listed: 3 older runs still waiting for input\./);
+});
+
+test("mobile: the heading counts the window's runs and names the older open ones apart", (t) => {
+  const { root } = renderMobile(t, { data: windowListing() });
+  const text = screenText(root);
+  assert.match(text, /27 runs · last 24h/);
+  assert.match(text, /Also listed: 3 older runs still waiting for input\./);
+});
+
+test("desktop and mobile date a run started days ago in days, not minutes", (t) => {
+  const data = windowListing();
+  const desktop = screenText(renderDesktop(t, { data }).root);
+  const mobile = screenText(renderMobile(t, { data }).root);
+  for (const text of [desktop, mobile]) {
+    assert.match(text, /4d ago/);
+    assert.doesNotMatch(text, /6998m ago|7040m ago|5800m ago/);
+  }
+});

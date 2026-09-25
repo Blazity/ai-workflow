@@ -86,7 +86,7 @@ export function SettingHistory({ settingKey }: { settingKey: string }) {
           </span>
           <span className="text-neutral-500">
             {" "}
-            {formatSettingActor(version.actor)} on{" "}
+            {formatSettingActor(version.actor, version.actorLabel)} on{" "}
             {formatSettingTimestamp(version.createdAt)}
           </span>
           <div className="text-neutral-600">{version.reason}</div>

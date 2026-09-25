@@ -258,6 +258,9 @@ const CREDENTIAL_PAIRS = new Set([
 ]);
 
 const text = z.string().min(1);
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+/** Path data and nothing else: no markup, no url(), nothing a browser runs. */
+const SVG_PATH_DATA = /^[MmLlHhVvCcSsQqTtAaZz0-9.,\s-]+$/;
 
 // Structure only. The rules with their own codes (patterns, duplicates,
 // secrets, capabilities) are checked after the parse, so each can say exactly
@@ -267,6 +270,12 @@ const manifestSchema = z.object({
   name: text,
   description: text,
   docsUrl: z.string().optional(),
+  icon: z
+    .union([
+      z.object({ glyph: z.string().regex(SVG_PATH_DATA), color: z.string().regex(HEX_COLOR) }),
+      z.object({ monogram: z.string().min(1).max(2), color: z.string().regex(HEX_COLOR) }),
+    ])
+    .optional(),
   connection: z.object({
     fields: z.array(
       z.object({

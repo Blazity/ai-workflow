@@ -23,21 +23,6 @@ import {
 import { deriveKpisFromRuns } from "@/lib/api/derive-kpis";
 import { mergeLiveRuns } from "@/lib/merge-live-runs";
 
-/**
- * Reconciles the live registry rows against the durable store, the same way
- * runs-data.tsx feeds the Runs page (see mergeLiveRuns). Without this, a
- * lingering registry entry for a run that already finished in the store would
- * still render as "running"/"awaiting" in the Overview's live panels (Now
- * running, Input needed), even though the Recent runs table on the same page
- * (fed from the store directly) already shows its real terminal status.
- */
-function reconcileOverviewLiveRuns(
-  recentRuns: RunsResponse,
-  liveRuns: LiveRunsResponse,
-): LiveRunsResponse {
-  return mergeLiveRuns(recentRuns, liveRuns);
-}
-
 export async function OverviewData({ window }: { window: TimeWindow }) {
   const now = new Date().toISOString();
 
@@ -79,11 +64,14 @@ export async function OverviewData({ window }: { window: TimeWindow }) {
       }
     : kpis;
 
+  // One list for every card, merged the way runs-data.tsx feeds the Runs page
+  // (see mergeLiveRuns): the store stays authoritative for a finished run, and
+  // the open runs the live board adds are counted once, in the live panels and
+  // the Recent runs card alike.
   const data: OverviewScreenData = {
     kpis: mergedKpis,
-    liveRuns: reconcileOverviewLiveRuns(recentRuns, liveRuns),
+    runs: mergeLiveRuns(recentRuns, liveRuns),
     capacity,
-    recentRuns,
     workflows,
   };
   return (

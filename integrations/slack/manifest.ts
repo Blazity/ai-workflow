@@ -28,6 +28,9 @@ export const manifest = defineIntegration({
   description:
     "Posts each run's progress in a channel thread, answers the /ai-workflow command, and lets a research block read what people said.",
   docsUrl: "https://api.slack.com/apps",
+  // Slack asked Simple Icons to withdraw its logo, so there is no license-safe
+  // glyph: its initial on Slack's aubergine instead.
+  icon: { monogram: "S", color: "#4A154B" },
   connection: {
     fields: [
       {

@@ -12,10 +12,13 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 import {
   RUN_STATUS_FILTERS,
+  olderOpenRunsSentence,
   runIdentity,
   runStatusHref,
+  tallyListedRuns,
   type RunStatusFilter,
 } from "@/lib/runs-display";
 
@@ -74,7 +77,8 @@ export function RunsMobileScreen({
     setPage(0);
   }, [status]);
   const filtered = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
-  const headingCount = filter === "all" ? shownData.total : shownData.counts[filter];
+  const tally = tallyListedRuns(shownData, filter, window);
+  const olderOpen = olderOpenRunsSentence(tally);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const start = page * PAGE_SIZE;
   const rows = filtered.slice(start, start + PAGE_SIZE);
@@ -132,7 +136,8 @@ export function RunsMobileScreen({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
-          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{headingCount} runs · {windowPhrase(window)}</h2>
+          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{tally.inWindow} runs · {windowPhrase(window)}</h2>
+          {olderOpen && <p className="m-0 mt-0.5 font-body text-[12px] text-neutral-600">{olderOpen}</p>}
         </div>
         <div className="flex flex-col items-end gap-2">
           <WindowSelector value={window} size="sm" />
@@ -206,7 +211,7 @@ export function RunsMobileScreen({
                   Cancel
                 </GhostButton>
               ) : null}
-              <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
+              <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
             </div>
             {showCancel && confirmId === r.id ? (
               <div

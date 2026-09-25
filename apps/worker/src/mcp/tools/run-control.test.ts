@@ -345,7 +345,9 @@ describe("runs.answer_clarification", () => {
       runId: RUN_ID,
       status: "answered",
       ticketKey: TICKET,
-      answeredByLabel: "MCP client-execute",
+      // Nobody this deployment knows is behind the token here, and the client
+      // registered no name, so the answer is signed by the client.
+      answeredByLabel: "MCP client client-execute",
     });
     // The core's own resume, with the MCP client named as the answerer so the
     // resumed agent and the ticket show who answered.
@@ -353,7 +355,7 @@ describe("runs.answer_clarification", () => {
       hookToken,
       expect.objectContaining({
         answer: "acme/web",
-        answeredByLabel: "MCP client-execute",
+        answeredByLabel: "MCP client client-execute",
       }),
     );
     expect((await getHookClarification(db, clarificationId))?.status).toBe("answered");

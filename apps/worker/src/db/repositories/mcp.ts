@@ -153,6 +153,22 @@ export function findConnectedMcpOauthClient(clientId: string) {
   return findMcpOauthClient(getDb(), clientId);
 }
 
+/** The name an OAuth client registered itself with ("Codex"), or null when it
+ *  gave none or is unknown. Registered by the client, so it is the client's
+ *  own text and its reader bounds it before showing it to anyone. */
+export async function readMcpOauthClientName(db: Db, clientId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ name: oauthClient.name })
+    .from(oauthClient)
+    .where(eq(oauthClient.clientId, clientId))
+    .limit(1);
+  return row?.name ?? null;
+}
+
+export function readConnectedMcpOauthClientName(clientId: string): Promise<string | null> {
+  return readMcpOauthClientName(getDb(), clientId);
+}
+
 export function findConnectedMcpMemberRole(input: Parameters<typeof findMcpMemberRole>[1]) {
   return findMcpMemberRole(getDb(), input);
 }

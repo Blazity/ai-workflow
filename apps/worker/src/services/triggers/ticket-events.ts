@@ -7,6 +7,10 @@ import { logger } from "../../infra/logger.js";
 import { resumeConnectedClarificationFromComments } from "../clarifications/index.js";
 import { dispatchTicket } from "../dispatch/index.js";
 import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
+import {
+  runStoppedSentence,
+  webhookLeftColumnReason,
+} from "../../engine/support/ticket-left-column.js";
 import { cancelRunDetailed } from "../run-lifecycle/index.js";
 import { maxConcurrentAgents, ticketBoardSettings } from "../settings/index.js";
 import {
@@ -97,26 +101,28 @@ export async function actOnTicketEvent(
         adapters,
         board.aiColumn,
         active,
-        `Ticket left the AI column (${board.aiColumn} → ${event.statusChange.name ?? "unknown"}) via ${board.trackerName} webhook`,
+        webhookLeftColumnReason({
+          aiColumn: board.aiColumn,
+          movedTo: event.statusChange.name ?? null,
+          trackerName: board.trackerName,
+        }),
+        event.statusChange.name ?? null,
       );
-      if (cancellation === "unconfirmed") {
+      // Whichever attempt recorded the stop says so, confirmed or not: the
+      // next one finds it recorded and has nothing to announce.
+      await announceStop(adapters, ticketKey, cancellation.announcement);
+      if (cancellation.outcome === "unconfirmed") {
         throw new TriggerHttpError(503, "Cancellation not confirmed");
       }
       // The run finished on its own exactly as this second human move landed:
       // release the bookkeeping without a "canceled" message or a "cancelled"
       // response, so the run's real outcome stands (mirrors the reconciler's
       // reconcile_released_already_terminal_run path).
-      if (cancellation === "already_terminal") {
+      if (cancellation.outcome === "already_terminal") {
         logger.info({ ticketKey }, "ticket_event_released_already_terminal_run");
         return { status: "ignored", reason: "already_terminal", ticketKey };
       }
-      const cancelled = cancellation === "cancelled";
-      if (cancelled) {
-        await adapters.messaging.notifyForTicket(ticketKey, {
-          kind: "canceled",
-          reason: "human changed ticket status while cancellation was in progress",
-        });
-      }
+      const cancelled = cancellation.outcome === "cancelled";
       return {
         status: cancelled ? "cancelled" : "ignored",
         reason: "human_status_change_during_cancellation",
@@ -306,9 +312,17 @@ export async function actOnTicketEvent(
       undefined,
       prematureAiReviewTransition
         ? prematureAiReviewCancellationReason(board.trackerName)
-        : `Ticket left the AI column (${board.aiColumn} → ${event.status}) via ${board.trackerName} webhook`,
+        : webhookLeftColumnReason({
+          aiColumn: board.aiColumn,
+          movedTo: event.status,
+          trackerName: board.trackerName,
+        }),
+      // The column this delivery reported, the same one the reason names, so
+      // the run's record and the ticket's comment say the same thing.
+      event.status,
     );
-    if (cancellation === "unconfirmed") {
+    await announceStop(adapters, ticketKey, cancellation.announcement);
+    if (cancellation.outcome === "unconfirmed") {
       logger.warn(
         {
           ticketKey,
@@ -325,7 +339,7 @@ export async function actOnTicketEvent(
     // before its outcome is frozen for the recorded-outcome guard above.
     // Report that release without a "canceled" message and without claiming
     // "cancelled", so the run's real outcome is never masked.
-    if (cancellation === "already_terminal") {
+    if (cancellation.outcome === "already_terminal") {
       logger.info(
         {
           ticketKey,
@@ -337,13 +351,7 @@ export async function actOnTicketEvent(
       );
       return { status: "ignored", reason: "already_terminal", ticketKey };
     }
-    const cancelled = cancellation === "cancelled";
-    if (cancelled) {
-      await adapters.messaging.notifyForTicket(ticketKey, {
-        kind: "canceled",
-        reason: "webhook confirmed ticket is outside AI column",
-      });
-    }
+    const cancelled = cancellation.outcome === "cancelled";
     logger.info(
       {
         ticketKey,
@@ -471,9 +479,12 @@ async function cancelTrackedRun(
    *  before them would cancel a run that ended while they ran. */
   observedEntry?: Awaited<ReturnType<Adapters["runRegistry"]["get"]>>,
   reason?: string,
-): Promise<"cancelled" | "not_active" | "unconfirmed" | "already_terminal"> {
+  /** Where the person moved the ticket, as the tracker named it, for the one
+   *  comment that tells the ticket its run stopped. */
+  movedTo: string | null = null,
+): Promise<TrackedCancellation> {
   const entry = observedEntry ?? (await adapters.runRegistry.get(subjectKey));
-  if (!entry) return "not_active";
+  if (!entry) return { outcome: "not_active", announcement: null };
   const cancellationTarget = { ownerToken: entry.ownerToken, runId: entry.runId };
 
   // Reuse cancelRunDetailed's `alreadyTerminal` discriminator: a run that
@@ -488,6 +499,7 @@ async function cancelTrackedRun(
       issueTracker: adapters.issueTracker,
       ...(reason ? { reason } : {}),
       clarificationNotice: { aiColumnName },
+      leftColumn: { movedTo },
     });
 
   // A claim with an explicitly NULL run id is a run that never reached the
@@ -496,13 +508,49 @@ async function cancelTrackedRun(
   // somebody else's; it asks again instead.
   if (cancellationTarget.runId === null) {
     const result = await cancel();
-    if (!result.cancelled) return "unconfirmed";
-    return result.alreadyTerminal ? "already_terminal" : "cancelled";
+    if (!result.cancelled) return { outcome: "unconfirmed", announcement: null };
+    if (result.alreadyTerminal) return { outcome: "already_terminal", announcement: null };
+    // A claim that never reached a run has no run row to record the stop on,
+    // so its one announcement is made here, where the release was confirmed.
+    return {
+      outcome: "cancelled",
+      announcement: runStoppedSentence({ aiColumnName, movedTo, stoppedAt: new Date() }),
+    };
   }
-  if (!cancellationTarget.runId) return "unconfirmed";
+  if (!cancellationTarget.runId) return { outcome: "unconfirmed", announcement: null };
   const result = await cancel();
-  if (!result.cancelled) return "unconfirmed";
-  return result.alreadyTerminal ? "already_terminal" : "cancelled";
+  // The announcement is the cancel core's, set only by the attempt that
+  // recorded the stop. A run whose own failure or success closed its row first
+  // gets none: its own outcome message stands, and "nothing failed" beside a
+  // failure would be false.
+  const announcement = result.stopAnnouncement ?? null;
+  if (!result.cancelled) return { outcome: "unconfirmed", announcement };
+  // A retry that finds the run already cancelled by an earlier attempt of this
+  // same stop is still the cancellation, not a run that finished on its own.
+  if (result.alreadyTerminal && !announcement) {
+    return { outcome: "already_terminal", announcement: null };
+  }
+  return { outcome: "cancelled", announcement };
+}
+
+interface TrackedCancellation {
+  outcome: "cancelled" | "not_active" | "unconfirmed" | "already_terminal";
+  /** The sentence the chat channel is told, or null when this call has nothing
+   *  to announce. */
+  announcement: string | null;
+}
+
+/**
+ * Tell the ticket's chat channel that a person stopped its run, in the same
+ * sentence the ticket's own comment opens with.
+ */
+async function announceStop(
+  adapters: Adapters,
+  ticketKey: string,
+  announcement: string | null,
+): Promise<void> {
+  if (!announcement) return;
+  await adapters.messaging.notifyForTicket(ticketKey, { kind: "canceled", reason: announcement });
 }
 
 async function liveTicket(

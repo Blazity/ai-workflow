@@ -28,6 +28,8 @@ import { isIntegrationSettingsUnreadableError } from "../../helpers/integration-
 import {
   catalogRefusalExecutionOptions,
   isRepositoryCatalogRefusal,
+  isSameRepository,
+  repositoryKey,
 } from "../../support/repository-access.js";
 import {
   isChecksCeilingExceededError,
@@ -221,16 +223,13 @@ async function blockApprovedRepositoryScopeStep(
   });
   const available = filterRunRepositories(repositories, listing.repositories);
   const byKey = new Map(
-    available.map((repository) => [
-      `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-      repository,
-    ]),
+    available.map((repository) => [repositoryKey(repository), repository]),
   );
   const owned = await listConnectedWorkflowOwnedBranchesForTicket(ticketKey);
   const seen = new Set<string>();
   const selected: SelectedRepository[] = [];
   for (const approved of scope.repositories) {
-    const key = `${approved.provider}:${approved.repoPath.toLowerCase()}`;
+    const key = repositoryKey(approved);
     if (seen.has(key)) {
       throw new Error(`Approved repository scope duplicates ${key}; replan required`);
     }
@@ -292,11 +291,7 @@ async function blockApprovedRepositoryScopeStep(
     if (currentSha !== approved.researchBaseSha) {
       throw new Error(`Approved repository ${key} moved after research; replan required`);
     }
-    const ownership = owned.find(
-      (record) =>
-        record.provider === current.provider &&
-        record.repoPath.toLowerCase() === current.repoPath.toLowerCase(),
-    );
+    const ownership = owned.find((record) => isSameRepository(record, current));
     selected.push({
       provider: current.provider,
       repoPath: current.repoPath,
@@ -1086,7 +1081,7 @@ export async function ensureWorkspace(
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
-          `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+          repositoryKey(repository),
           repository.researchBaseSha,
         ]),
       );
@@ -1376,9 +1371,7 @@ export async function ensureWorkspace(
       const narrowedTo =
         ctx.workScope?.narrowingAnswered === true
           ? selected.filter((repository) =>
-              personSelectedKeys(ctx.workScope).includes(
-                `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-              ),
+              personSelectedKeys(ctx.workScope).includes(repositoryKey(repository)),
             )
           : null;
       if (narrowedTo === null) {
@@ -1452,7 +1445,7 @@ export async function ensureWorkspace(
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
         const expectedResearchBaseSha = approvedBaselineByKey?.get(
-          `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
+          repositoryKey(context.repository),
         );
         return {
           ...context.repository,
@@ -1469,9 +1462,7 @@ export async function ensureWorkspace(
           // repository carrying this run's own branch is already in the
           // selection and so is never taken as a neighbour; if that ever
           // changes, read-only is the safe side of the disagreement.
-          ...(relatedReadOnlyKeys.has(
-            `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
-          )
+          ...(relatedReadOnlyKeys.has(repositoryKey(context.repository))
             ? { access: "read" as const }
             : {}),
           ...(expectedResearchBaseSha ? { expectedResearchBaseSha } : {}),
@@ -1745,14 +1736,12 @@ export async function promoteWorkspaceWrites(
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
-        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+        repositoryKey(repository),
         repository,
       ]),
     );
     ctx.selectedRepositories = ctx.selectedRepositories.map((repository) => {
-      const promoted = manifestByKey.get(
-        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-      );
+      const promoted = manifestByKey.get(repositoryKey(repository));
       return promoted?.workflowOwnedBranch
         ? { ...repository, workflowOwnedBranch: promoted.workflowOwnedBranch }
         : repository;

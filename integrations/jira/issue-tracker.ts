@@ -1,9 +1,12 @@
 import {
   IssueTrackerNotFoundError,
+  RELATED_TICKET_CHILD,
+  RELATED_TICKET_PARENT,
   type IntegrationHttp,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type IssueTrackerTransitionTarget,
+  type RelatedTicket,
   type TicketAttachment,
   type TicketContent,
   type TicketComment,
@@ -194,7 +197,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     options?: { commentsSince?: string },
   ): Promise<TicketContent> {
     const data = await this.request(
-      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project,attachment`,
+      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project,attachment,parent,subtasks,issuelinks`,
     );
     const { raw, complete, reachedLatest } = await this.readComments(
       id,
@@ -230,6 +233,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
           contentUrl: contentUrl || undefined,
         };
       }),
+      relatedTickets: relatedTicketsOf(data.fields),
     };
   }
 
@@ -796,10 +800,65 @@ function truncateExcerpt(text: string): string {
     : `${collapsed.slice(0, MAX_EXCERPT_CHARS)}…`;
 }
 
+/**
+ * Where the acceptance criteria start: the label people write in front of
+ * them. "Acceptance criteria" anywhere, as before, because "these are the
+ * acceptance criteria:" introduces them mid-sentence. The short forms
+ * ("Acceptance", "AC") only as a label, at the start of a line and followed by
+ * a colon or by nothing, because both are ordinary words elsewhere
+ * ("Acceptance tests live in ...", "ACME:", "Voltage AC: 230V"). Markdown a
+ * person put around a label (a heading, a bullet, bold) is part of the label.
+ */
+const ACCEPTANCE_LABEL =
+  /acceptance criteria[*_]*:?[*_]*|^[ \t>#*_-]*(?:acceptance|ac)[*_]*(?:[ \t]*:[*_]*|[ \t]*$)/im;
+
+/** The criteria are what follows the label and any blank lines after it, up
+ *  to the next blank line or markdown heading, or to the end of the
+ *  description. A heading right after the label is the next section, so the
+ *  label had nothing under it. */
 function extractAcceptanceCriteria(description: any): string {
   const text = extractAdfText(description);
-  const match = text.match(/acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i);
+  const label = ACCEPTANCE_LABEL.exec(text);
+  if (!label) return "";
+  const rest = text.slice(label.index + label[0].length).replace(/^\s+/, "");
+  if (/^#+\s/.test(rest)) return "";
+  const match = rest.match(/^([\s\S]*?)(?:\n\n|\n#|$)/);
   return match?.[1]?.trim() ?? "";
+}
+
+/**
+ * The tickets one issue read names, in the order the port promises: the
+ * parent, then the subtasks as the team ranked them, then every link as Jira
+ * listed it. An entry without a key is skipped, because a line naming a ticket
+ * nobody can find is worse than no line.
+ *
+ * A link is one row seen from both ends, and Jira says which end this ticket
+ * is by which side it fills in: the other issue under `outwardIssue` makes
+ * this ticket the subject of the outward phrase ("this blocks that"), under
+ * `inwardIssue` of the inward one ("this is blocked by that"). That is the
+ * phrase Jira itself prints beside the link on this ticket's page.
+ */
+function relatedTicketsOf(fields: any): RelatedTicket[] {
+  const related: RelatedTicket[] = [];
+  const add = (issue: any, relation: unknown) => {
+    const key = issue?.key;
+    if (typeof key !== "string" || key === "") return;
+    related.push({
+      key,
+      title: typeof issue.fields?.summary === "string" ? issue.fields.summary : "",
+      status: typeof issue.fields?.status?.name === "string" ? issue.fields.status.name : "",
+      relation: typeof relation === "string" ? relation : "",
+    });
+  };
+  if (fields?.parent) add(fields.parent, RELATED_TICKET_PARENT);
+  for (const subtask of Array.isArray(fields?.subtasks) ? fields.subtasks : []) {
+    add(subtask, RELATED_TICKET_CHILD);
+  }
+  for (const link of Array.isArray(fields?.issuelinks) ? fields.issuelinks : []) {
+    if (link?.outwardIssue) add(link.outwardIssue, link.type?.outward ?? link.type?.name);
+    else if (link?.inwardIssue) add(link.inwardIssue, link.type?.inward ?? link.type?.name);
+  }
+  return related;
 }
 
 function extractProjectKey(identifier: string): string | undefined {

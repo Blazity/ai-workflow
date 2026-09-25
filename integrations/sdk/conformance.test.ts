@@ -826,3 +826,30 @@ test("the fixture hands a refused token to core as the provider's answer, not as
   assert.equal(verdict.kind, "refused");
   assert.equal(verdict.kind === "refused" ? verdict.status : null, 401);
 });
+
+// Red when: a manifest can hand the dashboard markup, a url() or a colour it
+// cannot draw as its icon. The icon is rendered as path data on a coloured
+// tile, and a manifest is the one thing core renders without running.
+test("an icon is path data or one or two characters, on a #RRGGBB colour", () => {
+  const glyph = validIntegration();
+  glyph.manifest.icon = { glyph: "M0 0h24v24H0z", color: "#0052CC" };
+  assert.deepEqual(issues(glyph.manifest, glyph.runtime), []);
+  const monogram = validIntegration();
+  monogram.manifest.icon = { monogram: "AE", color: "#181B20" };
+  assert.deepEqual(issues(monogram.manifest, monogram.runtime), []);
+
+  for (const icon of [
+    { glyph: '"/><script>alert(1)</script>', color: "#0052CC" },
+    { glyph: "M0 0h24v24H0z", color: "red" },
+    { monogram: "ACME", color: "#181B20" },
+    { color: "#181B20" },
+  ]) {
+    const bad = validIntegration();
+    bad.manifest.icon = icon;
+    const found = issues(bad.manifest, bad.runtime);
+    assert.ok(
+      found.some((issue) => issue.code === "manifest_invalid" && issue.path.startsWith("icon")),
+      `expected manifest_invalid at icon for ${JSON.stringify(icon)}, got ${JSON.stringify(found)}`,
+    );
+  }
+});

@@ -64,6 +64,7 @@ export function SettingsScreen({
   scanReadable,
   catalogState,
   canEdit,
+  canReset = false,
   available,
 }: {
   settings: readonly SettingsEntryView[];
@@ -75,6 +76,8 @@ export function SettingsScreen({
   catalogState: RepositoryCatalogState | null;
   /** canEditSettings(role): owners and admins. */
   canEdit: boolean;
+  /** canResetSettings(role): who may remove a stored value. */
+  canReset?: boolean;
   /** False when the worker did not answer the settings read. */
   available: boolean;
 }) {
@@ -143,6 +146,7 @@ export function SettingsScreen({
               key={group.id}
               group={group}
               canEdit={canEdit}
+              canReset={canReset}
             />
           ))}
           <DeploymentVariables entries={deploymentVariables} />

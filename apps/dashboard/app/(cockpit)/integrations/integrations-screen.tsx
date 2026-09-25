@@ -6,6 +6,7 @@ import type {
 } from "@shared/contracts";
 
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
+import { IntegrationIcon } from "@/components/cockpit/integration-icon";
 import { Button, CkChip } from "@/components/ui";
 import {
   CORE_CAPABILITIES_LINE,
@@ -16,6 +17,7 @@ import {
   capabilityCardinalityLine,
   capabilityHeading,
   capabilityServingLine,
+  sourceInUse,
   statusChip,
   statusDetailLines,
   storesValues,
@@ -26,6 +28,8 @@ import {
   type IntegrationTone,
 } from "@/lib/integrations/presentation";
 
+import { StatusBadges } from "./status-badges";
+
 /**
  * Every integration this build ships, at a glance.
  *
@@ -35,13 +39,6 @@ import {
  * confirmed. A member gets the same list and the same link, and the screen it
  * opens shows the state without controls.
  */
-
-const CHIP_TONES: Record<IntegrationTone, "success" | "failed" | "neutral" | "blocked"> = {
-  success: "success",
-  failed: "failed",
-  quiet: "blocked",
-  off: "neutral",
-};
 
 /** Not connected is quiet and dashed; disabled is solid, because somebody
  *  chose it. The two must not read as the same thing at a glance. */
@@ -66,41 +63,51 @@ function IntegrationCard({
   const chip = statusChip(integration.state);
   const href = `/integrations/${encodeURIComponent(integration.id)}/connection`;
   const stored = storesValues(integration);
+  const off = integration.state.status === "disabled";
+  // The badge beside the status already names a source in use; the sentence
+  // stays for the cases it cannot say in three words (incomplete, nothing yet).
+  const sourceSaid =
+    sourceInUse(integration.state, "environment") || sourceInUse(integration.state, "stored");
 
   return (
-    <li className={`rounded-[4px] bg-panel px-4 py-3 ${CARD_EDGES[chip.tone]}`}>
+    <li
+      className={`rounded-[4px] px-4 py-3 ${off ? "bg-app-bg" : "bg-panel"} ${CARD_EDGES[chip.tone]}`}
+    >
       {/* Stacked on a phone: at 390 px the two columns squeezed the description
           into a third of the width while the action kept the rest. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <a
-              href={href}
-              className="font-display text-[15px] font-medium text-coal no-underline hover:underline"
-            >
-              {integration.name}
-            </a>
-            <CkChip tone={CHIP_TONES[chip.tone]}>{chip.label}</CkChip>
-          </div>
-          <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
-            {integration.description}
-          </p>
-          <div className="mt-1 flex flex-col gap-[2px]">
-            {statusDetailLines(integration, scan).map((line, index) => (
-              <span key={index} className="font-body text-[11px] text-neutral-500 break-words">
-                {line}
-              </span>
-            ))}
-          </div>
-          <div className="mt-2 flex flex-col gap-[2px]">
-            {unlocksLines(integration, availability).map((line, index) => (
-              <span key={index} className="font-body text-[11px] text-neutral-700 break-words">
-                {line}
-              </span>
-            ))}
+        <div className="flex min-w-0 flex-1 gap-3">
+          <IntegrationIcon id={integration.id} name={integration.name} size={32} muted={off} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <a
+                href={href}
+                className="font-display text-[15px] font-medium text-coal no-underline hover:underline"
+              >
+                {integration.name}
+              </a>
+              <StatusBadges integration={integration} />
+            </div>
+            <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
+              {integration.description}
+            </p>
+            <div className="mt-1 flex flex-col gap-[2px]">
+              {statusDetailLines(integration, scan, { source: !sourceSaid }).map((line, index) => (
+                <span key={index} className="font-body text-[11px] text-neutral-500 break-words">
+                  {line}
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-col gap-[2px]">
+              {unlocksLines(integration, availability).map((line, index) => (
+                <span key={index} className="font-body text-[11px] text-neutral-700 break-words">
+                  {line}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="flex flex-col items-start gap-1 sm:items-end">
+        <div className="flex flex-col items-start gap-1 pl-11 sm:items-end sm:pl-0">
           {/* A deployment with nothing configured has one job on this card, so
               it gets the one control that looks like one. Anything already
               configured is being visited, not set up, and a quiet link keeps
