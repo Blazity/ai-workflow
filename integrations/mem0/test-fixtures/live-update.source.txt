@@ -1,0 +1,5 @@
+Source URL: https://api.mem0.ai/v1/memories/d62ec856-8019-4fd7-95c4-8680f54f9a30/
+What it is: Mem0's live answer (200) to PUT /v1/memories/{id}/: an update of text and metadata: the same id, the whole metadata replaced by what was sent (ticketKey, not sent, is gone).
+How these bytes were made: The response body of one call made by integrations/mem0/live-probe.ts (run aiw-probe-mugqd323, step put-mutable) against the hosted platform, under app_id ai-workflow-probe and user_ids starting with aiw-probe-, all deleted by the same run. Parsed and written with two-space indentation; nothing else changed. The API key is in no body.
+Retrieved: 2026-09-25
+SHA-256: 66805bdeb54c5ca14dd20bcf5eb9cf17dd3999bff7d5e28fdde2bcd2eb10a512

@@ -1,0 +1,21 @@
+{
+  "id": "d62ec856-8019-4fd7-95c4-8680f54f9a30",
+  "memory": "Probe fact: the API listens on port 8080.",
+  "user_id": "aiw-probe-mugqd323-a",
+  "agent_id": "facts",
+  "app_id": "ai-workflow-probe",
+  "metadata": {
+    "origin": "learned",
+    "runId": "r2"
+  },
+  "categories": [
+    "technology"
+  ],
+  "created_at": "2026-09-25T02:00:27.172841-07:00",
+  "updated_at": "2026-09-25T02:01:31.821401-07:00",
+  "expiration_date": null,
+  "structured_attributes": null,
+  "replaced_by": null,
+  "synthesized": false,
+  "lifecycle_state": "active"
+}
