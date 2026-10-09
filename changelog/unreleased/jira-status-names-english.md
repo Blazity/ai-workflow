@@ -1,0 +1,1 @@
+- Jira status names now appear in English on the dashboard, in the MCP ticket tools and in the ticket context an agent reads, whatever language the connected Jira account uses.

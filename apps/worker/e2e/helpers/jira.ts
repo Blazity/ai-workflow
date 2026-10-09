@@ -37,6 +37,11 @@ async function jiraRequest(path: string, options?: RequestInit) {
     headers: {
       Authorization: authHeader,
       "Content-Type": "application/json",
+      // Status names in English, as the adapter asks for them, so they
+      // compare with the configured columns ("To Do") rather than the bot
+      // account's language.
+      "Accept-Language": "en",
+      "X-Force-Accept-Language": "true",
       ...options?.headers,
     },
   });
