@@ -5,6 +5,21 @@ Entries are written in the pull request that ships the change and collected
 automatically from `changelog/unreleased/` once a day into a numbered release
 (`vYYYY.MM.N`), also published as a GitHub Release; see `changelog/README.md`.
 
+## v2026.10.1 (2026-10-09)
+
+### Runs and workflows
+
+_Two changes in this area._
+
+- A pull request run whose pull request gets a newer commit, or is closed or merged, while the run is still working now stops as blocked with a plain reason naming the newer commit. It posts no failure note and no Slack alert, and `runs.diagnose` says nothing failed and there is nothing to retry.
+- The `workflows.list` MCP tool now marks each workflow and each trigger as `armed` when a real event would start a run, separately from the stored `enabled` switch. A schedule trigger on a workflow with nothing deployed is revoked, and the worker logs why.
+
+### Integrations
+
+_One change in this area._
+
+- Jira status names now appear in English on the dashboard, in the MCP ticket tools and in the ticket context an agent reads, whatever language the connected Jira account uses.
+
 ## v2026.09.2 (2026-09-25)
 
 ### Dashboard
