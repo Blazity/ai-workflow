@@ -42,7 +42,7 @@ Accounts you must own:
 - **Vercel** — Pro plan recommended (Cron Jobs, Sandbox, Workflow are paid features on Hobby).
 - **Atlassian Jira Cloud** — admin access on the project to manage columns, transitions, and webhooks.
 - **GitHub** _or_ **GitLab** — admin on the target repository (PR + branch creation).
-- **Slack** workspace — admin to install a custom app and register slash commands.
+- **Slack** workspace (optional): admin to install a custom app and register slash commands. Runs work without it; it adds notifications and the `/ai-workflow` command.
 - **Anthropic** _or_ **OpenAI** — API key for the agent runtime.
 - **Neon Postgres** — installed via Vercel Marketplace in step 4.
 
@@ -132,7 +132,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. They are the GitHub integration's connection fields (`integrations/github/manifest.ts`), not boot requirements: a deployment with only some of them set still starts, and the GitHub card on the Integrations page reads Failing and names the missing variable.
+> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. They are the GitHub integration's connection fields (`integrations/github/manifest.ts`), not boot requirements: a deployment with only some of them set still starts, and the GitHub card on the Integrations page reads Failing and names the missing variable. An admin can also enter the App ID, installation ID, private key and webhook secret in the dashboard (Integrations → GitHub → Connection) instead of the environment; storing them there needs `INTEGRATION_SECRETS_KEY` (see [Integration secrets](#integration-secrets)).
 
 **GitLab:**
 
@@ -799,7 +799,7 @@ to the Artur repository. See the
 
 ### Dashboard (cockpit — observability UI)
 
-`apps/dashboard` is a separate Next.js app that renders the worker's runs, KPIs, and eval health. It's **read-only** and entirely optional — the bot runs without it. It holds no integration credentials; it just calls the worker's gated `/api/v1/*` API server-side. Deploy it as its **own Vercel project**:
+`apps/dashboard` is a separate Next.js app: the cockpit where people author and deploy workflows, approve plans, answer clarifications, configure integrations, repositories and settings, and inspect runs and cost. The worker still runs triggers without it, but everything above is done from here (or over MCP). It holds no integration credentials; it calls the worker's gated `/api/v1/*` API server-side. Deploy it as its **own Vercel project**:
 
 1. Link the dashboard from its directory (sets Root Directory to `apps/dashboard`):
 

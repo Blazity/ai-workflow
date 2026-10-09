@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-23
+Last-verified: 2026-10-09
 
 # Documentation index
 
@@ -26,6 +26,14 @@ checking the smaller set that is left (ADR-007).
 | [SETUP.md](../SETUP.md) | Reference facts for setting up and deploying: accounts, environment variables, webhooks, smoke tests |
 | [CONTEXT.md](../CONTEXT.md) | Glossary. What a block, a run, a definition and a trigger mean here |
 | [delivery-gates.md](./delivery-gates.md) | How work is identified, verified, evidenced, closed, deployed and released |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | What a pull request needs before it can merge: setup, checks, changelog entry, conventions |
+| [SECURITY.md](../SECURITY.md) | How to report a vulnerability privately, and what is in scope |
+
+## Guides
+
+| Document | What it is for |
+|---|---|
+| [guides/build-your-software-factory.md](./guides/build-your-software-factory.md) | From a fresh deployment to two working lines (ticket to approved plan and PR, and PR rework), with the dashboard screen and MCP tool for each step |
 
 ## Architecture
 
