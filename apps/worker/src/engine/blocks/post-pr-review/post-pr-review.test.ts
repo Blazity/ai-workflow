@@ -115,7 +115,7 @@ describe("postPrReviewStep", () => {
       reviewResults: [{ decision: "approve", findings: [] }],
     });
 
-    expect(result.decision).toBe("approve");
+    expect(result).toMatchObject({ decision: "approve" });
     expect(mocks.publishConnectedRunOwnedPrReview).toHaveBeenCalledWith(
       expect.objectContaining({
         target: expect.objectContaining({ headSha: "fixed-head" }),

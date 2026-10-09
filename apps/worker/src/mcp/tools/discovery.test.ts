@@ -25,6 +25,7 @@ import {
   workflowDefinitions,
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
+  workflowSchedules,
 } from "../../db/schema.js";
 import { depsFor } from "../../test-support/mcp.js";
 import { registerDiscoveryTools } from "./discovery.js";
@@ -160,6 +161,7 @@ type ListedWorkflow = {
   definitionId: number;
   name: string;
   enabled: boolean;
+  armed: boolean;
   deployedVersion: number | null;
   deployedSchema: "v2" | "legacy-v1";
   retiredMessage?: string;
@@ -167,6 +169,7 @@ type ListedWorkflow = {
     triggerNodeId: string;
     triggerType: string;
     manuallyDispatchable: boolean;
+    armed: boolean;
   }>;
 };
 
@@ -214,6 +217,7 @@ describe("workflows.list", () => {
         definitionId,
         name: "Ticket workflow",
         enabled: true,
+        armed: true,
         deployedVersion: 1,
         deployedSchema: "v2",
         // Only the trigger node: an agent block is not something a dispatch can
@@ -223,6 +227,7 @@ describe("workflows.list", () => {
             triggerNodeId: "trigger-1",
             triggerType: "trigger_ticket_ai",
             manuallyDispatchable: true,
+            armed: true,
           },
         ],
       },
@@ -247,7 +252,7 @@ describe("workflows.list", () => {
 
     const workflows = workflowsOf(await listWorkflows());
 
-    expect(workflows[0]?.triggers).toEqual([
+    expect(workflows[0]?.triggers).toMatchObject([
       { triggerNodeId: "cron-1", triggerType: "trigger_schedule", manuallyDispatchable: false },
       { triggerNodeId: "hook-1", triggerType: "trigger_webhook", manuallyDispatchable: false },
       { triggerNodeId: "pr-1", triggerType: "trigger_pr_review", manuallyDispatchable: true },
@@ -274,6 +279,7 @@ describe("workflows.list", () => {
         triggerNodeId: "deployed-trigger",
         triggerType: "trigger_ticket_ai",
         manuallyDispatchable: true,
+        armed: true,
       },
     ]);
     expect(JSON.stringify(dataOf(result))).not.toContain("draft-trigger");
@@ -292,11 +298,75 @@ describe("workflows.list", () => {
         definitionId: expect.any(Number),
         name: "Never deployed",
         enabled: false,
+        armed: false,
         deployedVersion: null,
         deployedSchema: "v2",
         triggers: [],
       },
     ]);
+  });
+
+  // Production, 2026-09-25: eleven e2e fixtures read enabled: true here with
+  // nothing deployed, and disabling each one answered as if a schedule had been
+  // live. The stored switch is not the truth about what fires; armed is.
+  it("says an enabled definition with nothing deployed arms nothing", async () => {
+    await seedDefinition({
+      name: "[E2E] AIW-223 schedule dispatch 5e1f",
+      enabled: true,
+      versions: [{ version: 1, definition: graph([{ id: "trigger", type: "trigger_schedule" }]) }],
+    });
+
+    const [workflow] = workflowsOf(await listWorkflows());
+
+    expect(workflow).toMatchObject({ enabled: true, deployedVersion: null, armed: false, triggers: [] });
+  });
+
+  it("arms a schedule trigger only while its schedule row is live", async () => {
+    const live = await seedDefinition({
+      name: "Live schedule",
+      enabled: true,
+      versions: [{ version: 1, definition: graph([{ id: "cron", type: "trigger_schedule" }]) }],
+      deployedVersion: 1,
+    });
+    const paused = await seedDefinition({
+      name: "Paused schedule",
+      enabled: true,
+      versions: [{ version: 1, definition: graph([{ id: "cron", type: "trigger_schedule" }]) }],
+      deployedVersion: 1,
+    });
+    const unminted = await seedDefinition({
+      name: "No schedule row",
+      enabled: true,
+      versions: [{ version: 1, definition: graph([{ id: "cron", type: "trigger_schedule" }]) }],
+      deployedVersion: 1,
+    });
+    const disabled = await seedDefinition({
+      name: "Disabled schedule",
+      enabled: false,
+      versions: [{ version: 1, definition: graph([{ id: "cron", type: "trigger_schedule" }]) }],
+      deployedVersion: 1,
+    });
+    await db.insert(workflowSchedules).values([
+      { id: "sch_live", definitionId: live, nodeId: "cron", cron: "0 * * * *" },
+      {
+        id: "sch_paused",
+        definitionId: paused,
+        nodeId: "cron",
+        cron: "0 * * * *",
+        pausedAt: new Date("2026-09-24T00:00:00.000Z"),
+      },
+      { id: "sch_disabled", definitionId: disabled, nodeId: "cron", cron: "0 * * * *" },
+    ]);
+    void unminted;
+
+    const byName = Object.fromEntries(
+      workflowsOf(await listWorkflows()).map((workflow) => [workflow.name, workflow]),
+    );
+
+    expect(byName["Live schedule"]).toMatchObject({ armed: true, triggers: [{ armed: true }] });
+    expect(byName["Paused schedule"]).toMatchObject({ armed: false, triggers: [{ armed: false }] });
+    expect(byName["No schedule row"]).toMatchObject({ armed: false, triggers: [{ armed: false }] });
+    expect(byName["Disabled schedule"]).toMatchObject({ armed: false, triggers: [{ armed: false }] });
   });
 
   it("omits an archived definition", async () => {
@@ -369,7 +439,13 @@ describe("workflows.list", () => {
     expect(result.isError).not.toBe(true);
     expect(workflows[0]?.triggers).toEqual([]);
     expect(workflows[1]?.triggers).toEqual([
-      { triggerNodeId: "ok-1", triggerType: "trigger_ticket_ai", manuallyDispatchable: true },
+      {
+        triggerNodeId: "ok-1",
+        triggerType: "trigger_ticket_ai",
+        manuallyDispatchable: true,
+        // Seeded disabled, so nothing it lists fires on its own.
+        armed: false,
+      },
     ]);
   });
 
@@ -395,6 +471,8 @@ describe("workflows.list", () => {
         definitionId,
         name: "Retired workflow",
         enabled: true,
+        // Its stored switch is on, and nothing it has can fire.
+        armed: false,
         deployedVersion: 1,
         deployedSchema: "legacy-v1",
         retiredMessage: RETIRED_SCHEMA_MESSAGE,

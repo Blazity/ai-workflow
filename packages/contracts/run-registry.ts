@@ -198,11 +198,19 @@ export interface ThreadStore {
  * Null is not a member and never means "unknown failure": it means this failure
  * carries no code, which is true of every run that failed before this column
  * existed and of every failure nobody has given a code yet.
+ *
+ * One family is not a failure at all: `pull_request_moved_on.*` is the why of
+ * a pull request run that stopped because its pull request got a newer commit
+ * or was closed before the run reached it. Such a run ends "blocked", never
+ * "failed", and the code is how the engine and runs.diagnose tell it apart
+ * from a block that broke (engine/support/pull-request-moved-on.ts).
  */
 export const RUN_FAILURE_CODES = [
   "integration_unavailable.disconnected",
   "integration_unavailable.disabled",
   "integration_unavailable.reconfigured",
+  "pull_request_moved_on.new_commit",
+  "pull_request_moved_on.closed",
 ] as const;
 
 export type RunFailureCode = (typeof RUN_FAILURE_CODES)[number];

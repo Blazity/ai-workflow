@@ -1136,6 +1136,7 @@ describe("B. every read tool, over HTTP, on seeded data", () => {
         triggerNodeId: DEPLOYED_TRIGGER_NODE_ID,
         triggerType: "trigger_ticket_ai",
         manuallyDispatchable: true,
+        armed: true,
       },
     ]);
     // The definition seeded for the replay fixture has no deployed pointer, so
@@ -1403,6 +1404,10 @@ describe("C. a mutation, end to end", () => {
         triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
         triggerType: "trigger_ticket_ai",
         manuallyDispatchable: true,
+        // Nobody enabled this definition, so no real event reaches the trigger,
+        // the same answer publish gave as dormantTriggerNodeIds above. A manual
+        // dispatch still takes it.
+        armed: false,
       },
     ]);
 

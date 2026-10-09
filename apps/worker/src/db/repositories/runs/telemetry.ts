@@ -83,9 +83,12 @@ export interface RunUsage {
    * happens on deployments where the scheduled cron doesn't fire (and which
    * mis-reports a failed-but-returned run as "success" even when it does).
    * "blocked" (external cancellation) is written by the cancel path once it
-   * has torn the run down (markRunBlockedOnCancel), and by the cron otherwise.
+   * has torn the run down (markRunBlockedOnCancel), and by the cron otherwise;
+   * the workflow writes it itself only for a pull request run whose pull
+   * request moved on before the run reached it, which is a stop and not a
+   * failure (engine/support/pull-request-moved-on.ts).
    */
-  status: "success" | "failed" | "awaiting";
+  status: "success" | "failed" | "awaiting" | "blocked";
   /** Durable failure reason (execution error / budget stop) recorded with a
    * "failed" status so the dashboard can show why; null on other outcomes.
    * A bare sentence, or that sentence carrying the code a machine reads: one

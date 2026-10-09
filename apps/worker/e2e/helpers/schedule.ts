@@ -99,10 +99,14 @@ export interface SeededSchedule {
  * due occurrence more certainly "due" and never "stale"; it does not touch
  * the boundary those unit tests already own.
  */
+/** Every fixture this helper seeds is named with this prefix, which is how the
+ *  sweep below finds the ones an earlier run could not tear down. */
+const FIXTURE_NAME_PREFIX = "[E2E] AIW-223 schedule dispatch ";
+
 export async function seedDueScheduleDefinition(): Promise<SeededSchedule> {
   const { definition, nodeId, trigger } = readSnapshotDefinition();
   const suffix = randomBytes(4).toString("hex");
-  const name = `[E2E] AIW-223 schedule dispatch ${suffix}`;
+  const name = `${FIXTURE_NAME_PREFIX}${suffix}`;
   const actorId = "e2e";
   const actorLabel = "E2E schedule trigger test";
 
@@ -116,12 +120,9 @@ export async function seedDueScheduleDefinition(): Promise<SeededSchedule> {
     throw new Error("Failed to insert workflow_definitions row for e2e fixture");
   }
 
-  // From here on, a thrown error must remove the definition row already
-  // inserted above, the same defensive shape store.ts's own
-  // createWorkflowDefinition uses when its seed version fails to insert: an
-  // orphaned definition row (no version, deployed_version null) is harmless
-  // to the app but is still litter on a Neon branch shared with every other
-  // e2e test, and this function is the only place that knows it exists.
+  // From here on, a thrown error must retire the definition row already
+  // inserted above: it was inserted enabled, and this function is the only
+  // place that knows it exists.
   try {
     const scheduleId = `sch_e2e_${randomBytes(8).toString("hex")}`;
     await sql`
@@ -199,19 +200,25 @@ export async function getActiveRunBySubject(
 }
 
 /**
- * Cleanup in reverse foreign-key order:
- *   1. workflow_definitions.deployed_version is nulled first, because it is
- *      itself a foreign key into workflow_definition_versions and would
- *      otherwise block deleting the version row.
- *   2. the version row is deleted.
- *   3. the definition row is deleted, which cascades onto workflow_schedules
- *      and, from there, onto schedule_occurrences (both declared
- *      ON DELETE CASCADE in db/schema.ts).
- * The active_runs row is unrelated by foreign key (registry table, keyed by
- * subject_key) and is deleted separately.
+ * Teardown: disable, archive and revoke the fixture, in one statement, and fail
+ * loudly when that does not happen.
  *
- * Called from `afterAll`, including after a failed assertion, since this
- * suite runs against a Neon branch shared with every other e2e test.
+ * The rows are NOT deleted. Once the first poll starts a run, that run's replay
+ * observation and its occurrence reference the definition version through
+ * foreign keys (workflow_run_observations restricts the delete outright), so the
+ * version cannot go, and neither can the definition that owns it. The previous
+ * teardown nulled deployed_version first and then swallowed every failed delete,
+ * which left the definition ENABLED with nothing deployed behind it: eleven of
+ * those sat on production by 2026-09-25 (definitions 39 to 58), and disabling
+ * them answered as if a schedule had been live. Archived and disabled is the
+ * state a person retiring a workflow leaves behind, it keeps the run this suite
+ * started readable in the run history, and it takes the fixture off every list.
+ *
+ * One statement because production runs on neon-http, which cannot open a
+ * transaction: the three writes either all land or none does.
+ *
+ * Called from `afterAll`, including after a failed assertion, and from the
+ * seeding function when it fails halfway.
  */
 export async function cleanupSeededSchedule(
   seeded: Partial<SeededSchedule>,
@@ -222,14 +229,43 @@ export async function cleanupSeededSchedule(
     );
   }
   if (seeded.definitionId !== undefined) {
-    await sql`
-      UPDATE workflow_definitions SET deployed_version = NULL WHERE id = ${seeded.definitionId}
-    `.catch(() => {});
-    await sql`
-      DELETE FROM workflow_definition_versions WHERE definition_id = ${seeded.definitionId}
-    `.catch(() => {});
-    await sql`
-      DELETE FROM workflow_definitions WHERE id = ${seeded.definitionId}
-    `.catch(() => {});
+    await retireFixtureDefinitions(sql`id = ${seeded.definitionId}`);
   }
+}
+
+/**
+ * Retires fixtures an earlier run left behind: a runner killed mid-suite never
+ * reaches `afterAll`. Only fixtures older than an hour, so a suite started by
+ * hand beside the scheduled one is never pulled out from under itself.
+ */
+export async function sweepStaleScheduleFixtures(): Promise<void> {
+  await retireFixtureDefinitions(
+    sql`name LIKE ${`${FIXTURE_NAME_PREFIX}%`} AND created_at < now() - interval '1 hour'`,
+  );
+}
+
+async function retireFixtureDefinitions(
+  where: ReturnType<typeof sql>,
+): Promise<void> {
+  await sql`
+    WITH retired AS (
+      UPDATE workflow_definitions
+      SET enabled = false,
+          archived_at = coalesce(archived_at, now()),
+          updated_at = now()
+      WHERE archived_at IS NULL AND ${where}
+      RETURNING id
+    ), revoked AS (
+      UPDATE workflow_schedules
+      SET revoked_at = coalesce(revoked_at, now()), updated_at = now()
+      WHERE definition_id IN (SELECT id FROM retired)
+      RETURNING id
+    )
+    UPDATE schedule_occurrences
+    SET outcome = 'cancelled',
+        pending = false,
+        skip_reason = coalesce(skip_reason, 'schedule_revoked'),
+        updated_at = now()
+    WHERE pending = true AND schedule_id IN (SELECT id FROM revoked)
+  `;
 }

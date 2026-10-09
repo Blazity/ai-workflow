@@ -1,5 +1,9 @@
 import type { IntegrationConnectionPin, WorkflowPrCheckReference } from "@shared/contracts";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import {
+  isPullRequestMovedOnResult,
+  pullRequestMovedOnError,
+} from "../../support/pull-request-moved-on.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import {
   executionError,
@@ -92,8 +96,9 @@ export const execute: BlockExecuteFn = async (
         ? block.params.details
         : "";
   const refreshHead = block.params.refreshHead === true;
+  let completed: Awaited<ReturnType<typeof completePrCheckStep>>;
   try {
-    await completePrCheckStep({
+    completed = await completePrCheckStep({
       owner: {
         subjectKey: ctx.entry.subjectKey,
         ownerToken: ctx.entry.ownerToken,
@@ -106,10 +111,6 @@ export const execute: BlockExecuteFn = async (
       refreshHead,
       integrationPins: ctx.integrationPins,
     });
-    return {
-      kind: "next",
-      output: { status: "ok", check: reference, conclusion },
-    };
   } catch (error) {
     if (isRunControlError(error)) throw error;
     const diagnosticId = await recordCompletePrCheckFailure(
@@ -120,4 +121,17 @@ export const execute: BlockExecuteFn = async (
       { category: "provider", phase: "complete-pr-check" },
     );
   }
+  // The check was closed as superseded on the provider; the verdict belongs to
+  // a commit the pull request has left, so the run ends as moved on.
+  if (isPullRequestMovedOnResult(completed)) {
+    return pullRequestMovedOnError(completed.movedOn, {
+      pr: ctx.entry.pr,
+      definitionNodes: ctx.definitionNodes,
+      phase: "complete-pr-check",
+    });
+  }
+  return {
+    kind: "next",
+    output: { status: "ok", check: reference, conclusion },
+  };
 };

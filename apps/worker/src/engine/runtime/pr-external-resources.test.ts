@@ -15,7 +15,7 @@ import {
   completeRunOwnedPrCheck,
   createRunOwnedPrCheck,
   partitionReviewFindings,
-  publishRunOwnedPrReview,
+  publishRunOwnedPrReview as publishRunOwnedPrReviewOrMovedOn,
   reviewSummary,
   reconcilePendingPrChecks,
   reviewCommentContentHash,
@@ -53,6 +53,18 @@ vi.mock("../../infra/logger.js", () => ({ logger: mockLogger }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: mockAssertActiveRunOwner,
 }));
+
+/** The review as published. Every case below except the moved-on one expects a
+ *  publication, so a moved-on answer there is a failure of the case itself. */
+async function publishRunOwnedPrReview(
+  args: Parameters<typeof publishRunOwnedPrReviewOrMovedOn>[0],
+) {
+  const result = await publishRunOwnedPrReviewOrMovedOn(args);
+  if ("movedOn" in result) {
+    throw new Error(`Expected a publication, got moved on: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
 
 function gateStatusVcs() {
   return { createGateStatus: vi.fn(), updateGateStatus: mockUpdateGateStatus };
@@ -1029,6 +1041,59 @@ describe("terminal PR check settlement", () => {
     expect(pendingPrCheckIntent({ budgetMetric: "duration" })).toBe("timed_out");
   });
 
+  it.each([
+    [
+      "a newer commit",
+      { headSha: "newer-head", state: "open" },
+      { kind: "new_commit", headSha: "newer-head" },
+    ],
+    ["a closed pull request", { headSha: "head", state: "closed" }, { kind: "closed", state: "closed" }],
+  ] as const)(
+    "reports %s as moved on instead of failing, and creates nothing on the provider",
+    async (_label, head, movedOn) => {
+      // wrun_01M3B9X8SHGCE0KQK4YJ0F71VW: this used to throw, and the block turned
+      // the throw into "an external service could not complete this block".
+      const createGateStatus = vi.fn();
+      mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+      mockCreateRepositoryVCS.mockReset().mockReturnValue({
+        createGateStatus,
+        updateGateStatus: mockUpdateGateStatus,
+        getPRHead: vi.fn().mockResolvedValue({ ...head, baseRef: "main" }),
+      });
+      const db = await createTestDb();
+      await db.insert(workflowRuns).values({ runId: "run-moved-on" });
+
+      const result = await createRunOwnedPrCheck({
+        db,
+        owner: {
+          subjectKey: "pr:github:acme/app#7",
+          ownerToken: "owner-1",
+          runId: "run-moved-on",
+        },
+        target: {
+          subjectKey: "pr:github:acme/app#7",
+          provider: "github",
+          repoPath: "acme/app",
+          prNumber: 7,
+          headSha: "head",
+          baseRef: "main",
+        },
+        nodeId: "create-check",
+        attempt: 1,
+        activationScope: "root",
+        name: "AI Workflow / Review",
+      });
+
+      expect(result).toEqual({ movedOn });
+      expect(createGateStatus).not.toHaveBeenCalled();
+      const rows = await db
+        .select()
+        .from(workflowRunExternalChecks)
+        .where(eq(workflowRunExternalChecks.runId, "run-moved-on"));
+      expect(rows).toEqual([]);
+    },
+  );
+
   it("records no verdict when the check itself could not be created", async () => {
     // The placeholder written here is the sole guard that keeps a failed
     // creation out of the decided set closeRunPrChecks honours.
@@ -1272,6 +1337,71 @@ describe("PR check verdicts", () => {
       );
     },
   );
+
+  it("closes the check as superseded and reports the newer commit when the head moved before the verdict", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      ...gateStatusVcs(),
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "newer-head", state: "open", baseRef: "main" }),
+    });
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "verdict-moved-on" });
+    await db.insert(workflowRunExternalChecks).values({
+      id: "moved-on-check",
+      runId: "verdict-moved-on",
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:github:acme/app#7",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 7,
+      headSha: "head",
+      name: "AI Workflow / Review",
+      providerReference: { provider: "github", id: 13 } as never,
+      state: "pending",
+    });
+
+    const result = await completeRunOwnedPrCheck({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#7",
+        ownerToken: "owner-1",
+        runId: "verdict-moved-on",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        headSha: "head",
+        baseRef: "main",
+      },
+      reference: { id: "moved-on-check", headSha: "head", name: "AI Workflow / Review" },
+      conclusion: "success",
+      details: "The review concluded.",
+    });
+
+    expect(result).toEqual({ movedOn: { kind: "new_commit", headSha: "newer-head" } });
+    // The verdict for the old commit never reaches the provider; the check reads
+    // as cancelled with the superseded summary instead.
+    expect(mockUpdateGateStatus).toHaveBeenCalledOnce();
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 13 },
+      expect.objectContaining({
+        conclusion: "cancelled",
+        summary: "Superseded by a newer pull request commit.",
+      }),
+    );
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.id, "moved-on-check"));
+    expect(row!.conclusion).toBe("superseded");
+  });
 
   it("rebinds the check to the latest head after a fix push", async () => {
     mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
@@ -1797,7 +1927,7 @@ describe("PR review publication idempotency", () => {
     });
   }
 
-  function publish(
+  function publishOrMovedOn(
     db: Awaited<ReturnType<typeof createTestDb>>,
     args: {
       runId: string;
@@ -1806,7 +1936,7 @@ describe("PR review publication idempotency", () => {
       reviewResults: ReviewResult[];
     },
   ) {
-    return publishRunOwnedPrReview({
+    return publishRunOwnedPrReviewOrMovedOn({
       db,
       owner: {
         subjectKey: `pr:github:acme/app#${args.prNumber}`,
@@ -1826,6 +1956,14 @@ describe("PR review publication idempotency", () => {
       activationScope: "root",
       reviewResults: args.reviewResults,
     });
+  }
+
+  async function publish(...args: Parameters<typeof publishOrMovedOn>) {
+    const result = await publishOrMovedOn(...args);
+    if ("movedOn" in result) {
+      throw new Error(`Expected a publication, got moved on: ${JSON.stringify(result)}`);
+    }
+    return result;
   }
 
   // Nothing else in this file exercises the idempotency decision, and it is the
@@ -2188,14 +2326,16 @@ describe("PR review publication idempotency", () => {
       publishPRReview,
     });
 
+    // Reported as moved on, which the block turns into a stop rather than a
+    // provider failure.
     await expect(
-      publish(db, {
+      publishOrMovedOn(db, {
         runId: "run-stale-round",
         prNumber: 19,
         headSha: "head",
         reviewResults: [{ decision: "approve", findings: [] }],
       }),
-    ).rejects.toThrow(/changed before the review could be published/);
+    ).resolves.toEqual({ movedOn: { kind: "new_commit", headSha: "head-2" } });
 
     // Nothing reached the provider, so the newer round's summary text survives.
     expect(publishPRReview).not.toHaveBeenCalled();

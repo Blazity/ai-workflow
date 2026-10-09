@@ -1021,4 +1021,61 @@ describe("diagnoseRun", () => {
       expect(result.nextActions.join(" ")).not.toMatch(/ignore|wipe/i);
     });
   });
+
+  describe("a pull request run whose pull request moved on (wrun_01M3B9X8SHGCE0KQK4YJ0F71VW)", () => {
+    it("names the newer commit as the reason, from the code, and does not send anyone to a provider", () => {
+      const result = diagnoseRun({
+        workflowId: "wf_agent",
+        usageRecorded: true,
+        status: "blocked",
+        completedAt: "2026-09-25T03:32:49.109Z",
+        error: {
+          code: "AIW-DIAG-wrun_1-create-check-1",
+          message:
+            "Pull request acme/app#349 moved on to a newer commit (def4567) before this run finished, so the run stopped: nothing failed. The newer commit gets its own run.",
+        },
+        failureCode: "pull_request_moved_on.new_commit",
+        steps: [],
+      });
+      expect(result.category).toBe("pull_request_moved_on");
+      // The code is a recorded value, not the wording of a sentence.
+      expect(result.confidence).toBe("high");
+      expect(result.evidenceRefs).toContain("pull_request_moved_on.new_commit");
+      const actions = result.nextActions.join(" ");
+      expect(actions).toMatch(/nothing failed/i);
+      expect(actions).toMatch(/newer commit/i);
+      expect(actions).not.toMatch(/status page|retry the run|provider/i);
+    });
+
+    it("names the closing when the pull request was closed or merged", () => {
+      const result = diagnoseRun({
+        workflowId: "wf_agent",
+        usageRecorded: true,
+        status: "blocked",
+        error: {
+          message:
+            "Pull request acme/app#349 was closed before this run finished, so the run stopped: nothing failed and there is nothing left for it to do.",
+        },
+        failureCode: "pull_request_moved_on.closed",
+        steps: [],
+      });
+      expect(result.category).toBe("pull_request_moved_on");
+      expect(result.nextActions.join(" ")).toMatch(/closed or merged/i);
+      expect(result.nextActions.join(" ")).not.toMatch(/status page/i);
+    });
+
+    it("reads the trigger dispatcher's own stop of a superseded run the same way", () => {
+      // services/dispatch/dispatch-trigger.ts stops the previous run of a pull
+      // request when a newer commit arrives and records this sentence alone.
+      const result = diagnoseRun({
+        workflowId: "wf_agent",
+        usageRecorded: false,
+        status: "blocked",
+        error: { message: "Superseded by a newer pull request commit." },
+        steps: [],
+      });
+      expect(result.category).toBe("pull_request_moved_on");
+      expect(result.confidence).toBe("low");
+    });
+  });
 });

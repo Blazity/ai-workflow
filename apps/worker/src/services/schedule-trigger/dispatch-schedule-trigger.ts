@@ -144,6 +144,13 @@ interface RetiredHeadScheduleTarget {
   reason: string;
 }
 
+/** The node is no longer part of an enabled definition's deployed head, and
+ *  why, so the revocation can say so. */
+interface NotLiveScheduleTarget {
+  kind: "not-live";
+  reason: string;
+}
+
 interface RetiredPinnedScheduleTarget {
   kind: "retired-pinned";
   definitionVersion: number;
@@ -163,10 +170,10 @@ export interface ScheduleDispatchDeps {
   occurrences: ScheduleOccurrenceLedgerPort;
   schedules: ScheduleRowPort;
   /**
-   * Liveness, fail-closed: null means this schedule's node is no longer part of
-   * an enabled definition's deployed head and the row must be revoked. Injected
-   * rather than imported so this module does not depend on how definitions are
-   * stored.
+   * Liveness, fail-closed: "not-live" (or null, from a caller that cannot say
+   * why) means this schedule's node is no longer part of an enabled
+   * definition's deployed head and the row must be revoked. Injected rather
+   * than imported so this module does not depend on how definitions are stored.
    */
   resolveScheduleTarget(
     query: ScheduleTargetQuery,
@@ -174,6 +181,7 @@ export interface ScheduleDispatchDeps {
     | LiveScheduleTarget
     | RetiredHeadScheduleTarget
     | RetiredPinnedScheduleTarget
+    | NotLiveScheduleTarget
     | null
   >;
   /**
@@ -536,6 +544,37 @@ async function revokeAndCancelWaiting(
 }
 
 /**
+ * Revoke a schedule whose node is no longer live, and say why once.
+ *
+ * The row is revoked quietly otherwise, and a schedule that simply stops firing
+ * is indistinguishable from a scheduler that stopped running. The log is only
+ * written by the call that actually revoked, so a row the drain meets again
+ * after the evaluation revoked it does not log twice.
+ */
+async function revokeNotLive(
+  row: { id: string; definitionId: number; nodeId: string },
+  target: NotLiveScheduleTarget | null,
+  deps: ScheduleDispatchDeps,
+): Promise<void> {
+  const { revoked } = await deps.schedules.revokeAndCancelWaiting(
+    row.id,
+    deps.now(),
+    REVOKED_SCHEDULE_REASON,
+    false,
+  );
+  if (!revoked) return;
+  logger.info(
+    {
+      scheduleId: row.id,
+      definitionId: row.definitionId,
+      nodeId: row.nodeId,
+      reason: target?.reason ?? "not_live",
+    },
+    "schedule_revoked_not_live",
+  );
+}
+
+/**
  * The skip_reason a rate-limited occurrence carries. The ledger's outcome stays
  * skipped_overlap (its enum is a database check constraint, and "settled without
  * a run, not replayed" is exactly what this is), so the reason is what tells an
@@ -770,8 +809,8 @@ async function evaluateSchedule(
     nodeId: row.nodeId,
     definitionVersion: null,
   });
-  if (!target) {
-    await revokeAndCancelWaiting(row.id, deps, now);
+  if (!target || target.kind === "not-live") {
+    await revokeNotLive(row, target, deps);
     metrics.revoked += 1;
     return;
   }
@@ -1012,8 +1051,8 @@ export async function drainPendingScheduleOccurrences(
         nodeId: row.nodeId,
         definitionVersion: occurrence.definitionVersion,
       });
-      if (!target) {
-        await revokeAndCancelWaiting(row.id, deps, deps.now());
+      if (!target || target.kind === "not-live") {
+        await revokeNotLive(row, target, deps);
         metrics.revoked += 1;
         continue;
       }
