@@ -1,3 +1,0 @@
-- A ticket's notebook (its plan, the answers people gave in clarification rounds, and the notes for the next run) is now always kept in the built-in memory store, even when Mem0 serves facts and lessons, so the next run on the ticket reads it back exactly as it was written.
-- When an agent saves its notebook inside a repository checkout, the stored notebook still carries every answer given in the dashboard's clarification rounds.
-- With Mem0 connected, the memory screen and the memory MCP tools list, show and erase those notebooks beside what Mem0 holds.

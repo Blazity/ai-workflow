@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "id": "d62ec856-8019-4fd7-95c4-8680f54f9a30",
+      "memory": "Probe fact: the API listens on port 3000.",
+      "user_id": "aiw-probe-mugqd323-a",
+      "agent_id": "facts",
+      "app_id": "ai-workflow-probe",
+      "run_id": null,
+      "score": 0.3324,
+      "score_breakdown": {
+        "semantic": 0.831,
+        "bm25": 0,
+        "entity": 0
+      },
+      "metadata": {
+        "runId": "r1",
+        "origin": "learned",
+        "ticketKey": "T-1"
+      },
+      "categories": [
+        "technology"
+      ],
+      "created_at": "2026-09-25T09:00:27.202294+00:00",
+      "updated_at": "2026-09-25T09:00:28.496883+00:00",
+      "expiration_date": null
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+Source URL: https://api.mem0.ai/v3/memories/search/
+What it is: Mem0's live answer (200) to POST /v3/memories/search/: a search with threshold 0 and top_k 1000 over the scope of one memory: its score in [0, 1] and timestamps to the microsecond in UTC.
+How these bytes were made: The response body of one call made by integrations/mem0/live-probe.ts (run aiw-probe-mugqd323, step add-mutable-searchable) against the hosted platform, under app_id ai-workflow-probe and user_ids starting with aiw-probe-, all deleted by the same run. Parsed and written with two-space indentation; nothing else changed. The API key is in no body.
+Retrieved: 2026-09-25
+SHA-256: c1d95ccbe1e3b65defe655cae6e506ecc8bd24ce4017fe61d4fd462ee1cc87d1

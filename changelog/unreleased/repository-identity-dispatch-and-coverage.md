@@ -1,2 +1,0 @@
-- Running a workflow manually from a pull request URL now starts the run under the repository name as GitHub or GitLab spells it, whatever letter case the URL was typed in, so the Fix agent recognises and pushes to the pull request its workflow opened.
-- The Run scripts block counts a repository in `uncoveredGroupCount` only when the run's workspace holds it, and the run replay says why each repository was not entered: not in the run's workspace, unchanged by the run, or not reached before the run stopped.

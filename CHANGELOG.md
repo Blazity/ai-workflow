@@ -5,6 +5,58 @@ Entries are written in the pull request that ships the change and collected
 automatically from `changelog/unreleased/` once a day into a numbered release
 (`vYYYY.MM.N`), also published as a GitHub Release; see `changelog/README.md`.
 
+## v2026.09.2 (2026-09-25)
+
+### Dashboard
+
+_Five changes in this area._
+
+- The editor puts the open workflow in the address bar at once, and a declined Back keeps the workflow on screen, so a reload or a copied link opens the same one.
+- On a phone, nested values in the Logs tab go under their key instead of squeezing into narrow columns.
+- The dashboard says "Integrations changed elsewhere" only when an integration really changed while you had unsaved work, and the Overview's p95 tile now reads as the p95 of successful runs, showing N/A when none succeeded.
+- The workflow editor keeps Deploy off when the saved draft is already live and says why on every screen size, validation messages name blocks by the names you gave them, integration settings show the non-secret values the environment sets (such as the Jira site and project), and the Overview names the providers a workflow's runs actually used.
+- The p95 column in the Overview's workflow table counts successful runs only, as the p95 tile above it does. A workflow whose runs failed shows no p95 instead of the failures' duration.
+
+### Runs and workflows
+
+_Nine changes in this area._
+
+- A pull request is one subject whatever letter case its repository is spelled in: a run started from a pasted URL and one started by the provider's webhook share one concurrency claim, one work scope record, one auto-fix budget and one published review per head, and existing records of the same pull request are merged into one.
+- The MCP tools `work_scope.get`, `work_scope.edit` and `tickets.list_runs`, the work scope pages of the dashboard API and the dashboard's ticket page read and write a ticket's real record when its key is typed in another letter case, such as `ticket:jira:awp-281` for `AWP-281`.
+- Publishing a harness profile no longer fails with "Refresh Harness capabilities before publishing this profile" for part of every half hour. The model catalog it checks now stays current between two scheduled refreshes, and past one missed refresh.
+- Running a workflow manually from a pull request URL now starts the run under the repository name as GitHub or GitLab spells it, whatever letter case the URL was typed in, so the Fix agent recognises and pushes to the pull request its workflow opened.
+- The Run scripts block counts a repository in `uncoveredGroupCount` only when the run's workspace holds it, and the run replay says why each repository was not entered: not in the run's workspace, unchanged by the run, or not reached before the run stopped.
+- The Slack message for a run someone stopped by moving its ticket now reads the same sentence as the Jira comment, and `runs.diagnose` recognises a run stopped because its ticket was moved to review before anything was published (`ticket_moved_to_review_early`). Provider account causes are read only from the provider's own error output, never from what the agent printed.
+- A ticket's notebook (its plan, the answers people gave in clarification rounds, and the notes for the next run) is now always kept in the built-in memory store, even when Mem0 serves facts and lessons, so the next run on the ticket reads it back exactly as it was written.
+- When an agent saves its notebook inside a repository checkout, the stored notebook still carries every answer given in the dashboard's clarification rounds.
+- With Mem0 connected, the memory screen and the memory MCP tools list, show and erase those notebooks beside what Mem0 holds.
+
+### Integrations
+
+_Two changes in this area._
+
+- Agents read a Jira description the way it looks in Jira: a sentence with bold text, a link, a mention or a date stays one line, links keep their address, lists, tables and code blocks keep their shape, and the acceptance criteria end where their section ends. Planning an epic now lists its child issues beside its subtasks and links, and repository selection reads the titles of the tickets under a ticket, so a repository named only in a subtask is opened.
+- The MCP `tickets.get` tool returns a ticket's related tickets (parent, subtasks, an epic's child issues and links). The run briefing of an implementation agent says that the plan stands in for the ticket description, and an implementation agent that runs without a plan receives the description.
+
+### MCP
+
+_Eight changes in this area._
+
+- Admins can remove a stored setting, like owners: with "Remove stored value" on the dashboard Settings page, and through the MCP `settings.reset` tool.
+- Admins can activate the repository catalog through the MCP `repositories.activate` tool, as they already could on the dashboard Repositories page. Activation still cannot be undone, and the tool still takes the digest from `repositories.activate_preview`.
+- MCP clients can archive a workflow with `workflows.archive`, which is what Delete does in the dashboard's workflow editor, and bring it back with `workflows.unarchive`, disabled and with every version, its draft and its deployed version as they were.
+- MCP clients can work the plan approvals queue like the dashboard's Approvals page: `approvals.list` shows the plans waiting, `approvals.get` reads one in full, and `approvals.approve` and `approvals.reject` decide it, open to the same owners and admins as the dashboard.
+- MCP authoring keeps what the editor keeps: `workflows.save_draft` stores the node positions it is sent and `workflows.get_graph` returns them, a graph with no layout opens in the dashboard editor laid out, `blocks.get` gives each block's configuration schema, and `profiles.list` names each profile's provider and model and the pin an agent block takes to run it.
+- MCP answers are smaller and say what to do next: `blocks.list` is a one-line summary per block with `group` and `integration` filters, `repositories.import_preview` pages and filters, and a refused ticket, dispatch, setting or workflow save names the tracker's own reason, the accepted values or the tool to call instead.
+- New MCP tools for harness profiles: `profiles.list` and `profiles.get` show which skills a profile pins and which workflows pin the profile, `profiles.refresh_skill` points a pinned skill at the version its source holds now, and `profiles.publish` publishes the profile's draft, the same actions as on the dashboard.
+- The MCP `tickets.get` tool returns a ticket's newest comments when it has more than the limit, and the MCP server tells a connecting client how results, errors and idempotency keys work. The built-in research, implementation and review prompts point agents at the ticket and plan below them, and planning asks every open question in one round.
+
+### Other
+
+_One change in this area._
+
+- A ticket restarted after its branch was deleted gets one comment naming the deleted branch, not one per run (planning and implementation used to post it twice).
+
 ## v2026.09.1 (2026-09-23)
 
 ### Dashboard

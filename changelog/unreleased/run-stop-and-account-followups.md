@@ -1,1 +1,0 @@
-- The Slack message for a run someone stopped by moving its ticket now reads the same sentence as the Jira comment, and `runs.diagnose` recognises a run stopped because its ticket was moved to review before anything was published (`ticket_moved_to_review_early`). Provider account causes are read only from the provider's own error output, never from what the agent printed.

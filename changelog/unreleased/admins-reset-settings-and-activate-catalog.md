@@ -1,2 +1,0 @@
-- Admins can remove a stored setting, like owners: with "Remove stored value" on the dashboard Settings page, and through the MCP `settings.reset` tool.
-- Admins can activate the repository catalog through the MCP `repositories.activate` tool, as they already could on the dashboard Repositories page. Activation still cannot be undone, and the tool still takes the digest from `repositories.activate_preview`.
