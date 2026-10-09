@@ -1785,6 +1785,52 @@ describe("JiraAdapter", () => {
     });
   });
 
+  // Jira Cloud names a system status in the language of the account calling
+  // it, and reads the request's Accept-Language over that only when
+  // X-Force-Accept-Language is "true" (REST v3 intro, "Special headers"). The
+  // production bot answered in Chinese ("待办" for To Do), which reached the
+  // dashboard, MCP and the model's prompt; this fake Jira answers the same way.
+  describe("status names", () => {
+    function answersInTheCallersLanguage(body: (toDo: string) => unknown) {
+      mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        const english =
+          headers.get("X-Force-Accept-Language") === "true" &&
+          /^en\b/i.test(headers.get("Accept-Language") ?? "");
+        return { ok: true, status: 200, json: async () => body(english ? "To Do" : "待办") };
+      });
+    }
+
+    it("reads a ticket's status in English whatever language the connected account uses", async () => {
+      answersInTheCallersLanguage((toDo) => ({
+        id: "10001",
+        key: "PROJ-1",
+        fields: {
+          summary: "Add login page",
+          description: null,
+          comment: { comments: [], total: 0 },
+          labels: [],
+          status: { id: "11414", name: toDo },
+          attachment: [],
+        },
+      }));
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.trackerStatus).toBe("To Do");
+    });
+
+    it("lists the project's statuses in English", async () => {
+      answersInTheCallersLanguage((toDo) => [
+        { id: "10001", name: "Task", statuses: [{ id: "11414", name: toDo }] },
+      ]);
+
+      await expect(jiraAdapter().listStatuses()).resolves.toEqual([
+        { id: "11414", name: "To Do" },
+      ]);
+    });
+  });
+
   describe("moveTicket", () => {
     it("fetches transitions then posts the matching one", async () => {
       mockFetch

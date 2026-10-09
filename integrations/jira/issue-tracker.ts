@@ -224,6 +224,14 @@ export class JiraAdapter implements IssueTrackerAdapter {
       headers: {
         Authorization: this.authHeader,
         "Content-Type": "application/json",
+        // Jira names system statuses ("To Do", "Done") in the calling
+        // account's language, and an account with none set gets whatever it
+        // makes of Node's `Accept-Language: *`: the bot read Chinese. Status
+        // names reach the dashboard, MCP and the model's prompt, and settings
+        // name columns in English, so ask for English and make Jira honour
+        // the ask over the account's own preference.
+        "Accept-Language": "en",
+        "X-Force-Accept-Language": "true",
         ...options?.headers,
       },
     });
