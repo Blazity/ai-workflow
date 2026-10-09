@@ -1,0 +1,5 @@
+Source URL: https://api.mem0.ai/v3/memories/add/
+What it is: Mem0's live answer (200) to POST /v3/memories/add/: a Direct Import (infer false) of three texts into a scope already holding the second one: SUCCEEDED, one result per message in order, and the exact repeat answered with the id of the memory already holding it rather than a new one.
+How these bytes were made: The response body of one call made by integrations/mem0/live-probe.ts (run aiw-probe-mugqd323, step add-multi-with-repeat) against the hosted platform, under app_id ai-workflow-probe and user_ids starting with aiw-probe-, all deleted by the same run. Parsed and written with two-space indentation; nothing else changed. The API key is in no body.
+Retrieved: 2026-09-25
+SHA-256: 0fd4fd95174c250eeee276377067c68be279e85882da9e2ab3f2e16c2ad97d43
