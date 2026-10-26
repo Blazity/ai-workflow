@@ -1,0 +1,4 @@
+Source URL: https://api.linear.app/graphql
+What it is: A Linear team workflow states and labels response recorded from live workspace.
+Retrieved: 2026-10-21
+SHA-256: 0515ce46e563de8a967034b851336ef9dd5513d5a2991918af1cd2217264626a

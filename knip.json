@@ -4,6 +4,7 @@
     "**/*.generated.ts",
     "apps/dashboard/.next/**",
     "apps/worker/.output/**",
+    "apps/worker/e2e/scripts/**",
     "apps/worker/src/mcp/contracts/mcp-contract.json",
     "apps/worker/src/sandbox/agents/fixtures/**",
     "apps/worker/workflow-test-fixtures/**"

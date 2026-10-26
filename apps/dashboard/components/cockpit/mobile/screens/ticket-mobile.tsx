@@ -82,7 +82,12 @@ export function TicketMobileScreen({
           a repository question went before answering in Jira. This is the
           ticket's own view, with no run selected, so a waiting question opens
           it; the runs list is right below. */}
-      <RepositoriesPanel ticketKey={ticketKey} autoOpen />
+      <RepositoriesPanel
+        ticketKey={ticketKey}
+        subjectKey={shownData.subjectKey ?? undefined}
+        trackerId={shownData.trackerId ?? undefined}
+        autoOpen
+      />
 
       <div className="flex flex-col gap-2.5">
         {runs.length === 0 && (

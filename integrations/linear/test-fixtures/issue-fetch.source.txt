@@ -1,0 +1,4 @@
+Source URL: https://api.linear.app/graphql
+What it is: A Linear issue query response recorded from live workspace.
+Retrieved: 2026-10-21
+SHA-256: 32ba1339efed06252b757f20fd187e5765335f373ee20fc28cc60d6aabe5a7f1

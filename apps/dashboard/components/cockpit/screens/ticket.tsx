@@ -59,7 +59,14 @@ export function TicketScreen({
   });
   const title = ticket?.title || ticketKey;
 
-  const { select, pendingRun, urlRun } = useTicketSelection();
+  const { select, pendingRun, urlRun, setTicketIdentity } = useTicketSelection();
+  useEffect(() => {
+    setTicketIdentity({
+      subjectKey: shownData.subjectKey ?? null,
+      trackerId: shownData.trackerId ?? null,
+    });
+  }, [shownData.subjectKey, shownData.trackerId, setTicketIdentity]);
+
   // Default to the newest run (runs[0]), mirrors pickSelectedRunId, which the
   // detail panel uses when `?run=` is absent, so the rail highlight matches what
   // the trace shows.

@@ -25,6 +25,7 @@ import {
 } from "@/lib/cockpit/navigation";
 import { useIntegrationChangeRefresh } from "@/lib/integrations/change-signal";
 import { integrationsFingerprint } from "@/lib/integrations/fingerprint";
+import { integrationsProviding } from "@integrations/registry";
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
 import {
@@ -46,6 +47,22 @@ function withoutKey(
   const next = { ...current };
   delete next[key];
   return next;
+}
+
+const ISSUE_TRACKER_IDS = new Set(
+  integrationsProviding("issue_tracker").map((manifest) => manifest.id),
+);
+
+function resolveActiveIssueTrackerId(
+  integrations: readonly CockpitIntegration[] | undefined,
+): string | undefined {
+  if (!integrations || integrations.length === 0) return undefined;
+  const trackers = integrations.filter((item) => ISSUE_TRACKER_IDS.has(item.id));
+  const usable = trackers.filter((item) => item.usable);
+  if (usable.length === 1) return usable[0]!.id;
+  const configured = trackers.filter((item) => item.status !== "not_connected");
+  if (configured.length === 1) return configured[0]!.id;
+  return undefined;
 }
 
 /**
@@ -284,6 +301,7 @@ export function CockpitShell({
         liveCycleMs,
         runRefreshCadence,
         registerRunRefresh,
+        issueTrackerId: resolveActiveIssueTrackerId(integrations),
       }}
     >
       <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">

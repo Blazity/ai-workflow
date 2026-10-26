@@ -1,0 +1,4 @@
+Source URL: https://api.linear.app/graphql
+What it is: A Linear webhook delivery for an Issue update with stateId status change, recorded from live workspace.
+Retrieved: 2026-10-21
+SHA-256: 3598f1f3b472223a39a7a2e693f0649f734e9d94a9499ba3967f61ba253ab764

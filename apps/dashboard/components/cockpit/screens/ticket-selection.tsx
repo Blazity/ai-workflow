@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -18,6 +19,12 @@ import { MobileBackToRuns } from "@/components/cockpit/mobile/screens/ticket-mob
 interface TicketSelection {
   /** The ticket whose runs the rail lists. */
   ticketKey: string;
+  /** Provider-qualified subject key for the ticket, when resolved. */
+  subjectKey?: string | null;
+  /** Issue tracker integration id that owns this ticket, when known. */
+  trackerId?: string | null;
+  /** Updates the resolved ticket identity from the ticket runs payload. */
+  setTicketIdentity: (identity: { subjectKey?: string | null; trackerId?: string | null }) => void;
   /** Run the user just clicked, shown active immediately, before the URL commits. */
   pendingRun: string | null;
   /** The committed `?run=` from the URL. */
@@ -39,21 +46,45 @@ const Ctx = createContext<TicketSelection | null>(null);
  * screen and won't reliably surface the boundary's fallback on a `?run=` change.
  */
 export function TicketSelectionProvider({
-  ticketKey,
-  children,
-}: {
+                                          ticketKey,
+                                          subjectKey: initialSubjectKey = null,
+                                          trackerId: initialTrackerId = null,
+                                          children,
+                                        }: {
   ticketKey: string;
+  subjectKey?: string | null;
+  trackerId?: string | null;
   children: ReactNode;
 }) {
   const router = useRouter();
   const urlRun = useSearchParams().get("run");
   const [pendingRun, setPendingRun] = useState<string | null>(null);
+  const [identity, setIdentity] = useState<{ subjectKey?: string | null; trackerId?: string | null }>({
+    subjectKey: initialSubjectKey,
+    trackerId: initialTrackerId,
+  });
   const [isPending, startTransition] = useTransition();
 
   // Drop the optimistic highlight once the URL commits to it.
   useEffect(() => {
     setPendingRun(null);
   }, [urlRun]);
+
+  useEffect(() => {
+    setIdentity({ subjectKey: initialSubjectKey, trackerId: initialTrackerId });
+  }, [ticketKey, initialSubjectKey, initialTrackerId]);
+
+  const setTicketIdentity = useCallback(
+    (next: { subjectKey?: string | null; trackerId?: string | null }) => {
+      setIdentity((current) => {
+        if (current.subjectKey === next.subjectKey && current.trackerId === next.trackerId) {
+          return current;
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const select = (runId: string) => {
     setPendingRun(runId);
@@ -65,7 +96,18 @@ export function TicketSelectionProvider({
   };
 
   return (
-    <Ctx.Provider value={{ ticketKey, pendingRun, urlRun, isPending, select }}>
+    <Ctx.Provider
+      value={{
+        ticketKey,
+        subjectKey: identity.subjectKey ?? initialSubjectKey,
+        trackerId: identity.trackerId ?? initialTrackerId,
+        setTicketIdentity,
+        pendingRun,
+        urlRun,
+        isPending,
+        select,
+      }}
+    >
       {children}
     </Ctx.Provider>
   );
@@ -97,7 +139,7 @@ export function useTicketSelection(): TicketSelection {
  * skeleton normally.
  */
 export function DetailArea({ children }: { children: ReactNode }) {
-  const { isPending, ticketKey, urlRun } = useTicketSelection();
+  const { isPending, ticketKey, subjectKey, trackerId, urlRun } = useTicketSelection();
   // With no run named, this column is the desktop's alone: a phone shows the
   // runs list instead, and this one sits behind `display: none`. It used to
   // load the newest run's trace there and poll it every five seconds for as
@@ -125,7 +167,12 @@ export function DetailArea({ children }: { children: ReactNode }) {
             and the record is what they consult about it. It only opens itself
             when the URL names no run, because a link to a run is a person
             asking for that run rather than for the record. */}
-        <RepositoriesPanel ticketKey={ticketKey} autoOpen={urlRun === null} />
+        <RepositoriesPanel
+          ticketKey={ticketKey}
+          subjectKey={subjectKey ?? undefined}
+          trackerId={trackerId ?? undefined}
+          autoOpen={urlRun === null}
+        />
       </div>
       {isPending && (
         <div className="absolute inset-0 overflow-hidden bg-app-bg p-4 lg:p-6">

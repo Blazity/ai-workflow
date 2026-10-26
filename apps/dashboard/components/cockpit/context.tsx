@@ -82,6 +82,8 @@ export interface CockpitCtxValue {
   runRefreshCadence: RunRefreshCadence;
   /** Register how often a mounted run surface needs to be refreshed. */
   registerRunRefresh: (key: string, cadence: RunRefreshCadence) => () => void;
+  /** The id of the active issue_tracker integration on this deployment, when known. */
+  issueTrackerId?: string;
 }
 
 export const CockpitCtx = createContext<CockpitCtxValue>({

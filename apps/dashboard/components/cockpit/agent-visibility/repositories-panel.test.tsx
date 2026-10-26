@@ -44,10 +44,13 @@ test.before(async () => {
   store = await buildFixtureStore();
 });
 
+const FIXTURE_TRACKER = FIXTURE_SUBJECT.split(":")[1]!;
+
 function render(
   t: TestContext,
   options: {
     ticketKey?: string;
+    trackerId?: string | null;
     fail?: { pattern: RegExp; status: number };
     /** An older worker: the record comes back without its rounds. */
     withoutRounds?: boolean;
@@ -112,7 +115,11 @@ function render(
   let renderer!: ReturnType<typeof create>;
   act(() => {
     renderer = create(
-      <RepositoriesPanel ticketKey={options.ticketKey ?? FIXTURE_TICKET} autoOpen={options.autoOpen ?? true} />,
+      <RepositoriesPanel
+        ticketKey={options.ticketKey ?? FIXTURE_TICKET}
+        trackerId={options.trackerId === null ? undefined : (options.trackerId ?? FIXTURE_TRACKER)}
+        autoOpen={options.autoOpen ?? true}
+      />,
     );
   });
   t.after(() => {
@@ -188,7 +195,7 @@ async function openRound(root: ReactTestInstance, fragment: string) {
 test("a ticket's record is read under the subject key the worker writes", async (t) => {
   const harness = render(t, { ticketKey: "awp-235" });
   await settle();
-  assert.equal(panelTicketSubjectKey("awp-235"), "ticket:jira:AWP-235");
+  assert.equal(panelTicketSubjectKey("awp-235", FIXTURE_TRACKER), "ticket:jira:AWP-235");
   assert.ok(
     harness.requests[0]?.includes(`subjectKey=${encodeURIComponent("ticket:jira:AWP-235")}`),
     `asked for ${harness.requests[0]}`,
@@ -196,6 +203,16 @@ test("a ticket's record is read under the subject key the worker writes", async 
   // Rounds are opt-in on the worker, and this panel is the caller that wants
   // them: without the opt-in the record comes back without a single question.
   assert.ok(harness.requests[0]?.includes("rounds=true"), `asked for ${harness.requests[0]}`);
+});
+
+test("shows an unavailable notice and makes no request when the tracker cannot be determined", async (t) => {
+  const harness = render(t, { ticketKey: "awp-235", trackerId: null });
+  await settle();
+  assert.deepEqual(harness.requests, []);
+  assert.match(text(harness.root), /unavailable/);
+  act(() => buttons(harness.root, "Repositories")[0]!.props.onClick());
+  await settle();
+  assert.match(text(harness.root), /The issue tracker for this ticket could not be determined/);
 });
 
 test("a question still waiting opens the panel and says so in its header", async (t) => {
@@ -342,8 +359,8 @@ test("only the twin a person can see reads the record", async (t) => {
   act(() => {
     renderer = create(
       <>
-        <RepositoriesPanel ticketKey={FIXTURE_TICKET} autoOpen />
-        <RepositoriesPanel ticketKey={FIXTURE_TICKET} autoOpen />
+        <RepositoriesPanel ticketKey={FIXTURE_TICKET} trackerId={FIXTURE_TRACKER} autoOpen />
+        <RepositoriesPanel ticketKey={FIXTURE_TICKET} trackerId={FIXTURE_TRACKER} autoOpen />
       </>,
       {
         createNodeMock: (element) => {

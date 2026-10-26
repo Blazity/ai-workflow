@@ -120,6 +120,10 @@ export interface TicketRunsResponse {
   generatedAt: string;
   available: boolean;
   ticket: { key: string; title: string; url: string } | null;
+  /** Provider-qualified subject key for the ticket, when resolved by the worker. */
+  subjectKey?: string | null;
+  /** Issue tracker integration id that owns this ticket, when known. */
+  trackerId?: string | null;
   runs: Run[];
   totals: {
     cost: number;
@@ -128,7 +132,6 @@ export interface TicketRunsResponse {
     counts: { success: number; running: number; awaiting: number; failed: number; blocked: number };
   };
 }
-
 export interface RunDetailResponse {
   generatedAt: string;
   /** `false` when the run can't be read (worker/world unavailable or unknown id). */

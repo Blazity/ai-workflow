@@ -1,0 +1,4 @@
+Source URL: https://api.linear.app/graphql
+What it is: A Linear issueLabelCreate and issueCreate mutation response recorded from live workspace.
+Retrieved: 2026-10-21
+SHA-256: 86c2c02c99d718e7627a3e3f6dd45ad902d59dfb989569cd584a00483ca83628

@@ -1,0 +1,4 @@
+Source URL: https://api.linear.app/graphql
+What it is: A Linear GraphQL viewer, organization and IssueRelationType enum response recorded from live workspace.
+Retrieved: 2026-10-21
+SHA-256: e31e7cf2ca6cdeed59f80787469410680f1bcd6245f26f03f509a2376986a6ef

@@ -1,7 +1,7 @@
-import { and, count, eq, sql, type SQL } from "drizzle-orm";
+import { and, count, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { RunPullRequest } from "@shared/contracts";
 import { getDb, type Db } from "../../client.js";
-import { workflowRuns } from "../../schema.js";
+import { workScopes, workflowRuns } from "../../schema.js";
 import { runWorkflowLabel } from "./workflow-label.js";
 
 export interface DashboardRunRow {
@@ -143,7 +143,29 @@ export function listTicketRunRows(db: Db, ticketKey: string): Promise<DashboardR
     .where(eq(workflowRuns.ticketKey, ticketKey)).orderBy(sql`${effectiveTime()} desc`);
 }
 
-export const connectedDashboardRunQueries = {
+async function findTicketWorkScopeSubjectKey(
+  db: Db,
+  candidateSubjectKeys: readonly string[],
+): Promise<string | null> {
+  if (candidateSubjectKeys.length === 0) return null;
+  const rows = await db
+    .select({ subjectKey: workScopes.subjectKey })
+    .from(workScopes)
+    .where(inArray(workScopes.subjectKey, [...candidateSubjectKeys]))
+    .limit(1);
+  return rows[0]?.subjectKey ?? null;
+}
+
+export const connectedDashboardRunQueries: {
+  listRuns: (input: Parameters<typeof listDashboardRunRows>[1]) => Promise<DashboardRunRow[]>;
+  countRuns: (input: Parameters<typeof countDashboardRunRowsByStatus>[1]) => ReturnType<typeof countDashboardRunRowsByStatus>;
+  listKpis: (cutoff: Date | null) => ReturnType<typeof listRunKpiRows>;
+  listWorkflowRows: (cutoff: Date | null) => ReturnType<typeof listWorkflowAggregateRows>;
+  listLatestWorkflowRows: () => ReturnType<typeof listLatestWorkflowRunRows>;
+  listCosts: (cutoff: Date | null) => ReturnType<typeof listCostAggregateRows>;
+  listTicketRuns: (ticketKey: string) => Promise<DashboardRunRow[]>;
+  findTicketWorkScopeSubjectKey?: (candidateSubjectKeys: readonly string[]) => Promise<string | null>;
+} = {
   listRuns: (input: Parameters<typeof listDashboardRunRows>[1]) => listDashboardRunRows(getDb(), input),
   countRuns: (input: Parameters<typeof countDashboardRunRowsByStatus>[1]) => countDashboardRunRowsByStatus(getDb(), input),
   listKpis: (cutoff: Date | null) => listRunKpiRows(getDb(), cutoff),
@@ -151,4 +173,6 @@ export const connectedDashboardRunQueries = {
   listLatestWorkflowRows: () => listLatestWorkflowRunRows(getDb()),
   listCosts: (cutoff: Date | null) => listCostAggregateRows(getDb(), cutoff),
   listTicketRuns: (ticketKey: string) => listTicketRunRows(getDb(), ticketKey),
+  findTicketWorkScopeSubjectKey: (candidateSubjectKeys: readonly string[]) =>
+    findTicketWorkScopeSubjectKey(getDb(), candidateSubjectKeys),
 };

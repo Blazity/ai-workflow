@@ -1,0 +1,1 @@
+- Linear is now supported as an issue tracker integration, allowing workflows to watch teams, read and comment on issues, and move them between workflow states.

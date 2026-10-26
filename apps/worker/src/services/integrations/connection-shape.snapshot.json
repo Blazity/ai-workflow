@@ -227,6 +227,65 @@
     ]
   },
   {
+    "integration": "linear",
+    "fields": [
+      {
+        "key": "aiReviewTransitionId",
+        "env": "LINEAR_AI_REVIEW_STATE_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "aiTransitionId",
+        "env": "LINEAR_AI_STATE_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "apiToken",
+        "env": "LINEAR_API_TOKEN",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "backlogTransitionId",
+        "env": "LINEAR_BACKLOG_STATE_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "projectKey",
+        "env": "LINEAR_TEAM_KEY",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "webhookSecret",
+        "env": "LINEAR_WEBHOOK_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "mem0",
     "fields": [
       {

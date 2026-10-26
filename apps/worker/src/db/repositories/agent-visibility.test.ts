@@ -297,6 +297,8 @@ describe("deleteExpiredAgentBriefings", () => {
     const living = await recordPass(2, "wrun_other");
     const shared = expiring.texts.find((entry) => living.texts.some((other) => other.sha256 === entry.sha256))!;
     expect(shared).toBeDefined();
+    await db.execute(sql`UPDATE agent_briefings SET created_at = ${CAPTURED_AT}`);
+    await db.execute(sql`UPDATE agent_briefing_texts SET last_referenced_at = ${CAPTURED_AT}`);
 
     const swept = await deleteExpiredAgentBriefings({
       db,

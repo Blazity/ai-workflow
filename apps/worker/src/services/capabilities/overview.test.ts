@@ -191,7 +191,7 @@ describe("the overview this deployment reads", () => {
     const rows = new Map(response.capabilities.map((row) => [row.id, row]));
 
     expect(rows.get("memory")?.serving).toEqual({ kind: "builtin", name: "Built-in memory" });
-    expect(rows.get("issue_tracker")?.declaredBy).toEqual(["jira"]);
+    expect(rows.get("issue_tracker")?.declaredBy).toEqual(["jira", "linear"]);
     expect(rows.get("vcs")?.declaredBy).toEqual(["github", "gitlab"]);
   });
 });
