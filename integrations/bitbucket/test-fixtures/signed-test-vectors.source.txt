@@ -1,0 +1,10 @@
+Source URL: https://support.atlassian.com/bitbucket-cloud/docs/manage-webhooks/
+Pinned revision: none published (support.atlassian.com serves no revision); the page as fetched
+that day had SHA-256 b29332a3e296e985f15dcd02b7dded4620b47cc7fdc09b7ce74d908df27235a0
+Retrieved: 2026-11-10
+SHA-256: 247ecb8feb91db49b4332b0656b54c88668dba28d4846d4115b794f02ad56f95
+
+How these bytes were made:
+Copied by hand from the section "Testing the webhook payload validation" (secret, payload,
+X-Hub-Signature) and from the Node.js block under "Examples" (secret, payload, givenSignature),
+as printed. Both are Bitbucket's own signatures; nothing here was signed by this package.

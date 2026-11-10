@@ -1,0 +1,11 @@
+Source URL: https://support.atlassian.com/bitbucket-cloud/docs/event-payloads/
+Pinned revision: none published (support.atlassian.com serves no revision); the page as fetched
+that day had SHA-256 2e586b8ecf2839c173d1ff860d50e6e2331fea1ff6c81dbf43314966693f23d6
+Retrieved: 2026-11-10
+SHA-256: 1d9b9a03267d94e5dd0032e5be6d99faf49428e5d1c4f77f61f23308e98ca38c
+
+How these bytes were made:
+Composed from the page's "pullrequest:comment_created payload" shape ({actor, repository,
+pullrequest, comment}) with the same Account, Repository and Pull Request samples as
+pullrequest-created.json, and the Comment property as printed (inline path/from/to, its "parent"
+removed so it is a top-level comment, links on this repository). The comment's author is the actor.

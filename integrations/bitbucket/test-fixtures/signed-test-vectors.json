@@ -1,0 +1,14 @@
+{
+  "vectors": [
+    {
+      "secret": "It's a Secret to Everybody",
+      "payload": "Hello World!",
+      "signature": "sha256=a4771c39fbe90f317c7824e83ddef3caae9cb3d976c214ace1f2937e133263c9"
+    },
+    {
+      "secret": "It's a Secret to Everybody",
+      "payload": "{\"hello\":\"world\",\"webhook\":\"secret\"}",
+      "signature": "sha256=c48e50b1d349b665dd7bf48bd243f22d5a22758c3f86714f0774aac3cab8fc5e"
+    }
+  ]
+}

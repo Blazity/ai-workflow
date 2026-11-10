@@ -1,0 +1,14 @@
+Source URL: https://support.atlassian.com/bitbucket-cloud/docs/event-payloads/
+Pinned revision: none published (support.atlassian.com serves no revision); the page as fetched
+that day had SHA-256 2e586b8ecf2839c173d1ff860d50e6e2331fea1ff6c81dbf43314966693f23d6
+Retrieved: 2026-11-10
+SHA-256: 4ec25584b66694e8bf5cef38561b5c1a851e43b9947356988b8457c99c9ecfae
+
+How these bytes were made:
+Composed from the page's "pullrequest:created payload" shape ({actor, pullrequest, repository})
+filled with the samples under "Common entities for event payloads": the Account (the repository
+owner in the Fork sample), the Repository property and the Pull Request property, as printed, except:
+full_name, links and slugs use the page's own "workspace_name/repo_name" (the Repository property
+prints "workspace_slug/repoitory_slug" and API links on the web host), the pull request's state is
+"OPEN" (the sample prints "OPEN|MERGED|DECLINED"), merge_commit is null for an open pull request,
+and participants and reviewers are empty lists. Placeholders never asserted on: uuids, dates, links.

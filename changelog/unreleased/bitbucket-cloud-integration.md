@@ -1,0 +1,1 @@
+- Bitbucket Cloud is a version control integration on the Integrations page: connect a workspace with an access token, import its repositories on the Repositories page, and workflows open and review pull requests there, post build statuses and Code Insights reports, and start on its pull request events.

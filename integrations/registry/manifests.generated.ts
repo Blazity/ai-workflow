@@ -11,6 +11,7 @@
  */
 import type { IntegrationManifest } from "@integrations/sdk";
 import { manifest as arthur } from "../arthur/manifest";
+import { manifest as bitbucket } from "../bitbucket/manifest";
 import { manifest as github } from "../github/manifest";
 import { manifest as gitlab } from "../gitlab/manifest";
 import { manifest as jira } from "../jira/manifest";
@@ -19,6 +20,7 @@ import { manifest as slack } from "../slack/manifest";
 
 export const generatedIntegrationManifests: readonly IntegrationManifest[] = [
   arthur,
+  bitbucket,
   github,
   gitlab,
   jira,

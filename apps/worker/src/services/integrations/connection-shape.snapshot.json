@@ -23,6 +23,47 @@
     ]
   },
   {
+    "integration": "bitbucket",
+    "fields": [
+      {
+        "key": "botLogin",
+        "env": "BITBUCKET_BOT_LOGIN",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "token",
+        "env": "BITBUCKET_ACCESS_TOKEN",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "webhookSecret",
+        "env": "BITBUCKET_WEBHOOK_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "workspace",
+        "env": "BITBUCKET_WORKSPACE",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "github",
     "fields": [
       {

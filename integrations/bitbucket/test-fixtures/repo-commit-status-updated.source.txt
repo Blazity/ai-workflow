@@ -1,0 +1,11 @@
+Source URL: https://support.atlassian.com/bitbucket-cloud/docs/event-payloads/
+Pinned revision: none published (support.atlassian.com serves no revision); the page as fetched
+that day had SHA-256 2e586b8ecf2839c173d1ff860d50e6e2331fea1ff6c81dbf43314966693f23d6
+Retrieved: 2026-11-10
+SHA-256: 50e2cdcd0f4e7e7ae668d0e586728fbb0763fe4de5a4c8ced1f11a2e33dd266f
+
+How these bytes were made:
+Composed from the page's "repo:commit_status_created payload" sample ({actor, repository,
+commit_status}) as printed, with state "FAILED" and description "Build failed" (the sample prints
+INPROGRESS and "Build started"; FAILED is one of the three states the page lists), and the
+Account and Repository samples above for actor and repository.
